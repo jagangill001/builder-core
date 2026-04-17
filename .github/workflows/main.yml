@@ -20,15 +20,23 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Deploy to Cloud Run
+      - name: Deploy backend to Cloud Run
         run: |
           gcloud run deploy builder-core \
-            --source . \
-            --region ${{ secrets.GCP_REGION }} \
+            --source ./backend \
+            --region ${{ vars.GCP_REGION }} \
             --allow-unauthenticated
+
+      - name: Deploy frontend to Cloud Run
+        run: |
+          gcloud run deploy builder-core-frontend \
+            --source ./frontend \
+            --region ${{ vars.GCP_REGION }} \
+            --allow-unauthenticated \
+            --set-env-vars NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
