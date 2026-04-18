@@ -695,6 +695,10 @@ def create_plan(payload: BuildRequest):
         }
     finally:
         db.close()
+        
+@app.get("/system/status")
+def system_status():
+    return {"status": "ok"}
 
 import uvicorn
 import os
