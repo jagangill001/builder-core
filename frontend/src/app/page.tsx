@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = (
   process.env.NEXT_PUBLIC_API_BASE_URL ??
@@ -9,31 +9,32 @@ const API_BASE = (
 ).replace(/\/$/, "");
 
 const FRONTEND_APP_URL = "https://builder-core-frontend-599596796788.us-central1.run.app";
-const EMPTY_PROMPT_MESSAGE = "Generated Codex prompt will appear here.";
-const EMPTY_PLANNER_MESSAGE = "Planner output will appear here.";
-const MISSING_PROMPT_MESSAGE = "Add an instruction above to generate a Codex prompt.";
-const MISSING_PLANNER_MESSAGE = "Add an instruction above to generate a planner.";
 
 const PIPELINE_STEP_DEFINITIONS = [
   {
-    key: "sent_to_codex",
-    label: "Sent to Codex",
-    description: "The task has been handed off from the Command Center."
+    key: "task_received",
+    label: "Task Received",
+    description: "Builder Core accepted the instruction and opened the task."
+  },
+  {
+    key: "planning",
+    label: "Planning",
+    description: "The planner organized the work, risks, and testing approach."
+  },
+  {
+    key: "codex_ready",
+    label: "Codex Ready",
+    description: "The Codex-ready task is prepared and waiting to be sent."
   },
   {
     key: "codex_working",
     label: "Codex Working",
-    description: "Codex is actively working through the instruction."
-  },
-  {
-    key: "code_done",
-    label: "Code Done",
-    description: "The code changes are ready for the deployment pipeline."
+    description: "Codex is working through the requested change."
   },
   {
     key: "github_deploying",
     label: "GitHub Deploying",
-    description: "GitHub Actions is building and deploying the update."
+    description: "GitHub Actions is building and deploying the latest revision."
   },
   {
     key: "cloud_run_live",
@@ -43,40 +44,24 @@ const PIPELINE_STEP_DEFINITIONS = [
   {
     key: "app_refreshed",
     label: "App Refreshed",
-    description: "The frontend has reloaded and is showing the latest version."
+    description: "The app reloaded and is showing the latest state."
   }
 ] as const;
-
-type HistoryItem = {
-  instruction: string;
-  status: string;
-  project_name: string;
-  plan: string[];
-  created_files?: string[];
-};
 
 type ProjectItem = {
   id: number;
   name: string;
 };
 
-type RunInfo = {
-  project_name: string;
-  project_path: string;
-  run_script: string;
-  commands: string[];
-  url_hint: string;
-};
-
 type ExecutionStatus = "idle" | "prepared" | "sent" | "completed";
 
-type CommandTask = {
-  instruction: string;
-  prompt: string;
-  timestamp: string;
-};
-
-type PipelineStage = "idle" | "codex_working" | "deploying" | "refresh_ready" | "refreshed";
+type PipelineStage =
+  | "idle"
+  | "codex_ready"
+  | "codex_working"
+  | "github_deploying"
+  | "refresh_pending"
+  | "refreshed";
 
 type PipelineStepStatus = "pending" | "active" | "done";
 
@@ -101,6 +86,24 @@ type ReviewSummary = {
   avoidItems: string[];
 };
 
+type CommandTask = {
+  instruction: string;
+  planner: string;
+  prompt: string;
+  timestamp: string;
+  builderSummary?: string | null;
+};
+
+type ChatEntry = {
+  id: string;
+  role: "user" | "assistant";
+  kind: "text" | "planner" | "codex" | "builder" | "review";
+  title?: string;
+  content?: string;
+  review?: ReviewSummary;
+  timestamp: string;
+};
+
 function buildCodexPrompt(instruction: string, projectName: string) {
   return [
     "Repo: jagangill001/builder-core",
@@ -111,55 +114,57 @@ function buildCodexPrompt(instruction: string, projectName: string) {
     "",
     "Safety rules:",
     "- Inspect the repo before editing.",
-    "- Do not delete working features.",
-    "- Commit directly to main.",
-    "- Explain every file changed.",
+    "- Do not break working features.",
+    "- Commit to main.",
+    "- Explain files changed.",
     "- Provide testing steps.",
     "",
     "Legal rules:",
     "- Write original code for this repo.",
     "- Do not blindly copy third-party snippets.",
-    "- Use licensed frameworks only.",
+    "- Licensed frameworks are allowed when used normally.",
     "",
     "Do not break:",
-    "- Existing frontend/backend connection",
-    "- Current request submission flow",
-    "- Backend health indicator",
-    "- PWA install behavior",
-    "",
-    "Return:",
-    "1. Files changed",
-    "2. Short explanation of changes",
-    "3. Testing steps"
+    "- Frontend/backend connection",
+    "- Health indicator",
+    "- Request submission flow",
+    "- PWA install behavior"
   ].join("\n");
 }
 
-function buildPlannerPrompt(instruction: string, projectName: string) {
+function buildPlannerOutput(instruction: string, projectName: string) {
   return [
     "ChatGPT Planner",
     `Project: ${projectName}`,
     `Instruction: ${instruction}`,
     "",
-    "Task Breakdown:",
-    "1. Inspect the relevant frontend, backend, deployment, and documentation files.",
-    "2. Translate the request into the smallest safe set of file changes.",
-    "3. Preserve working features before adding or modifying behavior.",
-    "4. Verify the result with focused checks before closing the task.",
+    "Step-by-step plan:",
+    "1. Inspect the frontend, backend, deployment, and docs that relate to the request.",
+    "2. Keep the smallest safe change set that solves the request.",
+    "3. Preserve working features before adding or modifying anything.",
+    "4. Prepare a Codex-ready implementation task with clear boundaries.",
+    "5. Verify the result with focused tests and live checks.",
     "",
     "Risks:",
     "- Breaking the frontend/backend connection or backend health indicator.",
-    "- Regressing the request flow, Command Center, or mobile install behavior.",
-    "- Making broad changes when a small targeted change is safer.",
+    "- Regressing the request flow or install experience.",
+    "- Making broad UI or deploy changes when a smaller change is safer.",
     "",
-    "Codex-ready Instruction:",
-    buildCodexPrompt(instruction, projectName),
-    "",
-    "Testing Plan:",
-    "- Confirm the backend health indicator still reports correctly.",
+    "Testing plan:",
+    "- Confirm /system/status still reports correctly in the app.",
     "- Confirm the main request submission flow still works.",
-    "- Confirm the new UI behaves correctly on desktop and phone widths.",
-    "- Confirm the live frontend and backend URLs still load after deploy."
+    "- Confirm the latest UI works on desktop and phone widths.",
+    "- Confirm the live frontend and backend still load after deployment."
   ].join("\n");
+}
+
+function formatTimestamp(date: Date) {
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
 }
 
 function getExecutionStatusLabel(status: ExecutionStatus) {
@@ -168,7 +173,7 @@ function getExecutionStatusLabel(status: ExecutionStatus) {
   }
 
   if (status === "sent") {
-    return "Sent (waiting for Codex)";
+    return "Sent";
   }
 
   if (status === "completed") {
@@ -178,30 +183,46 @@ function getExecutionStatusLabel(status: ExecutionStatus) {
   return "Idle";
 }
 
-function formatTaskTimestamp(date: Date) {
-  return date.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit"
-  });
+function getAutomationStatusLabel(stage: PipelineStage, countdown: number | null) {
+  if (stage === "codex_ready") {
+    return "Codex Ready";
+  }
+
+  if (stage === "codex_working") {
+    return "Codex Working";
+  }
+
+  if (stage === "github_deploying") {
+    return "Deploying";
+  }
+
+  if (stage === "refresh_pending") {
+    return countdown !== null ? `Refreshing in ${countdown}s` : "Refresh Pending";
+  }
+
+  if (stage === "refreshed") {
+    return "Refreshed";
+  }
+
+  return "Manual";
 }
 
 function buildAutomationPipeline(stage: PipelineStage): PipelineStep[] {
   const doneThresholdByStage: Record<PipelineStage, number> = {
     idle: -1,
-    codex_working: 0,
-    deploying: 2,
-    refresh_ready: 4,
-    refreshed: 5
+    codex_ready: 1,
+    codex_working: 2,
+    github_deploying: 3,
+    refresh_pending: 5,
+    refreshed: 6
   };
 
   const activeIndexByStage: Record<PipelineStage, number> = {
     idle: -1,
-    codex_working: 1,
-    deploying: 3,
-    refresh_ready: 5,
+    codex_ready: 2,
+    codex_working: 3,
+    github_deploying: 4,
+    refresh_pending: 6,
     refreshed: -1
   };
 
@@ -236,18 +257,6 @@ function getPipelineStatusBadgeClass(status: PipelineStepStatus) {
   return "border border-gray-200 bg-gray-100 text-gray-600";
 }
 
-function getPipelineCardClass(status: PipelineStepStatus) {
-  if (status === "done") {
-    return "border-green-200 bg-green-50";
-  }
-
-  if (status === "active") {
-    return "border-blue-200 bg-blue-50";
-  }
-
-  return "border-gray-200 bg-white";
-}
-
 function getPipelineDotClass(status: PipelineStepStatus) {
   if (status === "done") {
     return "bg-green-600";
@@ -268,100 +277,211 @@ function getReviewBadgeClass(status: ReviewStatus) {
   return "border border-amber-200 bg-amber-100 text-amber-700";
 }
 
-function buildReviewSummary(reviewText: string, backendState: "checking" | "online" | "offline"): ReviewSummary {
-  const normalized = reviewText.toLowerCase();
-  const matchesAny = (patterns: RegExp[]) => patterns.some((pattern) => pattern.test(normalized));
+function buildBuilderSummary(data: Record<string, unknown>) {
+  const createdFiles = Array.isArray(data.created_files) ? data.created_files : [];
 
-  const filesChanged = matchesAny([/files?\s+changed/, /changed files/, /modified/, /created/, /updated/, /edited/]);
-  const buildPassed = matchesAny([/build\s+(passed|successful|succeeded)/, /compiled successfully/, /tests?\s+passed/, /lint\s+passed/]);
-  const actionsGreen = matchesAny([/github actions.*(green|passed|successful)/, /ci\s+(passed|green)/, /workflow\s+(passed|successful)/, /checks\s+passed/]);
-  const frontendDeployed = matchesAny([/frontend.*deployed/, /cloud run live/, /deploy(ed)? successfully/, /frontend live/, /new revision live/, /service updated/]);
-  const backendStillOnline = backendState === "online" || matchesAny([/backend.*online/, /system status.*ok/, /backend live/]);
+  return [
+    `Message: ${String(data.message ?? "Builder Core responded.")}`,
+    `Project: ${String(data.project_name ?? "Unknown project")}`,
+    `Module Key: ${String(data.module_key ?? "n/a")}`,
+    `Title: ${String(data.title ?? "n/a")}`,
+    `Route Path: ${String(data.route_path ?? "n/a")}`,
+    "",
+    "Created Files:",
+    createdFiles.length > 0 ? "- " + createdFiles.join("\n- ") : "- No files generated for this request."
+  ].join("\n");
+}
+
+function buildRunSummary(data: Record<string, unknown>) {
+  const commands = Array.isArray(data.commands) ? data.commands : [];
+
+  return [
+    "Run Instructions",
+    `Project: ${String(data.project_name ?? "Unknown project")}`,
+    `Path: ${String(data.project_path ?? "n/a")}`,
+    `Run Script: ${String(data.run_script ?? "n/a")}`,
+    `URL Hint: ${String(data.url_hint ?? "n/a")}`,
+    "",
+    "Commands:",
+    commands.length > 0 ? String(commands.join("\n")) : "No run commands returned."
+  ].join("\n");
+}
+
+function buildReviewSummary(task: CommandTask | null, backendState: "checking" | "online" | "offline"): ReviewSummary {
+  const hasBuilderSummary = Boolean(task?.builderSummary);
+  const backendHealthy = backendState === "online";
 
   const checklist: ReviewChecklistItem[] = [
     {
       label: "Files changed?",
-      status: filesChanged ? "ready" : "attention",
-      detail: filesChanged ? "The summary mentions changed files." : "Confirm the exact files changed before approving the result."
+      status: hasBuilderSummary ? "ready" : "attention",
+      detail: hasBuilderSummary ? "Builder Core returned a change summary for this task." : "Confirm the exact files changed before approving the rollout."
     },
     {
       label: "Build passed?",
-      status: buildPassed ? "ready" : "attention",
-      detail: buildPassed ? "The result indicates the build or tests passed." : "Run or verify a clean build before trusting the change."
+      status: "ready",
+      detail: "This manual simulation assumes the build passed before deployment completed."
     },
     {
       label: "GitHub Actions green?",
-      status: actionsGreen ? "ready" : "attention",
-      detail: actionsGreen ? "The summary suggests CI finished successfully." : "Wait for GitHub Actions to turn green before calling this complete."
+      status: "ready",
+      detail: "This manual simulation treats the deploy step as a successful GitHub Actions run."
     },
     {
-      label: "Frontend deployed?",
-      status: frontendDeployed ? "ready" : "attention",
-      detail: frontendDeployed ? "The summary points to a live frontend deploy." : "Open the live frontend and confirm the new revision is visible."
+      label: "Frontend live?",
+      status: "ready",
+      detail: "The Cloud Run live step is complete in the current simulation."
     },
     {
-      label: "Backend still online?",
-      status: backendStillOnline ? "ready" : "attention",
-      detail: backendStillOnline ? "The backend health signal looks healthy." : "Recheck /system/status before approving the rollout."
+      label: "Backend online?",
+      status: backendHealthy ? "ready" : "attention",
+      detail: backendHealthy ? "The in-app backend health indicator is online." : "Recheck /system/status before calling this task done."
     }
-  ];
-
-  const doItems = [
-    filesChanged ? "Review the changed files against the original instruction." : "Capture the exact files changed before moving forward.",
-    buildPassed ? "Do a quick smoke test in the live app." : "Run or confirm a build before accepting the change.",
-    actionsGreen ? "Open the successful GitHub Actions run and note the revision." : "Wait for GitHub Actions to finish green.",
-    frontendDeployed ? "Confirm the latest frontend revision is serving the expected UI." : "Verify the live frontend is actually updated.",
-    backendStillOnline ? "Keep the backend health indicator visible while testing." : "Recheck backend health before approving the result."
-  ];
-
-  const avoidItems = [
-    "Do not stack risky follow-up changes on top of an unverified deploy.",
-    "Do not delete working features to make a fix easier.",
-    "Do not assume Cloud Run is healthy until both frontend and backend checks pass."
   ];
 
   return {
     checklist,
-    doItems,
-    avoidItems
+    doItems: [
+      "Prefer safe improvements and small upgrades after the deploy.",
+      "Open the live app and verify the user-visible change immediately.",
+      "Capture the files changed and testing notes before starting the next task."
+    ],
+    avoidItems: [
+      "Do not stack risky changes on top of an unverified deploy.",
+      "Do not remove working features to make a fix easier.",
+      "Do not assume the backend is healthy if the status badge is offline."
+    ]
   };
 }
 
+function renderTextBubble(entry: ChatEntry) {
+  const isUser = entry.role === "user";
+
+  return (
+    <div key={entry.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+      <div
+        className={
+          isUser
+            ? "max-w-3xl rounded-3xl bg-black px-5 py-4 text-white shadow-sm"
+            : "max-w-3xl rounded-3xl border border-gray-200 bg-white px-5 py-4 text-black shadow-sm"
+        }
+      >
+        {entry.title && (
+          <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${isUser ? "text-white/70" : "text-gray-500"}`}>
+            {entry.title}
+          </p>
+        )}
+        <p className="whitespace-pre-wrap text-sm leading-6">{entry.content}</p>
+        <p className={`mt-3 text-xs ${isUser ? "text-white/70" : "text-gray-400"}`}>{entry.timestamp}</p>
+      </div>
+    </div>
+  );
+}
+
+function renderStructuredBubble(entry: ChatEntry) {
+  if (entry.kind === "review" && entry.review) {
+    return (
+      <div key={entry.id} className="flex justify-start">
+        <div className="max-w-4xl rounded-3xl border border-gray-200 bg-white px-5 py-5 shadow-sm">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">{entry.title}</p>
+          <div className="space-y-3">
+            {entry.review.checklist.map((item) => (
+              <div key={item.label} className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <p className="font-semibold text-gray-900">{item.label}</p>
+                  <span className={`rounded-full px-3 py-1 text-xs font-medium ${getReviewBadgeClass(item.status)}`}>
+                    {item.status === "ready" ? "Looks good" : "Check this"}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-600">{item.detail}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-2xl border border-green-200 bg-green-50 p-4">
+              <p className="mb-3 font-semibold text-green-900">Suggestions: Do</p>
+              <ul className="list-disc space-y-2 pl-5 text-sm text-green-900">
+                {entry.review.doItems.map((item, index) => (
+                  <li key={index}>{item}</li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+              <p className="mb-3 font-semibold text-amber-900">Suggestions: Do Not</p>
+              <ul className="list-disc space-y-2 pl-5 text-sm text-amber-900">
+                {entry.review.avoidItems.map((item, index) => (
+                  <li key={index}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          <p className="mt-4 text-xs text-gray-400">{entry.timestamp}</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div key={entry.id} className="flex justify-start">
+      <div className="max-w-4xl rounded-3xl border border-gray-200 bg-white px-5 py-5 shadow-sm">
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">{entry.title}</p>
+        <pre className="whitespace-pre-wrap text-sm leading-6 text-gray-800">{entry.content}</pre>
+        <p className="mt-4 text-xs text-gray-400">{entry.timestamp}</p>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
-  const [request, setRequest] = useState("");
-  const [result, setResult] = useState("No request submitted yet.");
-  const [status, setStatus] = useState("");
-  const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">("checking");
-  const [commandCenterInput, setCommandCenterInput] = useState("");
-  const [codexPrompt, setCodexPrompt] = useState(EMPTY_PROMPT_MESSAGE);
-  const [plannerOutput, setPlannerOutput] = useState(EMPTY_PLANNER_MESSAGE);
-  const [commandCenterMessage, setCommandCenterMessage] = useState("");
-  const [plannerMessage, setPlannerMessage] = useState("");
-  const [executionStatus, setExecutionStatus] = useState<ExecutionStatus>("idle");
-  const [pipelineStage, setPipelineStage] = useState<PipelineStage>("idle");
-  const [lastTask, setLastTask] = useState<CommandTask | null>(null);
-  const [reviewInput, setReviewInput] = useState("");
-  const [reviewResult, setReviewResult] = useState<ReviewSummary | null>(null);
-  const [reviewMessage, setReviewMessage] = useState("");
-  const [installMessage, setInstallMessage] = useState("");
-  const [history, setHistory] = useState<HistoryItem[]>([]);
   const [projects, setProjects] = useState<ProjectItem[]>([]);
-  const [projectFiles, setProjectFiles] = useState<string[]>([]);
   const [selectedProject, setSelectedProject] = useState("Default Project");
   const [newProjectName, setNewProjectName] = useState("");
-  const [runInfo, setRunInfo] = useState<RunInfo | null>(null);
+  const [commandInput, setCommandInput] = useState("");
+  const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">("checking");
+  const [executionStatus, setExecutionStatus] = useState<ExecutionStatus>("idle");
+  const [pipelineStage, setPipelineStage] = useState<PipelineStage>("idle");
+  const [refreshCountdown, setRefreshCountdown] = useState<number | null>(null);
+  const [installMessage, setInstallMessage] = useState("");
+  const [lastTask, setLastTask] = useState<CommandTask | null>(null);
+  const [chatEntries, setChatEntries] = useState<ChatEntry[]>([
+    {
+      id: "welcome",
+      role: "assistant",
+      kind: "text",
+      title: "Builder Core",
+      content:
+        "Ask Builder Core to build, fix, or upgrade anything. I will plan the work, prepare the Codex task, keep the pipeline visible, and show review suggestions inline.",
+      timestamp: "Ready"
+    }
+  ]);
+
+  const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const automationPipeline = useMemo(() => buildAutomationPipeline(pipelineStage), [pipelineStage]);
   const completedPipelineSteps = automationPipeline.filter((step) => step.status === "done").length;
   const pipelineProgress = Math.round((completedPipelineSteps / automationPipeline.length) * 100);
 
-  const canCopyPrompt =
-    codexPrompt !== EMPTY_PROMPT_MESSAGE &&
-    codexPrompt !== MISSING_PROMPT_MESSAGE;
-
+  const canSendToCodex = pipelineStage === "codex_ready";
   const canMarkCodexDone = pipelineStage === "codex_working";
-  const canMarkDeployDone = pipelineStage === "deploying";
-  const canRefreshApp = pipelineStage === "refresh_ready";
+  const canMarkDeployDone = pipelineStage === "github_deploying";
+  const canRefreshNow = pipelineStage === "refresh_pending";
+
+  function appendChatEntries(entries: Array<Omit<ChatEntry, "id" | "timestamp">>) {
+    const base = Date.now();
+
+    setChatEntries((current) =>
+      current.concat(
+        entries.map((entry, index) => ({
+          ...entry,
+          id: `${base}-${index}-${Math.random().toString(16).slice(2)}`,
+          timestamp: formatTimestamp(new Date(base + index))
+        }))
+      )
+    );
+  }
 
   async function checkBackendStatus() {
     try {
@@ -384,7 +504,7 @@ export default function Home() {
       const items = data.items || [];
       setProjects(items);
 
-      if (items.length > 0 && !items.find((p: ProjectItem) => p.name === selectedProject)) {
+      if (items.length > 0 && !items.find((project: ProjectItem) => project.name === selectedProject)) {
         setSelectedProject(items[0].name);
       }
     } catch {
@@ -392,196 +512,43 @@ export default function Home() {
     }
   }
 
-  async function loadHistory(projectName?: string) {
-    try {
-      const url = projectName
-        ? `${API_BASE}/history?project_name=${encodeURIComponent(projectName)}`
-        : `${API_BASE}/history`;
-
-      const response = await fetch(url);
-      const data = await response.json();
-      setHistory(data.items || []);
-    } catch {
-      console.log("Could not load history");
-    }
-  }
-
-  async function loadProjectFiles(projectName: string) {
-    try {
-      const response = await fetch(`${API_BASE}/project-files?project_name=${encodeURIComponent(projectName)}`);
-      const data = await response.json();
-      setProjectFiles(data.items || []);
-    } catch {
-      console.log("Could not load project files");
-    }
-  }
-
-  async function loadRunInfo(projectName: string) {
-    try {
-      const response = await fetch(`${API_BASE}/run-info?project_name=${encodeURIComponent(projectName)}`);
-      const data = await response.json();
-      setRunInfo(data);
-    } catch {
-      console.log("Could not load run info");
-    }
-  }
-
   useEffect(() => {
     checkBackendStatus();
     loadProjects();
-    loadHistory(selectedProject);
-    loadProjectFiles(selectedProject);
-    loadRunInfo(selectedProject);
   }, []);
 
   useEffect(() => {
-    loadHistory(selectedProject);
-    loadProjectFiles(selectedProject);
-    loadRunInfo(selectedProject);
-  }, [selectedProject]);
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatEntries, pipelineStage, refreshCountdown]);
 
-  function prepareTaskArtifacts() {
-    const trimmedInstruction = commandCenterInput.trim();
-
-    if (!trimmedInstruction) {
-      setCodexPrompt(MISSING_PROMPT_MESSAGE);
-      setPlannerOutput(MISSING_PLANNER_MESSAGE);
-      return null;
-    }
-
-    const prompt = buildCodexPrompt(trimmedInstruction, selectedProject);
-    const planner = buildPlannerPrompt(trimmedInstruction, selectedProject);
-    const nextTask = {
-      instruction: trimmedInstruction,
-      prompt,
-      timestamp: formatTaskTimestamp(new Date())
-    };
-
-    setCodexPrompt(prompt);
-    setPlannerOutput(planner);
-    setLastTask(nextTask);
-    return nextTask;
-  }
-
-  function handleGeneratePlanner() {
-    const nextTask = prepareTaskArtifacts();
-
-    if (!nextTask) {
-      setExecutionStatus("idle");
-      setPipelineStage("idle");
-      setPlannerMessage("Add an instruction first.");
-      return;
-    }
-
-    setExecutionStatus("prepared");
-    setPipelineStage("idle");
-    setPlannerMessage("Planner prepared.");
-    setCommandCenterMessage("");
-  }
-
-  function handleGeneratePrompt() {
-    const nextTask = prepareTaskArtifacts();
-
-    if (!nextTask) {
-      setExecutionStatus("idle");
-      setPipelineStage("idle");
-      setCommandCenterMessage("Add an instruction first.");
-      return;
-    }
-
-    setExecutionStatus("prepared");
-    setPipelineStage("idle");
-    setCommandCenterMessage("Codex prompt prepared.");
-    setPlannerMessage("");
-  }
-
-  function handleSendToCodex() {
-    const nextTask = prepareTaskArtifacts();
-
-    if (!nextTask) {
-      setExecutionStatus("idle");
-      setPipelineStage("idle");
-      setCommandCenterMessage("Add an instruction first.");
-      return;
-    }
-
-    setExecutionStatus("sent");
-    setPipelineStage("codex_working");
-    setCommandCenterMessage("Task prepared for Codex.");
-    setPlannerMessage("");
-  }
-
-  function handleMarkCodexDone() {
-    if (!lastTask) {
-      return;
-    }
-
-    setExecutionStatus("sent");
-    setPipelineStage("deploying");
-    setCommandCenterMessage("Codex work marked done. Deployment is now active.");
-  }
-
-  function handleMarkDeployDone() {
-    if (!lastTask) {
-      return;
-    }
-
-    setExecutionStatus("sent");
-    setPipelineStage("refresh_ready");
-    setCommandCenterMessage("Deployment marked done. Refresh the app to complete the flow.");
-  }
-
-  function handleRefreshApp() {
-    if (!lastTask) {
-      return;
-    }
-
+  function finishRefresh() {
     setExecutionStatus("completed");
     setPipelineStage("refreshed");
-    setCommandCenterMessage("App refresh starting.");
+    setRefreshCountdown(null);
 
     window.setTimeout(() => {
       window.location.reload();
-    }, 350);
+    }, 300);
   }
 
-  async function handleCopyPrompt() {
-    if (!canCopyPrompt) {
+  useEffect(() => {
+    if (pipelineStage !== "refresh_pending" || refreshCountdown === null) {
       return;
     }
 
-    try {
-      await navigator.clipboard.writeText(codexPrompt);
-      setCommandCenterMessage("Prompt copied.");
-    } catch {
-      setCommandCenterMessage("Copy failed. Select the prompt and copy it manually.");
-    }
-  }
-
-  function handleReviewResult() {
-    if (!reviewInput.trim()) {
-      setReviewResult(null);
-      setReviewMessage("Paste a Codex summary or deploy result first.");
+    if (refreshCountdown === 0) {
+      finishRefresh();
       return;
     }
 
-    setReviewResult(buildReviewSummary(reviewInput, backendStatus));
-    setReviewMessage("Review prepared.");
-  }
+    const timer = window.setTimeout(() => {
+      setRefreshCountdown((current) => (current === null ? null : current - 1));
+    }, 1000);
 
-  function handleOpenAppLink() {
-    window.open(FRONTEND_APP_URL, "_blank", "noopener,noreferrer");
-    setInstallMessage("Opened the live app link.");
-  }
-
-  async function handleCopyAppLink() {
-    try {
-      await navigator.clipboard.writeText(FRONTEND_APP_URL);
-      setInstallMessage("App link copied.");
-    } catch {
-      setInstallMessage("Copy failed. Copy the app link manually from the box below.");
-    }
-  }
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [pipelineStage, refreshCountdown]);
 
   async function handleCreateProject() {
     if (!newProjectName.trim()) {
@@ -605,24 +572,80 @@ export default function Home() {
         setSelectedProject(data.project.name);
         setNewProjectName("");
         await loadProjects();
-        await loadHistory(data.project.name);
-        await loadProjectFiles(data.project.name);
-        await loadRunInfo(data.project.name);
+        appendChatEntries([
+          {
+            role: "assistant",
+            kind: "text",
+            title: "Project Ready",
+            content: `Created project "${data.project.name}". Future commands will use this project.`
+          }
+        ]);
       }
     } catch {
-      console.log("Could not create project");
+      appendChatEntries([
+        {
+          role: "assistant",
+          kind: "text",
+          title: "Project Update",
+          content: "I could not create the project right now. Please try again."
+        }
+      ]);
     }
   }
 
-  async function handleSubmit() {
-    if (!request.trim()) {
-      setResult("Please enter an instruction.");
-      setStatus("error");
+  async function handleCommandSubmit() {
+    const instruction = commandInput.trim();
+
+    if (!instruction) {
       return;
     }
 
-    setResult("Sending request to backend...");
-    setStatus("loading");
+    const planner = buildPlannerOutput(instruction, selectedProject);
+    const prompt = buildCodexPrompt(instruction, selectedProject);
+    const nextTask: CommandTask = {
+      instruction,
+      planner,
+      prompt,
+      timestamp: formatTimestamp(new Date())
+    };
+
+    setCommandInput("");
+    setExecutionStatus("prepared");
+    setPipelineStage("codex_ready");
+    setRefreshCountdown(null);
+    setLastTask(nextTask);
+
+    appendChatEntries([
+      {
+        role: "user",
+        kind: "text",
+        content: instruction
+      },
+      {
+        role: "assistant",
+        kind: "text",
+        title: "System",
+        content: "Planning..."
+      },
+      {
+        role: "assistant",
+        kind: "planner",
+        title: "ChatGPT Planner",
+        content: planner
+      },
+      {
+        role: "assistant",
+        kind: "text",
+        title: "System",
+        content: "Preparing Codex task..."
+      },
+      {
+        role: "assistant",
+        kind: "codex",
+        title: "Codex Task",
+        content: prompt
+      }
+    ]);
 
     try {
       const response = await fetch(`${API_BASE}/plan`, {
@@ -631,7 +654,7 @@ export default function Home() {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          instruction: request,
+          instruction,
           project_name: selectedProject
         })
       });
@@ -639,542 +662,410 @@ export default function Home() {
       const data = await response.json();
 
       if (!data.ok) {
-        setResult(data.message || "Something went wrong.");
-        setStatus("error");
+        appendChatEntries([
+          {
+            role: "assistant",
+            kind: "text",
+            title: "Builder Core",
+            content: data.message || "Builder Core could not complete the request."
+          }
+        ]);
         return;
       }
 
-      setStatus(data.status);
+      const builderSummary = buildBuilderSummary(data);
+      setLastTask((current) => (current ? { ...current, builderSummary } : current));
 
-      const filesText =
-        data.created_files && data.created_files.length > 0
-          ? "\n\nCreated Files:\n- " + data.created_files.join("\n- ")
-          : "\n\nCreated Files:\n- No files generated for this request.";
+      appendChatEntries([
+        {
+          role: "assistant",
+          kind: "builder",
+          title: "Builder Core Response",
+          content: builderSummary
+        }
+      ]);
 
-      setResult(
-        "Message: " + data.message +
-        "\n\nProject: " + data.project_name +
-        "\nModule Key: " + data.module_key +
-        "\nTitle: " + data.title +
-        "\nRoute Path: " + data.route_path +
-        "\n\nInstruction: " + data.instruction +
-        "\n\nPlan:\n- " + data.plan.join("\n- ") +
-        filesText
-      );
+      try {
+        const runInfoResponse = await fetch(`${API_BASE}/run-info?project_name=${encodeURIComponent(selectedProject)}`);
 
-      setRequest("");
-      loadHistory(selectedProject);
-      loadProjectFiles(selectedProject);
-      loadRunInfo(selectedProject);
+        if (runInfoResponse.ok) {
+          const runInfoData = await runInfoResponse.json();
+          appendChatEntries([
+            {
+              role: "assistant",
+              kind: "builder",
+              title: "Run Instructions",
+              content: buildRunSummary(runInfoData)
+            }
+          ]);
+        }
+      } catch {
+        console.log("Could not load run info");
+      }
     } catch {
-      setResult("Could not connect to backend.");
-      setStatus("error");
+      appendChatEntries([
+        {
+          role: "assistant",
+          kind: "text",
+          title: "Builder Core",
+          content: "The backend request could not complete, but the plan and Codex task are still ready."
+        }
+      ]);
     }
   }
 
+  function handleSendToCodex() {
+    if (!lastTask || pipelineStage !== "codex_ready") {
+      return;
+    }
+
+    setExecutionStatus("sent");
+    setPipelineStage("codex_working");
+
+    appendChatEntries([
+      {
+        role: "assistant",
+        kind: "text",
+        title: "Automation",
+        content: "Codex task sent. Codex Working is now active."
+      }
+    ]);
+  }
+
+  function handleMarkCodexDone() {
+    if (!lastTask || pipelineStage !== "codex_working") {
+      return;
+    }
+
+    setPipelineStage("github_deploying");
+
+    appendChatEntries([
+      {
+        role: "assistant",
+        kind: "text",
+        title: "Automation",
+        content: "Codex work marked done. GitHub Deploying is now active."
+      }
+    ]);
+  }
+
+  function handleMarkDeployDone() {
+    if (!lastTask || pipelineStage !== "github_deploying") {
+      return;
+    }
+
+    const review = buildReviewSummary(lastTask, backendStatus);
+
+    setPipelineStage("refresh_pending");
+    setRefreshCountdown(5);
+
+    appendChatEntries([
+      {
+        role: "assistant",
+        kind: "text",
+        title: "Automation",
+        content: "Cloud Run is live. App refresh is queued. Currently simulated. Full automation coming."
+      },
+      {
+        role: "assistant",
+        kind: "review",
+        title: "Codex Result Review",
+        review
+      }
+    ]);
+  }
+
+  function handleOpenAppLink() {
+    window.open(FRONTEND_APP_URL, "_blank", "noopener,noreferrer");
+    setInstallMessage("Opened the live app link.");
+  }
+
+  async function handleCopyAppLink() {
+    try {
+      await navigator.clipboard.writeText(FRONTEND_APP_URL);
+      setInstallMessage("App link copied.");
+    } catch {
+      setInstallMessage("Copy failed. Copy the link manually from the app URL.");
+    }
+  }
+
+  const automationStatusLabel = getAutomationStatusLabel(pipelineStage, refreshCountdown);
+
   return (
-    <main className="min-h-screen bg-gray-50 px-4 py-6 text-black sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-6xl">
-        <h1 className="mb-2 text-3xl font-bold sm:text-4xl">Builder Core Dashboard</h1>
-        <p className="mb-3 text-gray-600">
-          Builder Core v5 with generated app shells, planning help, and deployment tracking.
-        </p>
-        <p
-          className={
-            backendStatus === "online"
-              ? "mb-6 text-sm font-medium text-green-600"
-              : backendStatus === "offline"
-                ? "mb-6 text-sm font-medium text-red-600"
-                : "mb-6 text-sm font-medium text-gray-500"
-          }
-        >
-          {backendStatus === "checking" && "Backend: Checking..."}
-          {backendStatus === "online" && "Backend: Online"}
-          {backendStatus === "offline" && "Backend: Offline"}
-        </p>
-
-        <div className="mb-6 grid gap-6 lg:grid-cols-[2fr,1fr]">
-          <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-            <h2 className="mb-2 text-xl font-semibold">Command Center</h2>
-            <p className="mb-4 text-sm text-gray-600">
-              Describe what you want to build, fix, or upgrade, then generate the Codex-ready instruction without leaving the app.
-            </p>
-
-            <textarea
-              value={commandCenterInput}
-              onChange={(e) => setCommandCenterInput(e.target.value)}
-              placeholder="Tell Builder Core what to build, fix, or upgrade..."
-              className="mb-4 h-36 w-full rounded-xl border p-4"
-            />
-
-            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-              <button
-                type="button"
-                onClick={handleGeneratePrompt}
-                className="w-full rounded-xl bg-black px-5 py-3 text-white sm:w-auto"
-              >
-                Generate Codex Prompt
-              </button>
-              <button
-                type="button"
-                onClick={handleSendToCodex}
-                className="w-full rounded-xl bg-blue-600 px-5 py-3 text-white sm:w-auto"
-              >
-                Send to Codex
-              </button>
-              <button
-                type="button"
-                onClick={handleCopyPrompt}
-                disabled={!canCopyPrompt}
-                className={
-                  canCopyPrompt
-                    ? "w-full rounded-xl border border-black px-5 py-3 text-black sm:w-auto"
-                    : "w-full rounded-xl border border-gray-200 px-5 py-3 text-gray-400 sm:w-auto"
-                }
-              >
-                Copy Prompt
-              </button>
-            </div>
-
-            {commandCenterMessage && (
-              <p className="mb-3 text-sm text-gray-600">{commandCenterMessage}</p>
-            )}
-
-            <p className="mb-2 text-sm font-semibold text-gray-700">Generated Codex Prompt</p>
-            <textarea
-              value={codexPrompt}
-              readOnly
-              className="h-72 w-full rounded-xl border bg-gray-50 p-4 text-sm"
-            />
-          </div>
-
-          <div className="space-y-6">
-            <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-              <h2 className="mb-3 text-xl font-semibold">Automation Status</h2>
-              <div className="mb-4 inline-flex rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-sm font-medium text-amber-700">
-                Manual mode active
+    <main className="min-h-screen bg-slate-100 text-slate-900">
+      <div className="mx-auto flex min-h-screen max-w-6xl flex-col">
+        <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
+          <div className="flex flex-col gap-4 px-4 py-4 sm:px-6">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h1 className="text-2xl font-bold sm:text-3xl">Builder Core</h1>
+                <p className="text-sm text-slate-600">
+                  One unified AI Command Center for planning, Codex tasks, pipeline tracking, deploy review, and cloud-first operation.
+                </p>
               </div>
-              <p className="mb-3 text-sm text-gray-700">
-                Future version will send tasks automatically.
-              </p>
-              <ul className="list-disc space-y-2 pl-5 text-sm text-gray-600">
-                <li>No automatic repo modification without user confirmation.</li>
-                <li>Authentication will be required before automation can act.</li>
-                <li>Logs and transparent status updates will stay visible in the app.</li>
-              </ul>
+
+              <div className="flex flex-wrap gap-2">
+                <span
+                  className={
+                    backendStatus === "online"
+                      ? "rounded-full border border-green-200 bg-green-100 px-3 py-1 text-sm font-medium text-green-700"
+                      : backendStatus === "offline"
+                        ? "rounded-full border border-red-200 bg-red-100 px-3 py-1 text-sm font-medium text-red-700"
+                        : "rounded-full border border-gray-200 bg-gray-100 px-3 py-1 text-sm font-medium text-gray-600"
+                  }
+                >
+                  {backendStatus === "checking" && "Backend: Checking..."}
+                  {backendStatus === "online" && "Backend: Online"}
+                  {backendStatus === "offline" && "Backend: Offline"}
+                </span>
+
+                <span className="rounded-full border border-amber-200 bg-amber-100 px-3 py-1 text-sm font-medium text-amber-700">
+                  Automation: {automationStatusLabel}
+                </span>
+              </div>
             </div>
 
-            <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-              <h2 className="mb-3 text-xl font-semibold">Execution Status</h2>
-              <p className="text-sm text-gray-700">{getExecutionStatusLabel(executionStatus)}</p>
+            <div className="grid gap-3 rounded-3xl border border-slate-200 bg-slate-50 p-3 sm:p-4 lg:grid-cols-[1fr,1fr,auto,auto]">
+              <select
+                value={selectedProject}
+                onChange={(e) => setSelectedProject(e.target.value)}
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm"
+              >
+                {projects.length === 0 ? (
+                  <option>Default Project</option>
+                ) : (
+                  projects.map((project) => (
+                    <option key={project.id} value={project.name}>
+                      {project.name}
+                    </option>
+                  ))
+                )}
+              </select>
+
+              <input
+                value={newProjectName}
+                onChange={(e) => setNewProjectName(e.target.value)}
+                placeholder="Create a new project"
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm"
+              />
+
+              <button
+                type="button"
+                onClick={handleCreateProject}
+                className="w-full rounded-2xl bg-black px-5 py-3 text-sm font-medium text-white lg:w-auto"
+              >
+                Create Project
+              </button>
+
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+                <p><span className="font-medium text-slate-900">Execution:</span> {getExecutionStatusLabel(executionStatus)}</p>
+                {lastTask && (
+                  <p className="mt-1"><span className="font-medium text-slate-900">Last task:</span> {lastTask.timestamp}</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div className="flex-1 px-4 py-4 sm:px-6">
+          <section className="rounded-[28px] border border-slate-200 bg-white shadow-sm">
+            <div className="min-h-[440px] max-h-[calc(100vh-340px)] overflow-y-auto p-4 sm:p-6">
+              <div className="space-y-4">
+                {chatEntries.map((entry) =>
+                  entry.kind === "text" ? renderTextBubble(entry) : renderStructuredBubble(entry)
+                )}
+                <div ref={bottomRef} />
+              </div>
             </div>
 
-            <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-              <h2 className="mb-3 text-xl font-semibold">Last Task</h2>
-              {!lastTask ? (
-                <p className="text-sm text-gray-500">No task prepared yet.</p>
-              ) : (
-                <div className="space-y-3 text-sm text-gray-700">
-                  <p><strong>Instruction:</strong> {lastTask.instruction}</p>
-                  <p><strong>Timestamp:</strong> {lastTask.timestamp}</p>
-                  <div>
-                    <p className="mb-2 font-semibold">Generated Prompt</p>
-                    <pre className="whitespace-pre-wrap rounded-xl border bg-gray-50 p-4 text-sm">
-{lastTask.prompt}
-                    </pre>
+            <div className="border-t border-slate-200 p-4 sm:p-6">
+              <div className="rounded-3xl border border-slate-200 bg-slate-50 p-3 sm:p-4">
+                <textarea
+                  value={commandInput}
+                  onChange={(e) => setCommandInput(e.target.value)}
+                  placeholder="Ask Builder Core to build, fix, or upgrade anything..."
+                  className="h-32 w-full resize-none rounded-2xl border border-slate-200 bg-white p-4 text-sm"
+                />
+
+                <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs text-slate-500">
+                    One command now handles planning, Codex task prep, backend request flow, deploy tracking, and inline review.
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={handleCommandSubmit}
+                    className="w-full rounded-2xl bg-black px-5 py-3 text-sm font-medium text-white sm:w-auto"
+                  >
+                    Run Command
+                  </button>
+                </div>
+              </div>
+
+              <details className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                <summary className="cursor-pointer text-sm font-semibold text-slate-900">
+                  Download / Install
+                </summary>
+
+                <div className="mt-4 grid gap-4 lg:grid-cols-[1fr,1fr]">
+                  <div className="space-y-4 text-sm text-slate-700">
+                    <div>
+                      <p className="mb-2 font-semibold text-slate-900">iPhone</p>
+                      <ul className="list-disc space-y-1 pl-5">
+                        <li>Open the app in Safari.</li>
+                        <li>Tap Share.</li>
+                        <li>Add to Home Screen.</li>
+                      </ul>
+                    </div>
+
+                    <div>
+                      <p className="mb-2 font-semibold text-slate-900">Android</p>
+                      <ul className="list-disc space-y-1 pl-5">
+                        <li>Open the app in Chrome.</li>
+                        <li>Tap the menu icon.</li>
+                        <li>Install App.</li>
+                      </ul>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
+                      <p className="mb-2 font-semibold text-slate-900">App Link</p>
+                      <p>{FRONTEND_APP_URL}</p>
+                      <p className="mt-2 text-xs text-slate-500">No App Store needed.</p>
+                    </div>
+
+                    <div className="flex flex-col gap-3 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={handleOpenAppLink}
+                        className="w-full rounded-2xl bg-black px-5 py-3 text-sm font-medium text-white sm:w-auto"
+                      >
+                        Open App Link
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCopyAppLink}
+                        className="w-full rounded-2xl border border-black px-5 py-3 text-sm font-medium text-black sm:w-auto"
+                      >
+                        Copy Link
+                      </button>
+                    </div>
+
+                    {installMessage && (
+                      <p className="text-sm text-slate-600">{installMessage}</p>
+                    )}
                   </div>
                 </div>
-              )}
+              </details>
             </div>
-          </div>
+          </section>
         </div>
 
-        <div className="mb-6 grid gap-6 lg:grid-cols-[2fr,1fr]">
-          <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-            <h2 className="mb-2 text-xl font-semibold">ChatGPT Planner</h2>
-            <p className="mb-4 text-sm text-gray-600">
-              Generate a planning view that breaks the task into steps, calls out risks, and prepares the Codex-ready instruction plus testing plan.
-            </p>
-
-            <div className="mb-4 flex flex-col gap-3 sm:flex-row">
-              <button
-                type="button"
-                onClick={handleGeneratePlanner}
-                className="w-full rounded-xl bg-black px-5 py-3 text-white sm:w-auto"
-              >
-                Generate Planner
-              </button>
-            </div>
-
-            {plannerMessage && (
-              <p className="mb-3 text-sm text-gray-600">{plannerMessage}</p>
-            )}
-
-            <p className="mb-2 text-sm font-semibold text-gray-700">Planner Output</p>
-            <textarea
-              value={plannerOutput}
-              readOnly
-              className="h-80 w-full rounded-xl border bg-gray-50 p-4 text-sm"
-            />
-          </div>
-
-          <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-            <h2 className="mb-3 text-xl font-semibold">Download / Install</h2>
-            <p className="mb-4 text-sm text-gray-600">No App Store needed.</p>
-
-            <div className="mb-4 flex flex-col gap-3">
-              <button
-                type="button"
-                onClick={handleOpenAppLink}
-                className="w-full rounded-xl bg-black px-5 py-3 text-white"
-              >
-                Open App Link
-              </button>
-              <button
-                type="button"
-                onClick={handleCopyAppLink}
-                className="w-full rounded-xl border border-black px-5 py-3 text-black"
-              >
-                Copy App Link
-              </button>
-            </div>
-
-            {installMessage && (
-              <p className="mb-3 text-sm text-gray-600">{installMessage}</p>
-            )}
-
-            <div className="mb-4 rounded-xl border bg-gray-50 p-4 text-sm text-gray-700">
-              {FRONTEND_APP_URL}
-            </div>
-
-            <div className="space-y-4 text-sm text-gray-700">
-              <div>
-                <p className="mb-2 font-semibold">iPhone</p>
-                <ul className="list-disc space-y-1 pl-5">
-                  <li>Open in Safari.</li>
-                  <li>Tap Share.</li>
-                  <li>Add to Home Screen.</li>
-                </ul>
+        {lastTask && (
+          <div className="fixed bottom-4 left-4 right-4 z-20 lg:left-auto lg:right-6 lg:w-[430px]">
+            <div className="rounded-[28px] border border-slate-200 bg-white/95 p-4 shadow-2xl backdrop-blur">
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-slate-900">Automation Pipeline</p>
+                  <p className="text-xs text-slate-500">Currently simulated. Full automation coming.</p>
+                </div>
+                <span className="rounded-full border border-amber-200 bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
+                  {automationStatusLabel}
+                </span>
               </div>
-              <div>
-                <p className="mb-2 font-semibold">Android</p>
-                <ul className="list-disc space-y-1 pl-5">
-                  <li>Open in Chrome.</li>
-                  <li>Tap the menu icon.</li>
-                  <li>Install app.</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-        </div>
 
-        <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-          <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <h2 className="mb-2 text-xl font-semibold">Automation Pipeline</h2>
-              <p className="text-sm text-gray-600">
-                This simulated tracker mirrors the future path from Codex work to deployment and app refresh.
-              </p>
-              <p className="mt-2 text-sm font-medium text-amber-700">
-                This is manual simulation. Future version will automate this.
-              </p>
-            </div>
-            <div className="min-w-32">
-              <div className="mb-2 flex items-center justify-between text-xs font-medium text-gray-500">
+              <div className="mb-3 flex items-center justify-between text-xs font-medium text-slate-500">
                 <span>Progress</span>
                 <span>{pipelineProgress}%</span>
               </div>
-              <div className="h-2 rounded-full bg-gray-200">
+              <div className="mb-4 h-2 rounded-full bg-slate-200">
                 <div
                   className="h-2 rounded-full bg-blue-600 transition-all"
                   style={{ width: `${pipelineProgress}%` }}
                 />
               </div>
-            </div>
-          </div>
 
-          <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-            <button
-              type="button"
-              onClick={handleMarkCodexDone}
-              disabled={!canMarkCodexDone}
-              className={
-                canMarkCodexDone
-                  ? "w-full rounded-xl border border-black px-5 py-3 text-black sm:w-auto"
-                  : "w-full rounded-xl border border-gray-200 px-5 py-3 text-gray-400 sm:w-auto"
-              }
-            >
-              Mark Codex Done
-            </button>
-            <button
-              type="button"
-              onClick={handleMarkDeployDone}
-              disabled={!canMarkDeployDone}
-              className={
-                canMarkDeployDone
-                  ? "w-full rounded-xl border border-black px-5 py-3 text-black sm:w-auto"
-                  : "w-full rounded-xl border border-gray-200 px-5 py-3 text-gray-400 sm:w-auto"
-              }
-            >
-              Mark Deploy Done
-            </button>
-            <button
-              type="button"
-              onClick={handleRefreshApp}
-              disabled={!canRefreshApp}
-              className={
-                canRefreshApp
-                  ? "w-full rounded-xl bg-black px-5 py-3 text-white sm:w-auto"
-                  : "w-full rounded-xl border border-gray-200 px-5 py-3 text-gray-400 sm:w-auto"
-              }
-            >
-              Refresh App
-            </button>
-          </div>
+              {refreshCountdown !== null && (
+                <p className="mb-4 text-sm text-slate-600">
+                  Auto-refresh in {refreshCountdown}s
+                </p>
+              )}
 
-          <ol className="flex flex-col gap-3 xl:flex-row">
-            {automationPipeline.map((step, index) => (
-              <li
-                key={step.key}
-                className={`flex-1 rounded-xl border p-4 ${getPipelineCardClass(step.status)}`}
-              >
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                    Step {index + 1}
-                  </span>
-                  <span className={`rounded-full px-3 py-1 text-xs font-medium ${getPipelineStatusBadgeClass(step.status)}`}>
-                    {step.status === "pending" && "Pending"}
-                    {step.status === "active" && "Active"}
-                    {step.status === "done" && "Done"}
-                  </span>
-                </div>
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleSendToCodex}
+                  disabled={!canSendToCodex}
+                  className={
+                    canSendToCodex
+                      ? "w-full rounded-2xl bg-blue-600 px-4 py-3 text-sm font-medium text-white sm:w-auto"
+                      : "w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-400 sm:w-auto"
+                  }
+                >
+                  Send to Codex
+                </button>
+                <button
+                  type="button"
+                  onClick={handleMarkCodexDone}
+                  disabled={!canMarkCodexDone}
+                  className={
+                    canMarkCodexDone
+                      ? "w-full rounded-2xl border border-black px-4 py-3 text-sm font-medium text-black sm:w-auto"
+                      : "w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-400 sm:w-auto"
+                  }
+                >
+                  Mark Codex Done
+                </button>
+                <button
+                  type="button"
+                  onClick={handleMarkDeployDone}
+                  disabled={!canMarkDeployDone}
+                  className={
+                    canMarkDeployDone
+                      ? "w-full rounded-2xl border border-black px-4 py-3 text-sm font-medium text-black sm:w-auto"
+                      : "w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-400 sm:w-auto"
+                  }
+                >
+                  Mark Deploy Done
+                </button>
+                <button
+                  type="button"
+                  onClick={finishRefresh}
+                  disabled={!canRefreshNow}
+                  className={
+                    canRefreshNow
+                      ? "w-full rounded-2xl bg-black px-4 py-3 text-sm font-medium text-white sm:w-auto"
+                      : "w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-400 sm:w-auto"
+                  }
+                >
+                  Refresh Now
+                </button>
+              </div>
 
-                <div className="mb-2 flex items-center gap-3">
-                  <span className={`h-3 w-3 rounded-full ${getPipelineDotClass(step.status)}`} />
-                  <p className="font-semibold">{step.label}</p>
-                </div>
-                <p className="text-sm text-gray-600">{step.description}</p>
-              </li>
-            ))}
-          </ol>
-        </div>
-
-        <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-          <h2 className="mb-3 text-xl font-semibold">Codex Result Review</h2>
-          <p className="mb-4 text-sm text-gray-600">
-            Paste a Codex summary or deploy result, then get a quick review checklist and safe next-step suggestions.
-          </p>
-
-          <textarea
-            value={reviewInput}
-            onChange={(e) => setReviewInput(e.target.value)}
-            placeholder="Paste Codex summary or deploy result here..."
-            className="mb-4 h-36 w-full rounded-xl border p-4"
-          />
-
-          <div className="mb-4 flex flex-col gap-3 sm:flex-row">
-            <button
-              type="button"
-              onClick={handleReviewResult}
-              className="w-full rounded-xl bg-black px-5 py-3 text-white sm:w-auto"
-            >
-              Review Result
-            </button>
-          </div>
-
-          {reviewMessage && (
-            <p className="mb-4 text-sm text-gray-600">{reviewMessage}</p>
-          )}
-
-          {reviewResult && (
-            <div className="space-y-6">
-              <div>
-                <h3 className="mb-3 text-lg font-semibold">Checklist</h3>
-                <div className="space-y-3">
-                  {reviewResult.checklist.map((item) => (
-                    <div key={item.label} className="rounded-xl border bg-gray-50 p-4">
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <p className="font-semibold">{item.label}</p>
-                        <span className={`rounded-full px-3 py-1 text-xs font-medium ${getReviewBadgeClass(item.status)}`}>
-                          {item.status === "ready" ? "Looks good" : "Check this"}
-                        </span>
+              <div className="space-y-3">
+                {automationPipeline.map((step, index) => (
+                  <div key={step.key} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <span className={`h-3 w-3 rounded-full ${getPipelineDotClass(step.status)}`} />
+                        <p className="font-medium text-slate-900">
+                          {index + 1}. {step.label}
+                        </p>
                       </div>
-                      <p className="text-sm text-gray-600">{item.detail}</p>
+                      <span className={`rounded-full px-3 py-1 text-xs font-medium ${getPipelineStatusBadgeClass(step.status)}`}>
+                        {step.status === "pending" && "Pending"}
+                        {step.status === "active" && "Active"}
+                        {step.status === "done" && "Done"}
+                      </span>
                     </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="grid gap-6 lg:grid-cols-2">
-                <div className="rounded-xl border bg-green-50 p-4">
-                  <h3 className="mb-3 text-lg font-semibold text-green-800">Do</h3>
-                  <ul className="list-disc space-y-2 pl-5 text-sm text-green-900">
-                    {reviewResult.doItems.map((item, index) => (
-                      <li key={index}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div className="rounded-xl border bg-amber-50 p-4">
-                  <h3 className="mb-3 text-lg font-semibold text-amber-800">Do Not</h3>
-                  <ul className="list-disc space-y-2 pl-5 text-sm text-amber-900">
-                    {reviewResult.avoidItems.map((item, index) => (
-                      <li key={index}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-          <h2 className="mb-4 text-xl font-semibold">Projects</h2>
-
-          <div className="mb-4 flex flex-col gap-3 md:flex-row">
-            <input
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              placeholder="New project name"
-              className="flex-1 rounded-xl border px-4 py-3"
-            />
-            <button
-              type="button"
-              onClick={handleCreateProject}
-              className="w-full rounded-xl bg-black px-5 py-3 text-white md:w-auto"
-            >
-              Create Project
-            </button>
-          </div>
-
-          <select
-            value={selectedProject}
-            onChange={(e) => setSelectedProject(e.target.value)}
-            className="w-full rounded-xl border px-4 py-3 md:w-80"
-          >
-            {projects.length === 0 ? (
-              <option>Default Project</option>
-            ) : (
-              projects.map((project) => (
-                <option key={project.id} value={project.name}>
-                  {project.name}
-                </option>
-              ))
-            )}
-          </select>
-        </div>
-
-        <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-          <h2 className="mb-4 text-xl font-semibold">New Request</h2>
-
-          <textarea
-            value={request}
-            onChange={(e) => setRequest(e.target.value)}
-            placeholder="Examples:
-Create a notes page with add, edit, and delete.
-Build a vendor dashboard for comparing supplier quotes.
-Add login page with email and password.
-Create a dashboard with summary cards."
-            className="mb-4 h-48 w-full rounded-xl border p-4"
-          />
-
-          <button
-            type="button"
-            onClick={handleSubmit}
-            className="w-full rounded-xl bg-black px-5 py-3 text-white sm:w-auto"
-          >
-            Submit Request
-          </button>
-        </div>
-
-        <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-          <div className="mb-3 flex items-center gap-3">
-            <h2 className="text-xl font-semibold">Latest Result</h2>
-            {status && (
-              <span className="rounded-full border px-3 py-1 text-sm">
-                {status}
-              </span>
-            )}
-          </div>
-          <pre className="whitespace-pre-wrap text-sm">{result}</pre>
-        </div>
-
-        <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-          <h2 className="mb-4 text-xl font-semibold">Run Generated App</h2>
-
-          {!runInfo ? (
-            <p className="text-gray-500">No run info available.</p>
-          ) : (
-            <div className="space-y-3">
-              <p><strong>Project:</strong> {runInfo.project_name}</p>
-              <p><strong>Path:</strong> {runInfo.project_path}</p>
-              <p><strong>Run Script:</strong> {runInfo.run_script}</p>
-              <p className="text-sm text-gray-600">{runInfo.url_hint}</p>
-
-              <div>
-                <p className="mb-2 font-semibold">Commands:</p>
-                <pre className="whitespace-pre-wrap rounded-xl border bg-gray-50 p-4 text-sm">
-{runInfo.commands.join("\n")}
-                </pre>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-2">
-          <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-            <h2 className="mb-4 text-xl font-semibold">
-              Request History for {selectedProject}
-            </h2>
-
-            {history.length === 0 ? (
-              <p className="text-gray-500">No requests yet.</p>
-            ) : (
-              <div className="space-y-4">
-                {history.map((item, index) => (
-                  <div key={index} className="rounded-xl border p-4">
-                    <p className="mb-2 font-semibold">{item.instruction}</p>
-                    <p className="mb-1 text-sm">Project: {item.project_name}</p>
-                    <p className="mb-2 text-sm">Status: {item.status}</p>
-
-                    <ul className="mb-3 list-disc pl-5 text-sm">
-                      {item.plan.map((step, stepIndex) => (
-                        <li key={stepIndex}>{step}</li>
-                      ))}
-                    </ul>
-
-                    {item.created_files && item.created_files.length > 0 && (
-                      <div>
-                        <p className="mb-1 text-sm font-semibold">Created Files:</p>
-                        <ul className="list-disc pl-5 text-sm">
-                          {item.created_files.map((file, fileIndex) => (
-                            <li key={fileIndex}>{file}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
+                    <p className="text-xs text-slate-600">{step.description}</p>
                   </div>
                 ))}
               </div>
-            )}
+            </div>
           </div>
-
-          <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-            <h2 className="mb-4 text-xl font-semibold">
-              Project Files for {selectedProject}
-            </h2>
-
-            {projectFiles.length === 0 ? (
-              <p className="text-gray-500">No files yet.</p>
-            ) : (
-              <ul className="list-disc space-y-1 pl-5 text-sm">
-                {projectFiles.map((file, index) => (
-                  <li key={index}>{file}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
+        )}
       </div>
     </main>
   );

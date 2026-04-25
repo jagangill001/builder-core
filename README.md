@@ -1,18 +1,18 @@
 # Builder Core
 
-Builder Core is a mobile-friendly command center for planning changes, generating Codex-ready prompts, reviewing outcomes, and managing the live app experience across the frontend and backend.
+Builder Core is a cloud-first AI Command Center for planning changes, generating Codex-ready tasks, tracking deployment progress, reviewing outcomes, and operating the live app experience across the frontend and backend.
 
 ## Live Services
 - Frontend: https://builder-core-frontend-599596796788.us-central1.run.app
 - Backend: https://builder-core-599596796788.us-central1.run.app
 
 ## What The App Does
-- Lets you create and choose projects.
-- Sends build requests from the frontend to the backend.
-- Shows backend health at the top of the dashboard.
-- Generates a ChatGPT-style planning output and a Codex-ready prompt.
-- Tracks a manual automation pipeline and result review workflow.
-- Helps install the app on phone with no App Store needed.
+- Accepts one instruction in a unified command bar.
+- Generates a planner output and a Codex-ready task inline.
+- Keeps the existing backend request flow working.
+- Tracks a simulated deployment pipeline in a floating popup.
+- Shows inline review suggestions after deployment.
+- Supports phone installation with no App Store needed.
 
 ## Install On Your Phone
 ### iPhone or iPad
@@ -27,11 +27,31 @@ Builder Core is a mobile-friendly command center for planning changes, generatin
 3. Tap Install app or Add to Home screen.
 4. Open Builder Core from the installed icon.
 
-## Repo Structure
-- `backend/`: FastAPI backend and builder services.
-- `frontend/`: Next.js frontend and installable phone experience.
-- `.github/workflows/`: CI and Cloud Run deployment workflows.
-- `COMMAND_CENTER.md`: Command workflow and future automation design.
+## Cloud-First Plan
+Builder Core is moving toward cloud-first storage and automation.
+
+### Firestore
+- commands
+- tasks
+- statuses
+- history
+
+### Cloud Storage
+- files
+- generated outputs
+
+### Secret Manager
+- API keys
+
+### Cloud Run
+- backend
+- frontend
+
+### GitHub
+- code
+
+Important note:
+- The laptop is a control device only, not storage.
 
 ## Deployment Notes
 - Backend is deployed separately to Cloud Run.
