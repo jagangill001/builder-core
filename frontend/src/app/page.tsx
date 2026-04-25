@@ -33,12 +33,27 @@ export default function Home() {
   const [request, setRequest] = useState("");
   const [result, setResult] = useState("No request submitted yet.");
   const [status, setStatus] = useState("");
+  const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">("checking");
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [projectFiles, setProjectFiles] = useState<string[]>([]);
   const [selectedProject, setSelectedProject] = useState("Default Project");
   const [newProjectName, setNewProjectName] = useState("");
   const [runInfo, setRunInfo] = useState<RunInfo | null>(null);
+
+  async function checkBackendStatus() {
+    try {
+      const response = await fetch(`${API_BASE}/system/status`);
+
+      if (!response.ok) {
+        throw new Error("Backend status check failed");
+      }
+
+      setBackendStatus("online");
+    } catch {
+      setBackendStatus("offline");
+    }
+  }
 
   async function loadProjects() {
     try {
@@ -90,6 +105,7 @@ export default function Home() {
   }
 
   useEffect(() => {
+    checkBackendStatus();
     loadProjects();
     loadHistory(selectedProject);
     loadProjectFiles(selectedProject);
@@ -195,8 +211,21 @@ export default function Home() {
     <main className="min-h-screen p-8 bg-gray-50 text-black">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-4xl font-bold mb-2">Builder Core Dashboard</h1>
-        <p className="mb-6 text-gray-600">
+        <p className="mb-3 text-gray-600">
           Builder Core v5 with generated app shells and run instructions.
+        </p>
+        <p
+          className={
+            backendStatus === "online"
+              ? "mb-6 text-sm font-medium text-green-600"
+              : backendStatus === "offline"
+                ? "mb-6 text-sm font-medium text-red-600"
+                : "mb-6 text-sm font-medium text-gray-500"
+          }
+        >
+          {backendStatus === "checking" && "Backend: Checking..."}
+          {backendStatus === "online" && "Backend: Online"}
+          {backendStatus === "offline" && "Backend: Offline"}
         </p>
 
         <div className="bg-white border rounded-2xl p-6 mb-6 shadow-sm">
