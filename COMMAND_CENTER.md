@@ -82,6 +82,44 @@ For now, the pipeline is still manual and safe:
 - `Mark Deploy Done` marks Cloud Run Live and starts the refresh countdown.
 - `Refresh Now` forces the final refresh step immediately.
 
+### When To Mark Each Stage Done
+Use the manual buttons only when the matching evidence is visible.
+
+#### Mark Codex Done
+Click this only when:
+- Codex says it committed changes
+- Codex gives a commit hash
+- Codex summary says files changed
+- GitHub shows the new commit in the repo
+
+#### Mark Deploy Done
+Click this only when:
+- GitHub Actions is green
+- Cloud Run revision finished deploying
+- The frontend or backend service is live again
+- The backend health check still reports online in the app
+
+#### Refresh Now
+Click this only when:
+- deploy is done
+- the newest version is ready to load
+- you want the app to pull the latest live revision immediately
+
+## App Navigation
+Builder Core now includes app-style navigation so the main areas are easy to reach on phone or desktop.
+
+### Sidebar And Bottom Tabs
+- `Command` means the main chat and task entry area
+- `Progress` means the automation tracker and manual stage guidance
+- `Review` means the latest task review and safe next-step suggestions
+- `Download` means install and copy-link actions for phone use
+- `Help` means quick explanations of the workflow and manual controls
+
+### Quick Shortcuts
+The sidebar also includes:
+- `Install on Phone` to jump directly to the install section
+- `Copy App Link` to copy the live frontend URL without leaving the current screen
+
 ### Future Automation Sources
 Later, these steps can update automatically from:
 - Codex task status
