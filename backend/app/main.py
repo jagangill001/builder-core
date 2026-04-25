@@ -550,6 +550,204 @@ def get_or_create_project(db, project_name: str):
     db.refresh(project)
     return project
 
+def normalize_project_name(project_name: Optional[str]) -> str:
+    return (project_name or "Default Project").strip() or "Default Project"
+
+def build_run_info_payload(project_name: str):
+    root = project_root(project_name)
+    return {
+        "project_name": project_name,
+        "project_path": str(root),
+        "run_script": str(root / "run_project.ps1"),
+        "commands": [
+            f'cd "{root}"',
+            "npm install",
+            "npm run dev"
+        ],
+        "url_hint": "The generated app usually runs on http://localhost:3000 unless you stop the main frontend first or choose another port."
+    }
+
+def classify_chat_intent(instruction: str) -> str:
+    text = instruction.lower()
+
+    if any(phrase in text for phrase in ["what can you do", "help me understand", "explain", "what is builder core"]):
+        return "chat"
+
+    if any(phrase in text for phrase in ["how do i run", "run command", "launch", "start the app", "prepare run command"]):
+        return "run"
+
+    return "build"
+
+def build_chat_risks(intent: str):
+    if intent == "run":
+        return [
+            "Starting from the wrong folder can cause npm or uvicorn to fail.",
+            "Running frontend and backend with mismatched ports will break the live preview."
+        ]
+
+    if intent == "chat":
+        return [
+            "Jumping into code changes too early can make the next step unclear.",
+            "Skipping a quick repo check can turn a simple request into a risky edit."
+        ]
+
+    return [
+        "Changing the wrong project files could break an already working feature.",
+        "Skipping verification can hide frontend or backend regressions until deploy time."
+    ]
+
+def build_chat_testing_plan(intent: str, project_name: str):
+    base_checks = [
+        "Confirm /system/status still reports successfully in the app.",
+        "Confirm the main command flow still responds in the Command Center.",
+        f"Review the generated output for {project_name} before moving to deployment."
+    ]
+
+    if intent == "run":
+        return base_checks + [
+            "Verify the listed run commands start from the generated project folder.",
+            "Confirm the expected local URL loads after npm run dev."
+        ]
+
+    if intent == "chat":
+        return base_checks + [
+            "Confirm the suggested next steps match the user request.",
+            "Verify no file generation was triggered for an explanation-only request."
+        ]
+
+    return base_checks + [
+        "Check the created files and module route before sending the task to Codex.",
+        "Open the generated project or route preview after the simulated deploy finishes."
+    ]
+
+def build_next_steps(intent: str, project_name: str, plan: list[str], build_triggered: bool):
+    if intent == "run":
+        return [
+            f"Open the {project_name} project folder and use the run commands below.",
+            "Keep the backend status badge online before testing the generated app.",
+            "Return to the Command Center if you want Builder Core to make another change."
+        ]
+
+    if intent == "chat":
+        return [
+            "Refine the instruction if you want Builder Core to switch from planning into code generation.",
+            "Keep the project selected so the next request lands in the right workspace.",
+            "Use the generated Codex prompt if you want a more explicit implementation handoff."
+        ]
+
+    next_steps = [
+        "Review the plan and Codex prompt in the conversation before approving the next step.",
+        "Use Send to Codex to continue the simulated automation pipeline.",
+        f"Run the generated {project_name} project locally after deployment if you want a preview."
+    ]
+
+    if not plan:
+        next_steps[0] = "Clarify the goal before moving into the simulated Codex flow."
+
+    if build_triggered:
+        next_steps.insert(1, "Inspect the created files so you know exactly what changed.")
+
+    return next_steps
+
+def build_codex_prompt(project_name: str, instruction: str, plan: list[str]):
+    plan_lines = [f"- {step}" for step in plan] or ["- Inspect the repo and choose the smallest safe change set."]
+
+    return "\n".join([
+        "Repo: jagangill001/builder-core",
+        f"Selected project: {project_name}",
+        "",
+        "Goal:",
+        instruction,
+        "",
+        "Plan:",
+        *plan_lines,
+        "",
+        "Safety rules:",
+        "- Inspect the repo before editing.",
+        "- Do not break working features.",
+        "- Commit to main.",
+        "- Explain files changed.",
+        "- Provide testing steps.",
+        "",
+        "Legal rules:",
+        "- Write original code for this repo.",
+        "- Do not blindly copy third-party snippets.",
+        "- Licensed frameworks are allowed when used normally."
+    ])
+
+def build_assistant_reply(intent: str, project_name: str, instruction: str, plan: list[str], build_result: Optional[dict] = None):
+    if intent == "run":
+        return (
+            f"I reviewed your run request for {project_name}. "
+            "I prepared the run guidance and the next steps you need so you can start the app safely."
+        )
+
+    if intent == "chat":
+        return (
+            f"I reviewed your request for {project_name}. "
+            "I kept this in planning mode, outlined the next move, and prepared a Codex-ready prompt if you want to continue."
+        )
+
+    module_title = build_result.get("title") if build_result else "the requested module"
+    route_path = build_result.get("route_path") if build_result else "the generated route"
+    step_count = len(plan)
+
+    return (
+        f"I planned your request for {project_name}, prepared {step_count} implementation steps, "
+        f"and updated the builder output for {module_title} at {route_path}. "
+        "You can review the change summary below and then continue through the simulated Codex and deploy pipeline."
+    )
+
+def execute_plan_request(instruction: str, project_name: str):
+    db = SessionLocal()
+    try:
+        if not instruction:
+            return {"ok": False, "message": "Instruction is empty."}
+
+        project = get_or_create_project(db, project_name)
+        ensure_project_scaffold(project_name)
+
+        plan, module_key, route_path, title = generate_plan(instruction)
+        created_files = generate_files(project_name, module_key)
+
+        registry_file = update_module_registry(project_name, module_key, route_path, title)
+        shell_files = build_project_shell(project_name)
+        manifest_file = write_manifest(project_name, module_key, instruction, created_files, plan, route_path, title)
+
+        all_files = created_files + [registry_file, manifest_file] + shell_files
+
+        request_record = BuildRequestRecord(
+            instruction=instruction,
+            status="success",
+            project_id=project.id
+        )
+        db.add(request_record)
+        db.commit()
+        db.refresh(request_record)
+
+        for step in plan:
+            db.add(PlanStep(request_id=request_record.id, step_text=step))
+
+        for file_path in all_files:
+            db.add(CreatedFile(request_id=request_record.id, file_path=file_path))
+
+        db.commit()
+
+        return {
+            "ok": True,
+            "message": "Plan created successfully.",
+            "instruction": instruction,
+            "project_name": project_name,
+            "module_key": module_key,
+            "route_path": route_path,
+            "title": title,
+            "status": "success",
+            "plan": plan,
+            "created_files": all_files
+        }
+    finally:
+        db.close()
+
 @app.get("/")
 def home():
     return {"status": "Builder Core Running"}
@@ -633,72 +831,87 @@ def get_project_files(project_name: str):
 
 @app.get("/run-info")
 def get_run_info(project_name: str):
-    root = project_root(project_name)
-    return {
-        "project_name": project_name,
-        "project_path": str(root),
-        "run_script": str(root / "run_project.ps1"),
-        "commands": [
-            f'cd "{root}"',
-            "npm install",
-            "npm run dev"
-        ],
-        "url_hint": "The generated app usually runs on http://localhost:3000 unless you stop the main frontend first or choose another port."
-    }
+    return build_run_info_payload(project_name)
 
 @app.post("/plan")
 def create_plan(payload: BuildRequest):
-    db = SessionLocal()
-    try:
-        instruction = payload.instruction.strip()
-        project_name = (payload.project_name or "Default Project").strip() or "Default Project"
+    instruction = payload.instruction.strip()
+    project_name = normalize_project_name(payload.project_name)
+    return execute_plan_request(instruction, project_name)
 
-        if not instruction:
-            return {"ok": False, "message": "Instruction is empty."}
+@app.post("/chat")
+def chat(payload: BuildRequest):
+    instruction = payload.instruction.strip()
+    project_name = normalize_project_name(payload.project_name)
 
-        project = get_or_create_project(db, project_name)
-        ensure_project_scaffold(project_name)
-
-        plan, module_key, route_path, title = generate_plan(instruction)
-        created_files = generate_files(project_name, module_key)
-
-        registry_file = update_module_registry(project_name, module_key, route_path, title)
-        shell_files = build_project_shell(project_name)
-        manifest_file = write_manifest(project_name, module_key, instruction, created_files, plan, route_path, title)
-
-        all_files = created_files + [registry_file, manifest_file] + shell_files
-
-        request_record = BuildRequestRecord(
-            instruction=instruction,
-            status="success",
-            project_id=project.id
-        )
-        db.add(request_record)
-        db.commit()
-        db.refresh(request_record)
-
-        for step in plan:
-            db.add(PlanStep(request_id=request_record.id, step_text=step))
-
-        for file_path in all_files:
-            db.add(CreatedFile(request_id=request_record.id, file_path=file_path))
-
-        db.commit()
-
+    if not instruction:
         return {
-            "ok": True,
-            "message": "Plan created successfully.",
-            "instruction": instruction,
+            "ok": False,
+            "message": "Instruction is empty.",
+            "assistant_reply": "Please enter a command so I can plan it and respond.",
             "project_name": project_name,
-            "module_key": module_key,
-            "route_path": route_path,
-            "title": title,
-            "status": "success",
-            "plan": plan,
-            "created_files": all_files
+            "intent": "chat",
+            "plan": [],
+            "risks": [],
+            "testing_plan": [],
+            "next_steps": []
         }
-    finally:
-        db.close()
+
+    intent = classify_chat_intent(instruction)
+    build_result = None
+
+    if intent == "build":
+        build_result = execute_plan_request(instruction, project_name)
+        if not build_result.get("ok"):
+            return {
+                **build_result,
+                "assistant_reply": "I could not complete the builder step for that request.",
+                "intent": intent,
+                "risks": build_chat_risks(intent),
+                "testing_plan": build_chat_testing_plan(intent, project_name),
+                "next_steps": build_next_steps(intent, project_name, [], False)
+            }
+
+        plan = build_result.get("plan", [])
+    elif intent == "run":
+        plan = [
+            "Inspect the selected project folder.",
+            "Return the safest run commands and script path.",
+            "Explain the expected preview URL and verification steps."
+        ]
+    else:
+        plan = [
+            "Understand the goal and keep the next move narrow and safe.",
+            "Summarize what Builder Core can do for the selected project.",
+            "Prepare a Codex-ready instruction if the user wants implementation next."
+        ]
+
+    risks = build_chat_risks(intent)
+    testing_plan = build_chat_testing_plan(intent, project_name)
+    next_steps = build_next_steps(intent, project_name, plan, build_result is not None)
+    codex_prompt = build_codex_prompt(project_name, instruction, plan)
+    assistant_reply = build_assistant_reply(intent, project_name, instruction, plan, build_result)
+    run_info = build_run_info_payload(project_name)
+
+    response = {
+        "ok": True,
+        "message": build_result.get("message", "Chat response ready.") if build_result else "Chat response ready.",
+        "assistant_reply": assistant_reply,
+        "project_name": project_name,
+        "intent": intent,
+        "plan": plan,
+        "risks": risks,
+        "testing_plan": testing_plan,
+        "next_steps": next_steps,
+        "codex_prompt": codex_prompt,
+        "build_triggered": build_result is not None,
+        "run_info": run_info
+    }
+
+    if build_result:
+        response.update(build_result)
+
+    return response
         
 @app.get("/system/status")
 def system_status():

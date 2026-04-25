@@ -94,6 +94,21 @@ type CommandTask = {
   builderSummary?: string | null;
 };
 
+type CommandCenterChatResponse = Record<string, unknown> & {
+  ok?: boolean;
+  message?: string;
+  assistant_reply?: string;
+  project_name?: string;
+  intent?: string;
+  plan?: string[];
+  risks?: string[];
+  testing_plan?: string[];
+  next_steps?: string[];
+  codex_prompt?: string;
+  build_triggered?: boolean;
+  run_info?: Record<string, unknown>;
+};
+
 type ChatEntry = {
   id: string;
   role: "user" | "assistant";
@@ -155,6 +170,55 @@ function buildPlannerOutput(instruction: string, projectName: string) {
     "- Confirm the main request submission flow still works.",
     "- Confirm the latest UI works on desktop and phone widths.",
     "- Confirm the live frontend and backend still load after deployment."
+  ].join("\n");
+}
+
+function buildPlannerSummary(
+  instruction: string,
+  projectName: string,
+  data: CommandCenterChatResponse,
+  fallbackPlanner: string
+) {
+  const plan = Array.isArray(data.plan) ? data.plan : [];
+  const risks = Array.isArray(data.risks) ? data.risks : [];
+  const testingPlan = Array.isArray(data.testing_plan) ? data.testing_plan : [];
+  const intent = typeof data.intent === "string" && data.intent ? data.intent : "build";
+  const resolvedProjectName =
+    typeof data.project_name === "string" && data.project_name ? data.project_name : projectName;
+
+  if (plan.length === 0 && risks.length === 0 && testingPlan.length === 0) {
+    return fallbackPlanner;
+  }
+
+  return [
+    "ChatGPT Planner",
+    `Project: ${resolvedProjectName}`,
+    `Instruction: ${instruction}`,
+    `Intent: ${intent}`,
+    "",
+    "Step-by-step plan:",
+    ...(plan.length > 0
+      ? plan.map((step, index) => `${index + 1}. ${step}`)
+      : ["1. Review the request and choose the next safe step."]),
+    "",
+    "Risks:",
+    ...(risks.length > 0 ? risks.map((risk) => `- ${risk}`) : ["- No risks were returned by the backend."]),
+    "",
+    "Testing plan:",
+    ...(testingPlan.length > 0
+      ? testingPlan.map((step) => `- ${step}`)
+      : ["- Confirm the request outcome manually after the reply."])
+  ].join("\n");
+}
+
+function buildNextStepsSummary(nextSteps: unknown) {
+  if (!Array.isArray(nextSteps) || nextSteps.length === 0) {
+    return "";
+  }
+
+  return [
+    "Next Steps",
+    ...nextSteps.map((step) => `- ${String(step)}`)
   ].join("\n");
 }
 
@@ -600,20 +664,11 @@ export default function Home() {
       return;
     }
 
-    const planner = buildPlannerOutput(instruction, selectedProject);
-    const prompt = buildCodexPrompt(instruction, selectedProject);
-    const nextTask: CommandTask = {
-      instruction,
-      planner,
-      prompt,
-      timestamp: formatTimestamp(new Date())
-    };
+    const fallbackPlanner = buildPlannerOutput(instruction, selectedProject);
+    const fallbackPrompt = buildCodexPrompt(instruction, selectedProject);
 
     setCommandInput("");
-    setExecutionStatus("prepared");
-    setPipelineStage("codex_ready");
     setRefreshCountdown(null);
-    setLastTask(nextTask);
 
     appendChatEntries([
       {
@@ -626,29 +681,11 @@ export default function Home() {
         kind: "text",
         title: "System",
         content: "Planning..."
-      },
-      {
-        role: "assistant",
-        kind: "planner",
-        title: "ChatGPT Planner",
-        content: planner
-      },
-      {
-        role: "assistant",
-        kind: "text",
-        title: "System",
-        content: "Preparing Codex task..."
-      },
-      {
-        role: "assistant",
-        kind: "codex",
-        title: "Codex Task",
-        content: prompt
       }
     ]);
 
     try {
-      const response = await fetch(`${API_BASE}/plan`, {
+      const response = await fetch(`${API_BASE}/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -659,56 +696,110 @@ export default function Home() {
         })
       });
 
-      const data = await response.json();
+      const data = (await response.json()) as CommandCenterChatResponse;
 
-      if (!data.ok) {
+      if (!response.ok || !data.ok) {
         appendChatEntries([
           {
             role: "assistant",
             kind: "text",
             title: "Builder Core",
-            content: data.message || "Builder Core could not complete the request."
+            content:
+              (typeof data.assistant_reply === "string" && data.assistant_reply) ||
+              (typeof data.message === "string" && data.message) ||
+              "Builder Core could not complete that chat request."
           }
         ]);
         return;
       }
 
-      const builderSummary = buildBuilderSummary(data);
-      setLastTask((current) => (current ? { ...current, builderSummary } : current));
+      const planner = buildPlannerSummary(instruction, selectedProject, data, fallbackPlanner);
+      const prompt =
+        typeof data.codex_prompt === "string" && data.codex_prompt.trim()
+          ? data.codex_prompt
+          : fallbackPrompt;
+      const nextStepsSummary = buildNextStepsSummary(data.next_steps);
+      const builderSummary = data.build_triggered ? buildBuilderSummary(data) : null;
+      const nextTask: CommandTask = {
+        instruction,
+        planner,
+        prompt,
+        timestamp: formatTimestamp(new Date()),
+        builderSummary
+      };
 
-      appendChatEntries([
+      setExecutionStatus("prepared");
+      setPipelineStage("codex_ready");
+      setLastTask(nextTask);
+
+      const responseEntries: Array<Omit<ChatEntry, "id" | "timestamp">> = [
         {
+          role: "assistant",
+          kind: "text",
+          title: "Builder Core",
+          content:
+            (typeof data.assistant_reply === "string" && data.assistant_reply) ||
+            "I planned the request and prepared the next steps."
+        },
+        {
+          role: "assistant",
+          kind: "planner",
+          title: "ChatGPT Planner",
+          content: planner
+        },
+        {
+          role: "assistant",
+          kind: "text",
+          title: "System",
+          content: "Preparing Codex task..."
+        },
+        {
+          role: "assistant",
+          kind: "codex",
+          title: "Codex Task",
+          content: prompt
+        }
+      ];
+
+      if (builderSummary) {
+        responseEntries.push({
           role: "assistant",
           kind: "builder",
           title: "Builder Core Response",
           content: builderSummary
-        }
-      ]);
-
-      try {
-        const runInfoResponse = await fetch(`${API_BASE}/run-info?project_name=${encodeURIComponent(selectedProject)}`);
-
-        if (runInfoResponse.ok) {
-          const runInfoData = await runInfoResponse.json();
-          appendChatEntries([
-            {
-              role: "assistant",
-              kind: "builder",
-              title: "Run Instructions",
-              content: buildRunSummary(runInfoData)
-            }
-          ]);
-        }
-      } catch {
-        console.log("Could not load run info");
+        });
       }
+
+      if (nextStepsSummary) {
+        responseEntries.push({
+          role: "assistant",
+          kind: "builder",
+          title: "Suggestions / Next Steps",
+          content: nextStepsSummary
+        });
+      }
+
+      if (data.run_info && typeof data.run_info === "object") {
+        responseEntries.push({
+          role: "assistant",
+          kind: "builder",
+          title: "Run Instructions",
+          content: buildRunSummary(data.run_info)
+        });
+      }
+
+      appendChatEntries(responseEntries);
     } catch {
+      setExecutionStatus("idle");
+      setPipelineStage("idle");
+      setRefreshCountdown(null);
+
       appendChatEntries([
         {
           role: "assistant",
           kind: "text",
           title: "Builder Core",
-          content: "The backend request could not complete, but the plan and Codex task are still ready."
+          content: "I could not reach the backend chat service right now. Check the backend status, then try the command again."
         }
       ]);
     }
