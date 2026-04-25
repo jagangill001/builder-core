@@ -14,37 +14,58 @@ const PIPELINE_STEP_DEFINITIONS = [
   {
     key: "task_received",
     label: "Task Received",
-    description: "Builder Core accepted the instruction and opened the task."
+    description: "Builder Core accepted the instruction and opened the task.",
+    percent: 15,
+    currentText: "Your command was accepted.",
+    nextText: "Next: Builder Core will create a safe plan for the task."
   },
   {
     key: "planning",
     label: "Planning",
-    description: "The planner organized the work, risks, and testing approach."
+    description: "The planner organized the work, risks, and testing approach.",
+    percent: 30,
+    currentText: "Builder Core is creating a safe plan.",
+    nextText: "Next: a Codex task will be prepared after the plan is ready."
   },
   {
     key: "codex_ready",
     label: "Codex Ready",
-    description: "The Codex-ready task is prepared and waiting to be sent."
+    description: "The Codex-ready task is prepared and waiting to be sent.",
+    percent: 45,
+    currentText: "A Codex task is ready.",
+    nextText: "Next: Codex will start after you send the task."
   },
   {
     key: "codex_working",
     label: "Codex Working",
-    description: "Codex is working through the requested change."
+    description: "Codex is working through the requested change.",
+    percent: 60,
+    currentText: "Codex is expected to make code changes.",
+    nextText: "Next: GitHub deploy will start after Codex finishes."
   },
   {
     key: "github_deploying",
     label: "GitHub Deploying",
-    description: "GitHub Actions is building and deploying the latest revision."
+    description: "GitHub Actions is building and deploying the latest revision.",
+    percent: 75,
+    currentText: "GitHub Actions is deploying the update.",
+    nextText: "Next: Cloud Run will go live after deployment finishes."
   },
   {
     key: "cloud_run_live",
     label: "Cloud Run Live",
-    description: "The new Cloud Run revision is live."
+    description: "The new Cloud Run revision is live.",
+    percent: 90,
+    currentText: "New Cloud Run version is live.",
+    nextText: "Next: refresh the app to load the newest version."
   },
   {
     key: "app_refreshed",
     label: "App Refreshed",
-    description: "The app reloaded and is showing the latest state."
+    description: "The app reloaded and is showing the latest state.",
+    percent: 100,
+    currentText: "App is refreshed and ready.",
+    nextText: "Next: enter another command when you are ready."
   }
 ] as const;
 
@@ -69,6 +90,9 @@ type PipelineStep = {
   key: string;
   label: string;
   description: string;
+  percent: number;
+  currentText: string;
+  nextText: string;
   status: PipelineStepStatus;
 };
 
@@ -277,7 +301,7 @@ function buildAutomationPipeline(stage: PipelineStage): PipelineStep[] {
     codex_ready: 1,
     codex_working: 2,
     github_deploying: 3,
-    refresh_pending: 5,
+    refresh_pending: 4,
     refreshed: 6
   };
 
@@ -286,7 +310,7 @@ function buildAutomationPipeline(stage: PipelineStage): PipelineStep[] {
     codex_ready: 2,
     codex_working: 3,
     github_deploying: 4,
-    refresh_pending: 6,
+    refresh_pending: 5,
     refreshed: -1
   };
 
@@ -307,6 +331,25 @@ function buildAutomationPipeline(stage: PipelineStage): PipelineStep[] {
       status
     };
   });
+}
+
+function getCurrentPipelineStep(steps: PipelineStep[], stage: PipelineStage) {
+  const activeStep = steps.find((step) => step.status === "active");
+  if (activeStep) {
+    return activeStep;
+  }
+
+  if (stage === "refreshed") {
+    return steps[steps.length - 1] ?? null;
+  }
+
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    if (steps[index].status === "done") {
+      return steps[index];
+    }
+  }
+
+  return null;
 }
 
 function getPipelineStatusBadgeClass(status: PipelineStepStatus) {
@@ -331,6 +374,42 @@ function getPipelineDotClass(status: PipelineStepStatus) {
   }
 
   return "bg-gray-300";
+}
+
+function getPipelineCardClass(status: PipelineStepStatus) {
+  if (status === "active") {
+    return "rounded-3xl border-2 border-blue-200 bg-blue-50 p-4 shadow-sm";
+  }
+
+  if (status === "done") {
+    return "rounded-2xl border border-green-200 bg-green-50/80 p-3";
+  }
+
+  return "rounded-2xl border border-slate-100 bg-slate-50/80 p-2.5 opacity-65";
+}
+
+function getPipelineTitleClass(status: PipelineStepStatus) {
+  if (status === "active") {
+    return "text-base font-semibold text-slate-900";
+  }
+
+  if (status === "done") {
+    return "text-sm font-medium text-slate-900";
+  }
+
+  return "text-sm font-medium text-slate-500";
+}
+
+function getPipelineDescriptionClass(status: PipelineStepStatus) {
+  if (status === "active") {
+    return "text-sm text-slate-700";
+  }
+
+  if (status === "done") {
+    return "text-xs text-slate-600";
+  }
+
+  return "text-xs text-slate-400";
 }
 
 function getReviewBadgeClass(status: ReviewStatus) {
@@ -525,8 +604,17 @@ export default function Home() {
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const automationPipeline = useMemo(() => buildAutomationPipeline(pipelineStage), [pipelineStage]);
-  const completedPipelineSteps = automationPipeline.filter((step) => step.status === "done").length;
-  const pipelineProgress = Math.round((completedPipelineSteps / automationPipeline.length) * 100);
+  const currentPipelineStep = useMemo(
+    () => getCurrentPipelineStep(automationPipeline, pipelineStage),
+    [automationPipeline, pipelineStage]
+  );
+  const pipelineProgress = currentPipelineStep?.percent ?? 0;
+  const pipelineProgressText = currentPipelineStep
+    ? `${pipelineProgress}% complete — ${currentPipelineStep.currentText}`
+    : "0% complete — Waiting for your next task";
+  const pipelineCurrentText = currentPipelineStep?.currentText ?? "Waiting for your next command.";
+  const pipelineNextStepText =
+    currentPipelineStep?.nextText ?? "Next: enter a command to start the automation pipeline.";
 
   const canSendToCodex = pipelineStage === "codex_ready";
   const canMarkCodexDone = pipelineStage === "codex_working";
@@ -1066,15 +1154,39 @@ export default function Home() {
                 </span>
               </div>
 
-              <div className="mb-3 flex items-center justify-between text-xs font-medium text-slate-500">
+              <div className="mb-3 flex items-center justify-between text-sm font-semibold text-slate-700">
                 <span>Progress</span>
                 <span>{pipelineProgress}%</span>
               </div>
-              <div className="mb-4 h-2 rounded-full bg-slate-200">
+              <div className="mb-3 h-4 rounded-full bg-slate-200">
                 <div
-                  className="h-2 rounded-full bg-blue-600 transition-all"
+                  className="h-4 rounded-full bg-blue-600 transition-all"
                   style={{ width: `${pipelineProgress}%` }}
                 />
+              </div>
+
+              <p className="mb-4 text-sm font-semibold text-slate-900">
+                {pipelineProgressText}
+              </p>
+
+              <div className="mb-4 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    What is happening now
+                  </p>
+                  <p className="mt-2 text-sm font-medium text-slate-900">
+                    {pipelineCurrentText}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Next step
+                  </p>
+                  <p className="mt-2 text-sm font-medium text-slate-900">
+                    {pipelineNextStepText}
+                  </p>
+                </div>
               </div>
 
               {refreshCountdown !== null && (
@@ -1090,8 +1202,8 @@ export default function Home() {
                   disabled={!canSendToCodex}
                   className={
                     canSendToCodex
-                      ? "w-full rounded-2xl bg-blue-600 px-4 py-3 text-sm font-medium text-white sm:w-auto"
-                      : "w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-400 sm:w-auto"
+                      ? "w-full rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white sm:w-auto"
+                      : "w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-400 sm:w-auto"
                   }
                 >
                   Send to Codex
@@ -1102,8 +1214,8 @@ export default function Home() {
                   disabled={!canMarkCodexDone}
                   className={
                     canMarkCodexDone
-                      ? "w-full rounded-2xl border border-black px-4 py-3 text-sm font-medium text-black sm:w-auto"
-                      : "w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-400 sm:w-auto"
+                      ? "w-full rounded-xl border border-black px-3 py-2 text-xs font-semibold text-black sm:w-auto"
+                      : "w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-400 sm:w-auto"
                   }
                 >
                   Mark Codex Done
@@ -1114,8 +1226,8 @@ export default function Home() {
                   disabled={!canMarkDeployDone}
                   className={
                     canMarkDeployDone
-                      ? "w-full rounded-2xl border border-black px-4 py-3 text-sm font-medium text-black sm:w-auto"
-                      : "w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-400 sm:w-auto"
+                      ? "w-full rounded-xl border border-black px-3 py-2 text-xs font-semibold text-black sm:w-auto"
+                      : "w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-400 sm:w-auto"
                   }
                 >
                   Mark Deploy Done
@@ -1126,8 +1238,8 @@ export default function Home() {
                   disabled={!canRefreshNow}
                   className={
                     canRefreshNow
-                      ? "w-full rounded-2xl bg-black px-4 py-3 text-sm font-medium text-white sm:w-auto"
-                      : "w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-400 sm:w-auto"
+                      ? "w-full rounded-xl bg-black px-3 py-2 text-xs font-semibold text-white sm:w-auto"
+                      : "w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-400 sm:w-auto"
                   }
                 >
                   Refresh Now
@@ -1136,13 +1248,18 @@ export default function Home() {
 
               <div className="space-y-3">
                 {automationPipeline.map((step, index) => (
-                  <div key={step.key} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <div key={step.key} className={getPipelineCardClass(step.status)}>
                     <div className="mb-2 flex items-center justify-between gap-3">
                       <div className="flex items-center gap-3">
                         <span className={`h-3 w-3 rounded-full ${getPipelineDotClass(step.status)}`} />
-                        <p className="font-medium text-slate-900">
-                          {index + 1}. {step.label}
-                        </p>
+                        <div>
+                          <p className={getPipelineTitleClass(step.status)}>
+                            {index + 1}. {step.label}
+                          </p>
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                            {step.percent}%
+                          </p>
+                        </div>
                       </div>
                       <span className={`rounded-full px-3 py-1 text-xs font-medium ${getPipelineStatusBadgeClass(step.status)}`}>
                         {step.status === "pending" && "Pending"}
@@ -1150,7 +1267,24 @@ export default function Home() {
                         {step.status === "done" && "Done"}
                       </span>
                     </div>
-                    <p className="text-xs text-slate-600">{step.description}</p>
+                    <p className={getPipelineDescriptionClass(step.status)}>
+                      {step.description}
+                    </p>
+                    {step.status === "active" && (
+                      <p className="mt-2 text-sm font-medium text-blue-700">
+                        {step.currentText}
+                      </p>
+                    )}
+                    {step.status === "pending" && (
+                      <p className="mt-2 text-[11px] text-slate-400">
+                        Waiting for earlier steps to finish.
+                      </p>
+                    )}
+                    {step.status === "done" && (
+                      <p className="mt-2 text-[11px] text-green-700">
+                        Completed.
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>
