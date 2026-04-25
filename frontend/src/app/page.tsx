@@ -6,7 +6,7 @@ const API_BASE = (
   process.env.NEXT_PUBLIC_API_BASE_URL ??
   process.env.NEXT_PUBLIC_API_URL ??
   "https://builder-core-599596796788.us-central1.run.app"
-).replace(/\\/$/, "");
+).replace(/\/$/, "");
 
 type HistoryItem = {
   instruction: string;
