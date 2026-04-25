@@ -1,0 +1,17 @@
+{
+  "name": "Builder Core",
+  "short_name": "BuilderCore",
+  "description": "Mobile-friendly command center for Builder Core.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#111827",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}
