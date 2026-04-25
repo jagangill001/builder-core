@@ -26,6 +26,29 @@ Future automation should work like this:
 5. Deployment runs after checks pass.
 6. Builder Core shows the task status, logs, and final result in the app.
 
+## Automation Pipeline
+Builder Core now includes a visual automation pipeline with these stages:
+1. Sent to Codex
+2. Codex Working
+3. Code Done
+4. GitHub Deploying
+5. Cloud Run Live
+6. App Refreshed
+
+### Current Manual Simulation
+For now, the pipeline is still manual and safe:
+- `Send to Codex` marks the task as handed off and starts the Codex working step.
+- `Mark Codex Done` moves the task into the deployment phase.
+- `Mark Deploy Done` marks the deploy as live and makes the app refresh step active.
+- `Refresh App` completes the last step and reloads the frontend.
+
+### Future Automation Sources
+Later, these steps can be updated automatically from:
+- Codex task status
+- GitHub Actions status
+- Cloud Run deploy status
+- backend webhook events
+
 ## Safety Rules
 - No automatic repo modification without user confirmation.
 - Authentication is required before automation can act.

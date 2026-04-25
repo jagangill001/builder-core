@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const API_BASE = (
   process.env.NEXT_PUBLIC_API_BASE_URL ??
@@ -9,6 +9,39 @@ const API_BASE = (
 ).replace(/\/$/, "");
 
 const EMPTY_PROMPT_MESSAGE = "Generated Codex prompt will appear here.";
+
+const PIPELINE_STEP_DEFINITIONS = [
+  {
+    key: "sent_to_codex",
+    label: "Sent to Codex",
+    description: "The task has been handed off from the Command Center."
+  },
+  {
+    key: "codex_working",
+    label: "Codex Working",
+    description: "Codex is actively working through the instruction."
+  },
+  {
+    key: "code_done",
+    label: "Code Done",
+    description: "The code changes are ready for the deployment pipeline."
+  },
+  {
+    key: "github_deploying",
+    label: "GitHub Deploying",
+    description: "GitHub Actions is building and deploying the update."
+  },
+  {
+    key: "cloud_run_live",
+    label: "Cloud Run Live",
+    description: "The new Cloud Run revision is live."
+  },
+  {
+    key: "app_refreshed",
+    label: "App Refreshed",
+    description: "The frontend has reloaded and is showing the latest version."
+  }
+] as const;
 
 type HistoryItem = {
   instruction: string;
@@ -37,6 +70,17 @@ type CommandTask = {
   instruction: string;
   prompt: string;
   timestamp: string;
+};
+
+type PipelineStage = "idle" | "codex_working" | "deploying" | "refresh_ready" | "refreshed";
+
+type PipelineStepStatus = "pending" | "active" | "done";
+
+type PipelineStep = {
+  key: string;
+  label: string;
+  description: string;
+  status: PipelineStepStatus;
 };
 
 function buildCodexPrompt(instruction: string, projectName: string) {
@@ -94,6 +138,78 @@ function formatTaskTimestamp(date: Date) {
   });
 }
 
+function buildAutomationPipeline(stage: PipelineStage): PipelineStep[] {
+  const doneThresholdByStage: Record<PipelineStage, number> = {
+    idle: -1,
+    codex_working: 0,
+    deploying: 2,
+    refresh_ready: 4,
+    refreshed: 5
+  };
+
+  const activeIndexByStage: Record<PipelineStage, number> = {
+    idle: -1,
+    codex_working: 1,
+    deploying: 3,
+    refresh_ready: 5,
+    refreshed: -1
+  };
+
+  const doneThreshold = doneThresholdByStage[stage];
+  const activeIndex = activeIndexByStage[stage];
+
+  return PIPELINE_STEP_DEFINITIONS.map((step, index) => {
+    let status: PipelineStepStatus = "pending";
+
+    if (index <= doneThreshold) {
+      status = "done";
+    } else if (index === activeIndex) {
+      status = "active";
+    }
+
+    return {
+      ...step,
+      status
+    };
+  });
+}
+
+function getPipelineStatusBadgeClass(status: PipelineStepStatus) {
+  if (status === "done") {
+    return "border border-green-200 bg-green-100 text-green-700";
+  }
+
+  if (status === "active") {
+    return "border border-blue-200 bg-blue-100 text-blue-700";
+  }
+
+  return "border border-gray-200 bg-gray-100 text-gray-600";
+}
+
+function getPipelineCardClass(status: PipelineStepStatus) {
+  if (status === "done") {
+    return "border-green-200 bg-green-50";
+  }
+
+  if (status === "active") {
+    return "border-blue-200 bg-blue-50";
+  }
+
+  return "border-gray-200 bg-white";
+}
+
+function getPipelineDotClass(status: PipelineStepStatus) {
+  if (status === "done") {
+    return "bg-green-600";
+  }
+
+  if (status === "active") {
+    return "bg-blue-600";
+  }
+
+  return "bg-gray-300";
+}
+
 export default function Home() {
   const [request, setRequest] = useState("");
   const [result, setResult] = useState("No request submitted yet.");
@@ -103,6 +219,7 @@ export default function Home() {
   const [codexPrompt, setCodexPrompt] = useState(EMPTY_PROMPT_MESSAGE);
   const [copyMessage, setCopyMessage] = useState("");
   const [executionStatus, setExecutionStatus] = useState<ExecutionStatus>("idle");
+  const [pipelineStage, setPipelineStage] = useState<PipelineStage>("idle");
   const [lastTask, setLastTask] = useState<CommandTask | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [projects, setProjects] = useState<ProjectItem[]>([]);
@@ -111,11 +228,17 @@ export default function Home() {
   const [newProjectName, setNewProjectName] = useState("");
   const [runInfo, setRunInfo] = useState<RunInfo | null>(null);
 
+  const automationPipeline = useMemo(() => buildAutomationPipeline(pipelineStage), [pipelineStage]);
+  const completedPipelineSteps = automationPipeline.filter((step) => step.status === "done").length;
+  const pipelineProgress = Math.round((completedPipelineSteps / automationPipeline.length) * 100);
+
   const canCopyPrompt =
     codexPrompt !== EMPTY_PROMPT_MESSAGE &&
     codexPrompt !== "Add an instruction above to generate a Codex prompt.";
 
-  const canMarkCompleted = executionStatus === "sent";
+  const canMarkCodexDone = pipelineStage === "codex_working";
+  const canMarkDeployDone = pipelineStage === "deploying";
+  const canRefreshApp = pipelineStage === "refresh_ready";
 
   async function checkBackendStatus() {
     try {
@@ -220,10 +343,12 @@ export default function Home() {
 
     if (!nextTask) {
       setExecutionStatus("idle");
+      setPipelineStage("idle");
       return;
     }
 
     setExecutionStatus("prepared");
+    setPipelineStage("idle");
     setCopyMessage("Prompt prepared.");
   }
 
@@ -232,20 +357,47 @@ export default function Home() {
 
     if (!nextTask) {
       setExecutionStatus("idle");
+      setPipelineStage("idle");
       return;
     }
 
     setExecutionStatus("sent");
+    setPipelineStage("codex_working");
     setCopyMessage("Task prepared for Codex.");
   }
 
-  function handleMarkCompleted() {
+  function handleMarkCodexDone() {
+    if (!lastTask) {
+      return;
+    }
+
+    setExecutionStatus("sent");
+    setPipelineStage("deploying");
+    setCopyMessage("Codex work marked done. Deployment is now active.");
+  }
+
+  function handleMarkDeployDone() {
+    if (!lastTask) {
+      return;
+    }
+
+    setExecutionStatus("sent");
+    setPipelineStage("refresh_ready");
+    setCopyMessage("Deployment marked done. Refresh the app to complete the flow.");
+  }
+
+  function handleRefreshApp() {
     if (!lastTask) {
       return;
     }
 
     setExecutionStatus("completed");
-    setCopyMessage("Task marked as completed.");
+    setPipelineStage("refreshed");
+    setCopyMessage("App refresh starting.");
+
+    window.setTimeout(() => {
+      window.location.reload();
+    }, 250);
   }
 
   async function handleCopyPrompt() {
@@ -444,19 +596,7 @@ export default function Home() {
 
             <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
               <h2 className="mb-3 text-xl font-semibold">Execution Status</h2>
-              <p className="mb-4 text-sm text-gray-700">{getExecutionStatusLabel(executionStatus)}</p>
-              <button
-                type="button"
-                onClick={handleMarkCompleted}
-                disabled={!canMarkCompleted}
-                className={
-                  canMarkCompleted
-                    ? "w-full rounded-xl border border-black px-5 py-3 text-black"
-                    : "w-full rounded-xl border border-gray-200 px-5 py-3 text-gray-400"
-                }
-              >
-                Mark as Completed
-              </button>
+              <p className="text-sm text-gray-700">{getExecutionStatusLabel(executionStatus)}</p>
             </div>
 
             <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
@@ -477,6 +617,94 @@ export default function Home() {
               )}
             </div>
           </div>
+        </div>
+
+        <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
+          <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 className="mb-2 text-xl font-semibold">Automation Pipeline</h2>
+              <p className="text-sm text-gray-600">
+                This simulated tracker mirrors the future path from Codex work to deployment and app refresh.
+              </p>
+            </div>
+            <div className="min-w-32">
+              <div className="mb-2 flex items-center justify-between text-xs font-medium text-gray-500">
+                <span>Progress</span>
+                <span>{pipelineProgress}%</span>
+              </div>
+              <div className="h-2 rounded-full bg-gray-200">
+                <div
+                  className="h-2 rounded-full bg-blue-600 transition-all"
+                  style={{ width: `${pipelineProgress}%` }}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+            <button
+              type="button"
+              onClick={handleMarkCodexDone}
+              disabled={!canMarkCodexDone}
+              className={
+                canMarkCodexDone
+                  ? "w-full rounded-xl border border-black px-5 py-3 text-black sm:w-auto"
+                  : "w-full rounded-xl border border-gray-200 px-5 py-3 text-gray-400 sm:w-auto"
+              }
+            >
+              Mark Codex Done
+            </button>
+            <button
+              type="button"
+              onClick={handleMarkDeployDone}
+              disabled={!canMarkDeployDone}
+              className={
+                canMarkDeployDone
+                  ? "w-full rounded-xl border border-black px-5 py-3 text-black sm:w-auto"
+                  : "w-full rounded-xl border border-gray-200 px-5 py-3 text-gray-400 sm:w-auto"
+              }
+            >
+              Mark Deploy Done
+            </button>
+            <button
+              type="button"
+              onClick={handleRefreshApp}
+              disabled={!canRefreshApp}
+              className={
+                canRefreshApp
+                  ? "w-full rounded-xl bg-black px-5 py-3 text-white sm:w-auto"
+                  : "w-full rounded-xl border border-gray-200 px-5 py-3 text-gray-400 sm:w-auto"
+              }
+            >
+              Refresh App
+            </button>
+          </div>
+
+          <ol className="flex flex-col gap-3 xl:flex-row">
+            {automationPipeline.map((step, index) => (
+              <li
+                key={step.key}
+                className={`flex-1 rounded-xl border p-4 ${getPipelineCardClass(step.status)}`}
+              >
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    Step {index + 1}
+                  </span>
+                  <span className={`rounded-full px-3 py-1 text-xs font-medium ${getPipelineStatusBadgeClass(step.status)}`}>
+                    {step.status === "pending" && "Pending"}
+                    {step.status === "active" && "Active"}
+                    {step.status === "done" && "Done"}
+                  </span>
+                </div>
+
+                <div className="mb-2 flex items-center gap-3">
+                  <span className={`h-3 w-3 rounded-full ${getPipelineDotClass(step.status)}`} />
+                  <p className="font-semibold">{step.label}</p>
+                </div>
+                <p className="text-sm text-gray-600">{step.description}</p>
+              </li>
+            ))}
+          </ol>
         </div>
 
         <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
