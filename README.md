@@ -1,6 +1,6 @@
 # Builder Core
 
-Builder Core is a mobile-friendly command center for planning changes, generating Codex-ready prompts, and managing the live app experience across the frontend and backend.
+Builder Core is a mobile-friendly command center for planning changes, generating Codex-ready prompts, reviewing outcomes, and managing the live app experience across the frontend and backend.
 
 ## Live Services
 - Frontend: https://builder-core-frontend-599596796788.us-central1.run.app
@@ -10,8 +10,9 @@ Builder Core is a mobile-friendly command center for planning changes, generatin
 - Lets you create and choose projects.
 - Sends build requests from the frontend to the backend.
 - Shows backend health at the top of the dashboard.
-- Generates a structured Codex prompt from the new Command Center section.
-- Keeps automation in manual mode until a future authenticated workflow is added.
+- Generates a ChatGPT-style planning output and a Codex-ready prompt.
+- Tracks a manual automation pipeline and result review workflow.
+- Helps install the app on phone with no App Store needed.
 
 ## Install On Your Phone
 ### iPhone or iPad

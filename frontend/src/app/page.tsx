@@ -8,7 +8,11 @@ const API_BASE = (
   "https://builder-core-599596796788.us-central1.run.app"
 ).replace(/\/$/, "");
 
+const FRONTEND_APP_URL = "https://builder-core-frontend-599596796788.us-central1.run.app";
 const EMPTY_PROMPT_MESSAGE = "Generated Codex prompt will appear here.";
+const EMPTY_PLANNER_MESSAGE = "Planner output will appear here.";
+const MISSING_PROMPT_MESSAGE = "Add an instruction above to generate a Codex prompt.";
+const MISSING_PLANNER_MESSAGE = "Add an instruction above to generate a planner.";
 
 const PIPELINE_STEP_DEFINITIONS = [
   {
@@ -83,6 +87,20 @@ type PipelineStep = {
   status: PipelineStepStatus;
 };
 
+type ReviewStatus = "ready" | "attention";
+
+type ReviewChecklistItem = {
+  label: string;
+  status: ReviewStatus;
+  detail: string;
+};
+
+type ReviewSummary = {
+  checklist: ReviewChecklistItem[];
+  doItems: string[];
+  avoidItems: string[];
+};
+
 function buildCodexPrompt(instruction: string, projectName: string) {
   return [
     "Repo: jagangill001/builder-core",
@@ -94,21 +112,53 @@ function buildCodexPrompt(instruction: string, projectName: string) {
     "Safety rules:",
     "- Inspect the repo before editing.",
     "- Do not delete working features.",
-    "- Keep the implementation beginner-friendly.",
     "- Commit directly to main.",
     "- Explain every file changed.",
     "- Provide testing steps.",
-    "- Prefer original repo-specific code and avoid copying external snippets.",
+    "",
+    "Legal rules:",
+    "- Write original code for this repo.",
+    "- Do not blindly copy third-party snippets.",
+    "- Use licensed frameworks only.",
     "",
     "Do not break:",
     "- Existing frontend/backend connection",
     "- Current request submission flow",
     "- Backend health indicator",
+    "- PWA install behavior",
     "",
     "Return:",
     "1. Files changed",
     "2. Short explanation of changes",
     "3. Testing steps"
+  ].join("\n");
+}
+
+function buildPlannerPrompt(instruction: string, projectName: string) {
+  return [
+    "ChatGPT Planner",
+    `Project: ${projectName}`,
+    `Instruction: ${instruction}`,
+    "",
+    "Task Breakdown:",
+    "1. Inspect the relevant frontend, backend, deployment, and documentation files.",
+    "2. Translate the request into the smallest safe set of file changes.",
+    "3. Preserve working features before adding or modifying behavior.",
+    "4. Verify the result with focused checks before closing the task.",
+    "",
+    "Risks:",
+    "- Breaking the frontend/backend connection or backend health indicator.",
+    "- Regressing the request flow, Command Center, or mobile install behavior.",
+    "- Making broad changes when a small targeted change is safer.",
+    "",
+    "Codex-ready Instruction:",
+    buildCodexPrompt(instruction, projectName),
+    "",
+    "Testing Plan:",
+    "- Confirm the backend health indicator still reports correctly.",
+    "- Confirm the main request submission flow still works.",
+    "- Confirm the new UI behaves correctly on desktop and phone widths.",
+    "- Confirm the live frontend and backend URLs still load after deploy."
   ].join("\n");
 }
 
@@ -210,6 +260,73 @@ function getPipelineDotClass(status: PipelineStepStatus) {
   return "bg-gray-300";
 }
 
+function getReviewBadgeClass(status: ReviewStatus) {
+  if (status === "ready") {
+    return "border border-green-200 bg-green-100 text-green-700";
+  }
+
+  return "border border-amber-200 bg-amber-100 text-amber-700";
+}
+
+function buildReviewSummary(reviewText: string, backendState: "checking" | "online" | "offline"): ReviewSummary {
+  const normalized = reviewText.toLowerCase();
+  const matchesAny = (patterns: RegExp[]) => patterns.some((pattern) => pattern.test(normalized));
+
+  const filesChanged = matchesAny([/files?\s+changed/, /changed files/, /modified/, /created/, /updated/, /edited/]);
+  const buildPassed = matchesAny([/build\s+(passed|successful|succeeded)/, /compiled successfully/, /tests?\s+passed/, /lint\s+passed/]);
+  const actionsGreen = matchesAny([/github actions.*(green|passed|successful)/, /ci\s+(passed|green)/, /workflow\s+(passed|successful)/, /checks\s+passed/]);
+  const frontendDeployed = matchesAny([/frontend.*deployed/, /cloud run live/, /deploy(ed)? successfully/, /frontend live/, /new revision live/, /service updated/]);
+  const backendStillOnline = backendState === "online" || matchesAny([/backend.*online/, /system status.*ok/, /backend live/]);
+
+  const checklist: ReviewChecklistItem[] = [
+    {
+      label: "Files changed?",
+      status: filesChanged ? "ready" : "attention",
+      detail: filesChanged ? "The summary mentions changed files." : "Confirm the exact files changed before approving the result."
+    },
+    {
+      label: "Build passed?",
+      status: buildPassed ? "ready" : "attention",
+      detail: buildPassed ? "The result indicates the build or tests passed." : "Run or verify a clean build before trusting the change."
+    },
+    {
+      label: "GitHub Actions green?",
+      status: actionsGreen ? "ready" : "attention",
+      detail: actionsGreen ? "The summary suggests CI finished successfully." : "Wait for GitHub Actions to turn green before calling this complete."
+    },
+    {
+      label: "Frontend deployed?",
+      status: frontendDeployed ? "ready" : "attention",
+      detail: frontendDeployed ? "The summary points to a live frontend deploy." : "Open the live frontend and confirm the new revision is visible."
+    },
+    {
+      label: "Backend still online?",
+      status: backendStillOnline ? "ready" : "attention",
+      detail: backendStillOnline ? "The backend health signal looks healthy." : "Recheck /system/status before approving the rollout."
+    }
+  ];
+
+  const doItems = [
+    filesChanged ? "Review the changed files against the original instruction." : "Capture the exact files changed before moving forward.",
+    buildPassed ? "Do a quick smoke test in the live app." : "Run or confirm a build before accepting the change.",
+    actionsGreen ? "Open the successful GitHub Actions run and note the revision." : "Wait for GitHub Actions to finish green.",
+    frontendDeployed ? "Confirm the latest frontend revision is serving the expected UI." : "Verify the live frontend is actually updated.",
+    backendStillOnline ? "Keep the backend health indicator visible while testing." : "Recheck backend health before approving the result."
+  ];
+
+  const avoidItems = [
+    "Do not stack risky follow-up changes on top of an unverified deploy.",
+    "Do not delete working features to make a fix easier.",
+    "Do not assume Cloud Run is healthy until both frontend and backend checks pass."
+  ];
+
+  return {
+    checklist,
+    doItems,
+    avoidItems
+  };
+}
+
 export default function Home() {
   const [request, setRequest] = useState("");
   const [result, setResult] = useState("No request submitted yet.");
@@ -217,10 +334,16 @@ export default function Home() {
   const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">("checking");
   const [commandCenterInput, setCommandCenterInput] = useState("");
   const [codexPrompt, setCodexPrompt] = useState(EMPTY_PROMPT_MESSAGE);
-  const [copyMessage, setCopyMessage] = useState("");
+  const [plannerOutput, setPlannerOutput] = useState(EMPTY_PLANNER_MESSAGE);
+  const [commandCenterMessage, setCommandCenterMessage] = useState("");
+  const [plannerMessage, setPlannerMessage] = useState("");
   const [executionStatus, setExecutionStatus] = useState<ExecutionStatus>("idle");
   const [pipelineStage, setPipelineStage] = useState<PipelineStage>("idle");
   const [lastTask, setLastTask] = useState<CommandTask | null>(null);
+  const [reviewInput, setReviewInput] = useState("");
+  const [reviewResult, setReviewResult] = useState<ReviewSummary | null>(null);
+  const [reviewMessage, setReviewMessage] = useState("");
+  const [installMessage, setInstallMessage] = useState("");
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [projectFiles, setProjectFiles] = useState<string[]>([]);
@@ -234,7 +357,7 @@ export default function Home() {
 
   const canCopyPrompt =
     codexPrompt !== EMPTY_PROMPT_MESSAGE &&
-    codexPrompt !== "Add an instruction above to generate a Codex prompt.";
+    codexPrompt !== MISSING_PROMPT_MESSAGE;
 
   const canMarkCodexDone = pipelineStage === "codex_working";
   const canMarkDeployDone = pipelineStage === "deploying";
@@ -317,16 +440,17 @@ export default function Home() {
     loadRunInfo(selectedProject);
   }, [selectedProject]);
 
-  function prepareCodexTask() {
+  function prepareTaskArtifacts() {
     const trimmedInstruction = commandCenterInput.trim();
 
     if (!trimmedInstruction) {
-      setCodexPrompt("Add an instruction above to generate a Codex prompt.");
-      setCopyMessage("");
+      setCodexPrompt(MISSING_PROMPT_MESSAGE);
+      setPlannerOutput(MISSING_PLANNER_MESSAGE);
       return null;
     }
 
     const prompt = buildCodexPrompt(trimmedInstruction, selectedProject);
+    const planner = buildPlannerPrompt(trimmedInstruction, selectedProject);
     const nextTask = {
       instruction: trimmedInstruction,
       prompt,
@@ -334,36 +458,57 @@ export default function Home() {
     };
 
     setCodexPrompt(prompt);
+    setPlannerOutput(planner);
     setLastTask(nextTask);
     return nextTask;
   }
 
-  function handleGeneratePrompt() {
-    const nextTask = prepareCodexTask();
+  function handleGeneratePlanner() {
+    const nextTask = prepareTaskArtifacts();
 
     if (!nextTask) {
       setExecutionStatus("idle");
       setPipelineStage("idle");
+      setPlannerMessage("Add an instruction first.");
       return;
     }
 
     setExecutionStatus("prepared");
     setPipelineStage("idle");
-    setCopyMessage("Prompt prepared.");
+    setPlannerMessage("Planner prepared.");
+    setCommandCenterMessage("");
   }
 
-  function handleSendToCodex() {
-    const nextTask = prepareCodexTask();
+  function handleGeneratePrompt() {
+    const nextTask = prepareTaskArtifacts();
 
     if (!nextTask) {
       setExecutionStatus("idle");
       setPipelineStage("idle");
+      setCommandCenterMessage("Add an instruction first.");
+      return;
+    }
+
+    setExecutionStatus("prepared");
+    setPipelineStage("idle");
+    setCommandCenterMessage("Codex prompt prepared.");
+    setPlannerMessage("");
+  }
+
+  function handleSendToCodex() {
+    const nextTask = prepareTaskArtifacts();
+
+    if (!nextTask) {
+      setExecutionStatus("idle");
+      setPipelineStage("idle");
+      setCommandCenterMessage("Add an instruction first.");
       return;
     }
 
     setExecutionStatus("sent");
     setPipelineStage("codex_working");
-    setCopyMessage("Task prepared for Codex.");
+    setCommandCenterMessage("Task prepared for Codex.");
+    setPlannerMessage("");
   }
 
   function handleMarkCodexDone() {
@@ -373,7 +518,7 @@ export default function Home() {
 
     setExecutionStatus("sent");
     setPipelineStage("deploying");
-    setCopyMessage("Codex work marked done. Deployment is now active.");
+    setCommandCenterMessage("Codex work marked done. Deployment is now active.");
   }
 
   function handleMarkDeployDone() {
@@ -383,7 +528,7 @@ export default function Home() {
 
     setExecutionStatus("sent");
     setPipelineStage("refresh_ready");
-    setCopyMessage("Deployment marked done. Refresh the app to complete the flow.");
+    setCommandCenterMessage("Deployment marked done. Refresh the app to complete the flow.");
   }
 
   function handleRefreshApp() {
@@ -393,11 +538,11 @@ export default function Home() {
 
     setExecutionStatus("completed");
     setPipelineStage("refreshed");
-    setCopyMessage("App refresh starting.");
+    setCommandCenterMessage("App refresh starting.");
 
     window.setTimeout(() => {
       window.location.reload();
-    }, 250);
+    }, 350);
   }
 
   async function handleCopyPrompt() {
@@ -407,9 +552,34 @@ export default function Home() {
 
     try {
       await navigator.clipboard.writeText(codexPrompt);
-      setCopyMessage("Prompt copied.");
+      setCommandCenterMessage("Prompt copied.");
     } catch {
-      setCopyMessage("Copy failed. Select the prompt and copy it manually.");
+      setCommandCenterMessage("Copy failed. Select the prompt and copy it manually.");
+    }
+  }
+
+  function handleReviewResult() {
+    if (!reviewInput.trim()) {
+      setReviewResult(null);
+      setReviewMessage("Paste a Codex summary or deploy result first.");
+      return;
+    }
+
+    setReviewResult(buildReviewSummary(reviewInput, backendStatus));
+    setReviewMessage("Review prepared.");
+  }
+
+  function handleOpenAppLink() {
+    window.open(FRONTEND_APP_URL, "_blank", "noopener,noreferrer");
+    setInstallMessage("Opened the live app link.");
+  }
+
+  async function handleCopyAppLink() {
+    try {
+      await navigator.clipboard.writeText(FRONTEND_APP_URL);
+      setInstallMessage("App link copied.");
+    } catch {
+      setInstallMessage("Copy failed. Copy the app link manually from the box below.");
     }
   }
 
@@ -507,7 +677,7 @@ export default function Home() {
       <div className="mx-auto max-w-6xl">
         <h1 className="mb-2 text-3xl font-bold sm:text-4xl">Builder Core Dashboard</h1>
         <p className="mb-3 text-gray-600">
-          Builder Core v5 with generated app shells and run instructions.
+          Builder Core v5 with generated app shells, planning help, and deployment tracking.
         </p>
         <p
           className={
@@ -527,7 +697,7 @@ export default function Home() {
           <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
             <h2 className="mb-2 text-xl font-semibold">Command Center</h2>
             <p className="mb-4 text-sm text-gray-600">
-              Describe what you want to build, fix, or upgrade, then prepare a Codex-ready task without leaving the app.
+              Describe what you want to build, fix, or upgrade, then generate the Codex-ready instruction without leaving the app.
             </p>
 
             <textarea
@@ -566,8 +736,8 @@ export default function Home() {
               </button>
             </div>
 
-            {copyMessage && (
-              <p className="mb-3 text-sm text-gray-600">{copyMessage}</p>
+            {commandCenterMessage && (
+              <p className="mb-3 text-sm text-gray-600">{commandCenterMessage}</p>
             )}
 
             <p className="mb-2 text-sm font-semibold text-gray-700">Generated Codex Prompt</p>
@@ -619,12 +789,94 @@ export default function Home() {
           </div>
         </div>
 
+        <div className="mb-6 grid gap-6 lg:grid-cols-[2fr,1fr]">
+          <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
+            <h2 className="mb-2 text-xl font-semibold">ChatGPT Planner</h2>
+            <p className="mb-4 text-sm text-gray-600">
+              Generate a planning view that breaks the task into steps, calls out risks, and prepares the Codex-ready instruction plus testing plan.
+            </p>
+
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row">
+              <button
+                type="button"
+                onClick={handleGeneratePlanner}
+                className="w-full rounded-xl bg-black px-5 py-3 text-white sm:w-auto"
+              >
+                Generate Planner
+              </button>
+            </div>
+
+            {plannerMessage && (
+              <p className="mb-3 text-sm text-gray-600">{plannerMessage}</p>
+            )}
+
+            <p className="mb-2 text-sm font-semibold text-gray-700">Planner Output</p>
+            <textarea
+              value={plannerOutput}
+              readOnly
+              className="h-80 w-full rounded-xl border bg-gray-50 p-4 text-sm"
+            />
+          </div>
+
+          <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
+            <h2 className="mb-3 text-xl font-semibold">Download / Install</h2>
+            <p className="mb-4 text-sm text-gray-600">No App Store needed.</p>
+
+            <div className="mb-4 flex flex-col gap-3">
+              <button
+                type="button"
+                onClick={handleOpenAppLink}
+                className="w-full rounded-xl bg-black px-5 py-3 text-white"
+              >
+                Open App Link
+              </button>
+              <button
+                type="button"
+                onClick={handleCopyAppLink}
+                className="w-full rounded-xl border border-black px-5 py-3 text-black"
+              >
+                Copy App Link
+              </button>
+            </div>
+
+            {installMessage && (
+              <p className="mb-3 text-sm text-gray-600">{installMessage}</p>
+            )}
+
+            <div className="mb-4 rounded-xl border bg-gray-50 p-4 text-sm text-gray-700">
+              {FRONTEND_APP_URL}
+            </div>
+
+            <div className="space-y-4 text-sm text-gray-700">
+              <div>
+                <p className="mb-2 font-semibold">iPhone</p>
+                <ul className="list-disc space-y-1 pl-5">
+                  <li>Open in Safari.</li>
+                  <li>Tap Share.</li>
+                  <li>Add to Home Screen.</li>
+                </ul>
+              </div>
+              <div>
+                <p className="mb-2 font-semibold">Android</p>
+                <ul className="list-disc space-y-1 pl-5">
+                  <li>Open in Chrome.</li>
+                  <li>Tap the menu icon.</li>
+                  <li>Install app.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
           <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <h2 className="mb-2 text-xl font-semibold">Automation Pipeline</h2>
               <p className="text-sm text-gray-600">
                 This simulated tracker mirrors the future path from Codex work to deployment and app refresh.
+              </p>
+              <p className="mt-2 text-sm font-medium text-amber-700">
+                This is manual simulation. Future version will automate this.
               </p>
             </div>
             <div className="min-w-32">
@@ -705,6 +957,75 @@ export default function Home() {
               </li>
             ))}
           </ol>
+        </div>
+
+        <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
+          <h2 className="mb-3 text-xl font-semibold">Codex Result Review</h2>
+          <p className="mb-4 text-sm text-gray-600">
+            Paste a Codex summary or deploy result, then get a quick review checklist and safe next-step suggestions.
+          </p>
+
+          <textarea
+            value={reviewInput}
+            onChange={(e) => setReviewInput(e.target.value)}
+            placeholder="Paste Codex summary or deploy result here..."
+            className="mb-4 h-36 w-full rounded-xl border p-4"
+          />
+
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row">
+            <button
+              type="button"
+              onClick={handleReviewResult}
+              className="w-full rounded-xl bg-black px-5 py-3 text-white sm:w-auto"
+            >
+              Review Result
+            </button>
+          </div>
+
+          {reviewMessage && (
+            <p className="mb-4 text-sm text-gray-600">{reviewMessage}</p>
+          )}
+
+          {reviewResult && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="mb-3 text-lg font-semibold">Checklist</h3>
+                <div className="space-y-3">
+                  {reviewResult.checklist.map((item) => (
+                    <div key={item.label} className="rounded-xl border bg-gray-50 p-4">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <p className="font-semibold">{item.label}</p>
+                        <span className={`rounded-full px-3 py-1 text-xs font-medium ${getReviewBadgeClass(item.status)}`}>
+                          {item.status === "ready" ? "Looks good" : "Check this"}
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-600">{item.detail}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid gap-6 lg:grid-cols-2">
+                <div className="rounded-xl border bg-green-50 p-4">
+                  <h3 className="mb-3 text-lg font-semibold text-green-800">Do</h3>
+                  <ul className="list-disc space-y-2 pl-5 text-sm text-green-900">
+                    {reviewResult.doItems.map((item, index) => (
+                      <li key={index}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="rounded-xl border bg-amber-50 p-4">
+                  <h3 className="mb-3 text-lg font-semibold text-amber-800">Do Not</h3>
+                  <ul className="list-disc space-y-2 pl-5 text-sm text-amber-900">
+                    {reviewResult.avoidItems.map((item, index) => (
+                      <li key={index}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
