@@ -2,6 +2,12 @@
 
 import { useEffect, useState } from "react";
 
+const API_BASE = (
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  process.env.NEXT_PUBLIC_API_URL ??
+  "https://builder-core-599596796788.us-central1.run.app"
+).replace(/\\/$/, "");
+
 type HistoryItem = {
   instruction: string;
   status: string;
@@ -36,7 +42,7 @@ export default function Home() {
 
   async function loadProjects() {
     try {
-      const response = await fetch("http://127.0.0.1:8000/projects");
+      const response = await fetch(`${API_BASE}/projects`);
       const data = await response.json();
       const items = data.items || [];
       setProjects(items);
@@ -52,8 +58,8 @@ export default function Home() {
   async function loadHistory(projectName?: string) {
     try {
       const url = projectName
-        ? `http://127.0.0.1:8000/history?project_name=${encodeURIComponent(projectName)}`
-        : "http://127.0.0.1:8000/history";
+        ? `${API_BASE}/history?project_name=${encodeURIComponent(projectName)}`
+        : `${API_BASE}/history`;
 
       const response = await fetch(url);
       const data = await response.json();
@@ -65,7 +71,7 @@ export default function Home() {
 
   async function loadProjectFiles(projectName: string) {
     try {
-      const response = await fetch(`http://127.0.0.1:8000/project-files?project_name=${encodeURIComponent(projectName)}`);
+      const response = await fetch(`${API_BASE}/project-files?project_name=${encodeURIComponent(projectName)}`);
       const data = await response.json();
       setProjectFiles(data.items || []);
     } catch {
@@ -75,7 +81,7 @@ export default function Home() {
 
   async function loadRunInfo(projectName: string) {
     try {
-      const response = await fetch(`http://127.0.0.1:8000/run-info?project_name=${encodeURIComponent(projectName)}`);
+      const response = await fetch(`${API_BASE}/run-info?project_name=${encodeURIComponent(projectName)}`);
       const data = await response.json();
       setRunInfo(data);
     } catch {
@@ -102,7 +108,7 @@ export default function Home() {
     }
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/projects", {
+      const response = await fetch(`${API_BASE}/projects`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -138,7 +144,7 @@ export default function Home() {
     setStatus("loading");
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/plan", {
+      const response = await fetch(`${API_BASE}/plan`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
