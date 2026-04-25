@@ -31,6 +31,14 @@ type RunInfo = {
   url_hint: string;
 };
 
+type ExecutionStatus = "idle" | "prepared" | "sent" | "completed";
+
+type CommandTask = {
+  instruction: string;
+  prompt: string;
+  timestamp: string;
+};
+
 function buildCodexPrompt(instruction: string, projectName: string) {
   return [
     "Repo: jagangill001/builder-core",
@@ -60,6 +68,32 @@ function buildCodexPrompt(instruction: string, projectName: string) {
   ].join("\n");
 }
 
+function getExecutionStatusLabel(status: ExecutionStatus) {
+  if (status === "prepared") {
+    return "Prepared";
+  }
+
+  if (status === "sent") {
+    return "Sent (waiting for Codex)";
+  }
+
+  if (status === "completed") {
+    return "Completed";
+  }
+
+  return "Idle";
+}
+
+function formatTaskTimestamp(date: Date) {
+  return date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
 export default function Home() {
   const [request, setRequest] = useState("");
   const [result, setResult] = useState("No request submitted yet.");
@@ -68,6 +102,8 @@ export default function Home() {
   const [commandCenterInput, setCommandCenterInput] = useState("");
   const [codexPrompt, setCodexPrompt] = useState(EMPTY_PROMPT_MESSAGE);
   const [copyMessage, setCopyMessage] = useState("");
+  const [executionStatus, setExecutionStatus] = useState<ExecutionStatus>("idle");
+  const [lastTask, setLastTask] = useState<CommandTask | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [projectFiles, setProjectFiles] = useState<string[]>([]);
@@ -78,6 +114,8 @@ export default function Home() {
   const canCopyPrompt =
     codexPrompt !== EMPTY_PROMPT_MESSAGE &&
     codexPrompt !== "Add an instruction above to generate a Codex prompt.";
+
+  const canMarkCompleted = executionStatus === "sent";
 
   async function checkBackendStatus() {
     try {
@@ -156,17 +194,58 @@ export default function Home() {
     loadRunInfo(selectedProject);
   }, [selectedProject]);
 
-  function handleGeneratePrompt() {
+  function prepareCodexTask() {
     const trimmedInstruction = commandCenterInput.trim();
 
     if (!trimmedInstruction) {
       setCodexPrompt("Add an instruction above to generate a Codex prompt.");
       setCopyMessage("");
+      return null;
+    }
+
+    const prompt = buildCodexPrompt(trimmedInstruction, selectedProject);
+    const nextTask = {
+      instruction: trimmedInstruction,
+      prompt,
+      timestamp: formatTaskTimestamp(new Date())
+    };
+
+    setCodexPrompt(prompt);
+    setLastTask(nextTask);
+    return nextTask;
+  }
+
+  function handleGeneratePrompt() {
+    const nextTask = prepareCodexTask();
+
+    if (!nextTask) {
+      setExecutionStatus("idle");
       return;
     }
 
-    setCodexPrompt(buildCodexPrompt(trimmedInstruction, selectedProject));
-    setCopyMessage("");
+    setExecutionStatus("prepared");
+    setCopyMessage("Prompt prepared.");
+  }
+
+  function handleSendToCodex() {
+    const nextTask = prepareCodexTask();
+
+    if (!nextTask) {
+      setExecutionStatus("idle");
+      return;
+    }
+
+    setExecutionStatus("sent");
+    setCopyMessage("Task prepared for Codex.");
+  }
+
+  function handleMarkCompleted() {
+    if (!lastTask) {
+      return;
+    }
+
+    setExecutionStatus("completed");
+    setCopyMessage("Task marked as completed.");
   }
 
   async function handleCopyPrompt() {
@@ -296,7 +375,7 @@ export default function Home() {
           <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
             <h2 className="mb-2 text-xl font-semibold">Command Center</h2>
             <p className="mb-4 text-sm text-gray-600">
-              Describe what you want to build, fix, or upgrade, then generate a Codex-ready prompt you can send from ChatGPT.
+              Describe what you want to build, fix, or upgrade, then prepare a Codex-ready task without leaving the app.
             </p>
 
             <textarea
@@ -306,13 +385,20 @@ export default function Home() {
               className="mb-4 h-36 w-full rounded-xl border p-4"
             />
 
-            <div className="mb-4 flex flex-col gap-3 sm:flex-row">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <button
                 type="button"
                 onClick={handleGeneratePrompt}
                 className="w-full rounded-xl bg-black px-5 py-3 text-white sm:w-auto"
               >
                 Generate Codex Prompt
+              </button>
+              <button
+                type="button"
+                onClick={handleSendToCodex}
+                className="w-full rounded-xl bg-blue-600 px-5 py-3 text-white sm:w-auto"
+              >
+                Send to Codex
               </button>
               <button
                 type="button"
@@ -340,19 +426,56 @@ export default function Home() {
             />
           </div>
 
-          <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-            <h2 className="mb-3 text-xl font-semibold">Automation Status</h2>
-            <div className="mb-4 inline-flex rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-sm font-medium text-amber-700">
-              Manual mode active
+          <div className="space-y-6">
+            <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
+              <h2 className="mb-3 text-xl font-semibold">Automation Status</h2>
+              <div className="mb-4 inline-flex rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-sm font-medium text-amber-700">
+                Manual mode active
+              </div>
+              <p className="mb-3 text-sm text-gray-700">
+                Future version will send tasks automatically.
+              </p>
+              <ul className="list-disc space-y-2 pl-5 text-sm text-gray-600">
+                <li>No automatic repo modification without user confirmation.</li>
+                <li>Authentication will be required before automation can act.</li>
+                <li>Logs and transparent status updates will stay visible in the app.</li>
+              </ul>
             </div>
-            <p className="mb-3 text-sm text-gray-700">
-              Future version will send tasks automatically.
-            </p>
-            <ul className="list-disc space-y-2 pl-5 text-sm text-gray-600">
-              <li>No automatic repo modification without user confirmation.</li>
-              <li>Authentication will be required before automation can act.</li>
-              <li>Logs and transparent status updates will stay visible in the app.</li>
-            </ul>
+
+            <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
+              <h2 className="mb-3 text-xl font-semibold">Execution Status</h2>
+              <p className="mb-4 text-sm text-gray-700">{getExecutionStatusLabel(executionStatus)}</p>
+              <button
+                type="button"
+                onClick={handleMarkCompleted}
+                disabled={!canMarkCompleted}
+                className={
+                  canMarkCompleted
+                    ? "w-full rounded-xl border border-black px-5 py-3 text-black"
+                    : "w-full rounded-xl border border-gray-200 px-5 py-3 text-gray-400"
+                }
+              >
+                Mark as Completed
+              </button>
+            </div>
+
+            <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
+              <h2 className="mb-3 text-xl font-semibold">Last Task</h2>
+              {!lastTask ? (
+                <p className="text-sm text-gray-500">No task prepared yet.</p>
+              ) : (
+                <div className="space-y-3 text-sm text-gray-700">
+                  <p><strong>Instruction:</strong> {lastTask.instruction}</p>
+                  <p><strong>Timestamp:</strong> {lastTask.timestamp}</p>
+                  <div>
+                    <p className="mb-2 font-semibold">Generated Prompt</p>
+                    <pre className="whitespace-pre-wrap rounded-xl border bg-gray-50 p-4 text-sm">
+{lastTask.prompt}
+                    </pre>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
