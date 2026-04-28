@@ -1,45 +1,75 @@
 # Builder Core Command Center
 
 ## Purpose
-Builder Core is becoming a single unified AI Command Center for phone and desktop use.
+Builder Core is a cloud-first AI command center for phone and desktop use.
 
-The goal is one place where the user can type an instruction, see the planner output, prepare the Codex task, track deployment progress, review the result, and refresh the app without hopping across multiple sections.
+The goal is one place where the user can submit a request, see the planner output, review the Codex-ready task, track progress stage by stage, review the result, and move toward safe automation without depending on laptop storage.
 
 ## Current Workflow
-User -> Command Center -> Planner -> Codex task -> Builder Core backend -> Manual pipeline -> Deploy review
+User -> Command Center -> Backend chat -> Planner -> Codex task -> Stage bar -> Review
 
-1. The user enters an instruction in one command bar.
-2. Builder Core generates the planner output inline.
-3. Builder Core generates the Codex-ready task inline.
-4. Builder Core still sends the same instruction through the existing backend request flow.
-5. The automation popup simulates the delivery pipeline.
-6. Review notes appear inline after the deploy step.
-7. The app auto-refreshes when the simulated deploy completes.
+1. The user enters one instruction in the Command tab.
+2. Builder Core calls the backend `/chat` route.
+3. The app shows the assistant reply, planner output, and Codex-ready prompt inline.
+4. The compact task bar starts the progress flow at Planning.
+5. Each stage advances from 1% to 100%.
+6. When a stage completes, Builder Core pauses and waits for the user to press `Next`.
+7. After the final stage, review guidance and next-upgrade ideas stay visible in the app.
+
+## Simplified Task Bar
+The old multi-button pipeline has been replaced with one compact task bar.
+
+### What the task bar shows
+- current task name
+- current stage name
+- stage progress percent
+- progress bar
+- one `Next` button
+
+### Stages
+1. Planning
+2. Codex Working
+3. GitHub Deploying
+4. Cloud Run Live
+5. App Refreshed
+
+### How it works
+- When a task starts, `Planning` begins at `1%`.
+- The current stage automatically progresses to `100%`.
+- When a stage reaches `100%`, Builder Core shows a completion message and waits.
+- The user presses `Next` to move to the next stage.
+- The next stage resets to `1%`.
+- The final stage ends with `Done - ready for next task`.
+
+## Approval And Permission
+- Automation permission granted by user is shown in the app.
+- Future: Codex will run automatically after approval.
+- No real automatic repo modification happens yet.
 
 ## Future Workflow
-User -> Command Center -> Backend task -> Auto Codex -> GitHub -> Deploy -> Status polling -> App refresh
+User -> Builder Core -> Backend task -> Auto Codex -> GitHub -> Deploy -> Status polling -> App refresh
 
 Future automation should work like this:
 1. The user enters a task directly in Builder Core.
-2. The backend creates the task record.
-3. After confirmation and authentication, Builder Core triggers Codex automatically.
+2. The backend creates a persistent cloud task record.
+3. After approval and authentication, Builder Core triggers Codex automatically.
 4. GitHub receives the change request.
 5. GitHub Actions deploys after checks pass.
-6. The frontend polls task and deploy status.
-7. The UI updates automatically and refreshes when the release is live.
+6. The app polls task and deploy status from the backend.
+7. The UI updates automatically and the live app refreshes when the release is ready.
 
 ## Cloud-First Storage Plan
-Builder Core is designed to move toward cloud-first storage.
+Builder Core is moving toward cloud-first storage and execution.
 
 ### Firestore
-- commands
 - tasks
-- statuses
+- commands
+- progress
 - history
 
 ### Cloud Storage
-- files
-- generated outputs
+- generated files
+- uploads
 
 ### Secret Manager
 - API keys
@@ -49,88 +79,38 @@ Builder Core is designed to move toward cloud-first storage.
 - frontend
 
 ### GitHub
-- code
+- code source
 
 Important note:
-- The laptop is a control device only, not storage.
+- Laptop is only control device. All data will live in cloud.
 
 ## Future Backend Endpoints
-Planned backend automation endpoints:
+These endpoints are planned but not implemented yet:
+
+### Automation
 - `POST /automation/tasks`
 - `GET /automation/tasks/{id}`
 - `GET /automation/history`
 
-Planned storage endpoints:
+### Storage
 - `POST /storage/files`
 - `GET /storage/files`
 
-## Automation Pipeline
-The unified app now shows a visual automation pipeline with these stages:
-1. Task Received
-2. Planning
-3. Codex Ready
-4. Codex Working
-5. GitHub Deploying
-6. Cloud Run Live
-7. App Refreshed
-
-### Current Manual Simulation
-For now, the pipeline is still manual and safe:
-- `Run Command` prepares the planner output and Codex task.
-- `Send to Codex` moves the task into Codex Working.
-- `Mark Codex Done` moves the task into GitHub Deploying.
-- `Mark Deploy Done` marks Cloud Run Live and starts the refresh countdown.
-- `Refresh Now` forces the final refresh step immediately.
-
-### When To Mark Each Stage Done
-Use the manual buttons only when the matching evidence is visible.
-
-#### Mark Codex Done
-Click this only when:
-- Codex says it committed changes
-- Codex gives a commit hash
-- Codex summary says files changed
-- GitHub shows the new commit in the repo
-
-#### Mark Deploy Done
-Click this only when:
-- GitHub Actions is green
-- Cloud Run revision finished deploying
-- The frontend or backend service is live again
-- The backend health check still reports online in the app
-
-#### Refresh Now
-Click this only when:
-- deploy is done
-- the newest version is ready to load
-- you want the app to pull the latest live revision immediately
-
 ## App Navigation
-Builder Core now includes app-style navigation so the main areas are easy to reach on phone or desktop.
+Builder Core keeps app-style navigation so the main areas stay easy to reach on phone or desktop.
 
-### Sidebar And Bottom Tabs
-- `Command` means the main chat and task entry area
-- `Progress` means the automation tracker and manual stage guidance
-- `Review` means the latest task review and safe next-step suggestions
-- `Download` means install and copy-link actions for phone use
-- `Help` means quick explanations of the workflow and manual controls
+### Tabs
+- `Command`: chat with Builder Core and submit the next request
+- `Progress`: follow the compact stage bar and one-button flow
+- `Review`: confirm the latest task result and safe next steps
+- `Download`: install the app on your phone or copy the live link
+- `Help`: get quick guidance when you are unsure what to do next
 
-### Quick Shortcuts
-The sidebar also includes:
-- `Install on Phone` to jump directly to the install section
-- `Copy App Link` to copy the live frontend URL without leaving the current screen
-
-### Future Automation Sources
-Later, these steps can update automatically from:
-- Codex task status
-- GitHub Actions status
-- Cloud Run deploy status
-- backend webhook events
-
-## Approval, Auth, And Logs
-- Authentication is required before automation can act.
-- Approval is required before any automatic repo change.
+## Logs, Auth, And Safety
+- Authentication is required before future automation can act.
+- Approval is required before automatic repo changes happen.
 - Logs are required for every automated action.
+- Codex should explain files changed, run checks when possible, and provide testing steps.
 
 ## Legal And Originality Rules
 - Prefer original repo-specific implementations.

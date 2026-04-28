@@ -18,63 +18,55 @@ const COMMAND_CENTER_TABS = [
   { key: "help", label: "Help" }
 ] as const;
 
-const PIPELINE_STEP_DEFINITIONS = [
-  {
-    key: "task_received",
-    label: "Task Received",
-    description: "Builder Core accepted the instruction and opened the task.",
-    percent: 15,
-    currentText: "Your command was accepted.",
-    nextText: "Next: Builder Core will create a safe plan for the task."
-  },
+const TASK_STAGE_DEFINITIONS = [
   {
     key: "planning",
     label: "Planning",
-    description: "The planner organized the work, risks, and testing approach.",
-    percent: 30,
-    currentText: "Builder Core is creating a safe plan.",
-    nextText: "Next: a Codex task will be prepared after the plan is ready."
-  },
-  {
-    key: "codex_ready",
-    label: "Codex Ready",
-    description: "The Codex-ready task is prepared and waiting to be sent.",
-    percent: 45,
-    currentText: "A Codex task is ready.",
-    nextText: "Next: Codex will start after you send the task."
+    description: "Builder Core is shaping the safest plan for the request.",
+    activeText: "Builder Core is creating a safe plan.",
+    completeText: "Planning complete - press Next",
+    nextText: "Next: Codex Working will begin after you press Next."
   },
   {
     key: "codex_working",
     label: "Codex Working",
-    description: "Codex is working through the requested change.",
-    percent: 60,
-    currentText: "Codex is expected to make code changes.",
-    nextText: "Next: GitHub deploy will start after Codex finishes."
+    description: "The simulated Codex stage is working through the requested repo change.",
+    activeText: "Codex is expected to work on the code change.",
+    completeText: "Codex Working complete - press Next",
+    nextText: "Next: GitHub Deploying will begin after you press Next."
   },
   {
     key: "github_deploying",
     label: "GitHub Deploying",
-    description: "GitHub Actions is building and deploying the latest revision.",
-    percent: 75,
-    currentText: "GitHub Actions is deploying the update.",
-    nextText: "Next: Cloud Run will go live after deployment finishes."
+    description: "GitHub Actions is treated as the next deploy checkpoint.",
+    activeText: "GitHub Actions is expected to deploy the update.",
+    completeText: "GitHub Deploying complete - press Next",
+    nextText: "Next: Cloud Run Live will begin after you press Next."
   },
   {
     key: "cloud_run_live",
     label: "Cloud Run Live",
-    description: "The new Cloud Run revision is live.",
-    percent: 90,
-    currentText: "New Cloud Run version is live.",
-    nextText: "Next: refresh the app to load the newest version."
+    description: "The live service stage represents the new cloud revision coming online.",
+    activeText: "A new Cloud Run version is expected to go live.",
+    completeText: "Cloud Run Live complete - press Next",
+    nextText: "Next: App Refreshed will begin after you press Next."
   },
   {
     key: "app_refreshed",
     label: "App Refreshed",
-    description: "The app reloaded and is showing the latest state.",
-    percent: 100,
-    currentText: "App is refreshed and ready.",
-    nextText: "Next: enter another command when you are ready."
+    description: "The final stage confirms the app is ready for the next instruction.",
+    activeText: "Builder Core is preparing the refreshed app state.",
+    completeText: "Done - ready for next task",
+    nextText: "Next: start a new task when you are ready."
   }
+] as const;
+
+const NEXT_UPGRADE_SUGGESTIONS = [
+  "Connect GitHub status tracking",
+  "Enable real Codex automation",
+  "Add live deploy detection",
+  "Store tasks in Firestore",
+  "Add multi-project support"
 ] as const;
 
 type ProjectItem = {
@@ -83,36 +75,18 @@ type ProjectItem = {
 };
 
 type CommandCenterTabKey = "command" | "progress" | "review" | "download" | "help";
-type ProgressChecklistKey =
-  | "codex_finished"
-  | "codex_commit_hash"
-  | "codex_summary"
-  | "deploy_actions_green"
-  | "deploy_cloud_run_finished"
-  | "deploy_backend_online"
-  | "refresh_deploy_done"
-  | "refresh_ready";
+type ExecutionStatus = "idle" | "active" | "awaiting_next" | "completed";
+type TaskStageKey = (typeof TASK_STAGE_DEFINITIONS)[number]["key"];
+type TaskStageStatus = "pending" | "active" | "done";
 
-type ExecutionStatus = "idle" | "prepared" | "sent" | "completed";
-
-type PipelineStage =
-  | "idle"
-  | "codex_ready"
-  | "codex_working"
-  | "github_deploying"
-  | "refresh_pending"
-  | "refreshed";
-
-type PipelineStepStatus = "pending" | "active" | "done";
-
-type PipelineStep = {
-  key: string;
+type TaskStage = {
+  key: TaskStageKey;
   label: string;
   description: string;
-  percent: number;
-  currentText: string;
+  activeText: string;
+  completeText: string;
   nextText: string;
-  status: PipelineStepStatus;
+  status: TaskStageStatus;
 };
 
 type ReviewStatus = "ready" | "attention";
@@ -135,6 +109,7 @@ type CommandTask = {
   prompt: string;
   timestamp: string;
   builderSummary?: string | null;
+  runSummary?: string | null;
 };
 
 type CommandCenterChatResponse = Record<string, unknown> & {
@@ -149,6 +124,7 @@ type CommandCenterChatResponse = Record<string, unknown> & {
   next_steps?: string[];
   codex_prompt?: string;
   build_triggered?: boolean;
+  created_files?: string[];
   run_info?: Record<string, unknown>;
 };
 
@@ -197,22 +173,22 @@ function buildPlannerOutput(instruction: string, projectName: string) {
     `Instruction: ${instruction}`,
     "",
     "Step-by-step plan:",
-    "1. Inspect the frontend, backend, deployment, and docs that relate to the request.",
-    "2. Keep the smallest safe change set that solves the request.",
-    "3. Preserve working features before adding or modifying anything.",
-    "4. Prepare a Codex-ready implementation task with clear boundaries.",
-    "5. Verify the result with focused tests and live checks.",
+    "1. Inspect the current frontend, backend, and deployment context for the request.",
+    "2. Choose the smallest safe change that solves the problem.",
+    "3. Preserve working features before changing anything else.",
+    "4. Prepare a Codex-ready implementation task.",
+    "5. Verify the result with focused testing and a live check.",
     "",
     "Risks:",
-    "- Breaking the frontend/backend connection or backend health indicator.",
-    "- Regressing the request flow or install experience.",
-    "- Making broad UI or deploy changes when a smaller change is safer.",
+    "- Breaking the frontend/backend connection.",
+    "- Regressing the mobile install or health indicator experience.",
+    "- Making a broad UI change when a smaller one is safer.",
     "",
     "Testing plan:",
     "- Confirm /system/status still reports correctly in the app.",
-    "- Confirm the main request submission flow still works.",
+    "- Confirm the main command submission flow still works.",
     "- Confirm the latest UI works on desktop and phone widths.",
-    "- Confirm the live frontend and backend still load after deployment."
+    "- Confirm the deployed frontend and backend still load after deployment."
   ].join("\n");
 }
 
@@ -259,192 +235,7 @@ function buildNextStepsSummary(nextSteps: unknown) {
     return "";
   }
 
-  return [
-    "Next Steps",
-    ...nextSteps.map((step) => `- ${String(step)}`)
-  ].join("\n");
-}
-
-function formatTimestamp(date: Date) {
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit"
-  });
-}
-
-function getExecutionStatusLabel(status: ExecutionStatus) {
-  if (status === "prepared") {
-    return "Prepared";
-  }
-
-  if (status === "sent") {
-    return "Sent";
-  }
-
-  if (status === "completed") {
-    return "Completed";
-  }
-
-  return "Idle";
-}
-
-function getAutomationStatusLabel(stage: PipelineStage, countdown: number | null) {
-  if (stage === "codex_ready") {
-    return "Codex Ready";
-  }
-
-  if (stage === "codex_working") {
-    return "Codex Working";
-  }
-
-  if (stage === "github_deploying") {
-    return "Deploying";
-  }
-
-  if (stage === "refresh_pending") {
-    return countdown !== null ? `Refreshing in ${countdown}s` : "Refresh Pending";
-  }
-
-  if (stage === "refreshed") {
-    return "Refreshed";
-  }
-
-  return "Manual";
-}
-
-function buildAutomationPipeline(stage: PipelineStage): PipelineStep[] {
-  const doneThresholdByStage: Record<PipelineStage, number> = {
-    idle: -1,
-    codex_ready: 1,
-    codex_working: 2,
-    github_deploying: 3,
-    refresh_pending: 4,
-    refreshed: 6
-  };
-
-  const activeIndexByStage: Record<PipelineStage, number> = {
-    idle: -1,
-    codex_ready: 2,
-    codex_working: 3,
-    github_deploying: 4,
-    refresh_pending: 5,
-    refreshed: -1
-  };
-
-  const doneThreshold = doneThresholdByStage[stage];
-  const activeIndex = activeIndexByStage[stage];
-
-  return PIPELINE_STEP_DEFINITIONS.map((step, index) => {
-    let status: PipelineStepStatus = "pending";
-
-    if (index <= doneThreshold) {
-      status = "done";
-    } else if (index === activeIndex) {
-      status = "active";
-    }
-
-    return {
-      ...step,
-      status
-    };
-  });
-}
-
-function getCurrentPipelineStep(steps: PipelineStep[], stage: PipelineStage) {
-  const activeStep = steps.find((step) => step.status === "active");
-  if (activeStep) {
-    return activeStep;
-  }
-
-  if (stage === "refreshed") {
-    return steps[steps.length - 1] ?? null;
-  }
-
-  for (let index = steps.length - 1; index >= 0; index -= 1) {
-    if (steps[index].status === "done") {
-      return steps[index];
-    }
-  }
-
-  return null;
-}
-
-function getPipelineStatusBadgeClass(status: PipelineStepStatus) {
-  if (status === "done") {
-    return "border border-green-200 bg-green-100 text-green-700";
-  }
-
-  if (status === "active") {
-    return "border border-blue-200 bg-blue-100 text-blue-700";
-  }
-
-  return "border border-gray-200 bg-gray-100 text-gray-600";
-}
-
-function getPipelineDotClass(status: PipelineStepStatus) {
-  if (status === "done") {
-    return "bg-green-600";
-  }
-
-  if (status === "active") {
-    return "bg-blue-600";
-  }
-
-  return "bg-gray-300";
-}
-
-function getPipelineCardClass(status: PipelineStepStatus) {
-  if (status === "active") {
-    return "rounded-3xl border-2 border-blue-200 bg-blue-50 p-4 shadow-sm";
-  }
-
-  if (status === "done") {
-    return "rounded-2xl border border-green-200 bg-green-50/80 p-3";
-  }
-
-  return "rounded-2xl border border-slate-100 bg-slate-50/80 p-2.5 opacity-65";
-}
-
-function getPipelineTitleClass(status: PipelineStepStatus) {
-  if (status === "active") {
-    return "text-base font-semibold text-slate-900";
-  }
-
-  if (status === "done") {
-    return "text-sm font-medium text-slate-900";
-  }
-
-  return "text-sm font-medium text-slate-500";
-}
-
-function getPipelineDescriptionClass(status: PipelineStepStatus) {
-  if (status === "active") {
-    return "text-sm text-slate-700";
-  }
-
-  if (status === "done") {
-    return "text-xs text-slate-600";
-  }
-
-  return "text-xs text-slate-400";
-}
-
-function getTabButtonClass(isActive: boolean) {
-  if (isActive) {
-    return "rounded-2xl bg-black px-4 py-3 text-sm font-semibold text-white shadow-sm";
-  }
-
-  return "rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-600";
-}
-
-function getReviewBadgeClass(status: ReviewStatus) {
-  if (status === "ready") {
-    return "border border-green-200 bg-green-100 text-green-700";
-  }
-
-  return "border border-amber-200 bg-amber-100 text-amber-700";
+  return ["Next Steps", ...nextSteps.map((step) => `- ${String(step)}`)].join("\n");
 }
 
 function buildBuilderSummary(data: Record<string, unknown>) {
@@ -477,49 +268,175 @@ function buildRunSummary(data: Record<string, unknown>) {
   ].join("\n");
 }
 
+function formatTimestamp(date: Date) {
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
+function getExecutionStatusLabel(status: ExecutionStatus) {
+  if (status === "active") {
+    return "Running";
+  }
+
+  if (status === "awaiting_next") {
+    return "Press Next";
+  }
+
+  if (status === "completed") {
+    return "Done";
+  }
+
+  return "Idle";
+}
+
+function buildTaskStages(currentStageIndex: number, executionStatus: ExecutionStatus) {
+  return TASK_STAGE_DEFINITIONS.map((stage, index) => {
+    let status: TaskStageStatus = "pending";
+
+    if (currentStageIndex < 0) {
+      status = "pending";
+    } else if (executionStatus === "completed") {
+      status = "done";
+    } else if (index < currentStageIndex) {
+      status = "done";
+    } else if (index === currentStageIndex && executionStatus === "active") {
+      status = "active";
+    } else if (index === currentStageIndex && executionStatus === "awaiting_next") {
+      status = "done";
+    }
+
+    return {
+      ...stage,
+      status
+    };
+  });
+}
+
+function getTaskStageCardClass(status: TaskStageStatus) {
+  if (status === "active") {
+    return "rounded-3xl border-2 border-blue-200 bg-blue-50 p-4 shadow-sm";
+  }
+
+  if (status === "done") {
+    return "rounded-2xl border border-green-200 bg-green-50/80 p-3";
+  }
+
+  return "rounded-2xl border border-slate-100 bg-slate-50/80 p-2.5 opacity-60";
+}
+
+function getTaskStageBadgeClass(status: TaskStageStatus) {
+  if (status === "active") {
+    return "border border-blue-200 bg-blue-100 text-blue-700";
+  }
+
+  if (status === "done") {
+    return "border border-green-200 bg-green-100 text-green-700";
+  }
+
+  return "border border-slate-200 bg-slate-100 text-slate-500";
+}
+
+function getTaskStageDotClass(status: TaskStageStatus) {
+  if (status === "active") {
+    return "bg-blue-600";
+  }
+
+  if (status === "done") {
+    return "bg-green-600";
+  }
+
+  return "bg-slate-300";
+}
+
+function getTaskStageTitleClass(status: TaskStageStatus) {
+  if (status === "active") {
+    return "text-base font-semibold text-slate-900";
+  }
+
+  if (status === "done") {
+    return "text-sm font-medium text-slate-900";
+  }
+
+  return "text-sm font-medium text-slate-500";
+}
+
+function getTaskStageDescriptionClass(status: TaskStageStatus) {
+  if (status === "active") {
+    return "text-sm text-slate-700";
+  }
+
+  if (status === "done") {
+    return "text-xs text-slate-600";
+  }
+
+  return "text-xs text-slate-400";
+}
+
+function getTabButtonClass(isActive: boolean) {
+  if (isActive) {
+    return "rounded-2xl bg-black px-4 py-3 text-sm font-semibold text-white shadow-sm";
+  }
+
+  return "rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-600";
+}
+
+function getReviewBadgeClass(status: ReviewStatus) {
+  if (status === "ready") {
+    return "border border-green-200 bg-green-100 text-green-700";
+  }
+
+  return "border border-amber-200 bg-amber-100 text-amber-700";
+}
+
 function buildReviewSummary(task: CommandTask | null, backendState: "checking" | "online" | "offline"): ReviewSummary {
   const hasBuilderSummary = Boolean(task?.builderSummary);
   const backendHealthy = backendState === "online";
 
-  const checklist: ReviewChecklistItem[] = [
-    {
-      label: "Files changed?",
-      status: hasBuilderSummary ? "ready" : "attention",
-      detail: hasBuilderSummary ? "Builder Core returned a change summary for this task." : "Confirm the exact files changed before approving the rollout."
-    },
-    {
-      label: "Build passed?",
-      status: "ready",
-      detail: "This manual simulation assumes the build passed before deployment completed."
-    },
-    {
-      label: "GitHub Actions green?",
-      status: "ready",
-      detail: "This manual simulation treats the deploy step as a successful GitHub Actions run."
-    },
-    {
-      label: "Frontend live?",
-      status: "ready",
-      detail: "The Cloud Run live step is complete in the current simulation."
-    },
-    {
-      label: "Backend online?",
-      status: backendHealthy ? "ready" : "attention",
-      detail: backendHealthy ? "The in-app backend health indicator is online." : "Recheck /system/status before calling this task done."
-    }
-  ];
-
   return {
-    checklist,
+    checklist: [
+      {
+        label: "Files changed?",
+        status: hasBuilderSummary ? "ready" : "attention",
+        detail: hasBuilderSummary
+          ? "Builder Core returned a change summary for this task."
+          : "Confirm the exact files changed before treating the task as complete."
+      },
+      {
+        label: "Build passed?",
+        status: "ready",
+        detail: "The simplified flow assumes the build was checked before moving forward."
+      },
+      {
+        label: "GitHub Actions green?",
+        status: "ready",
+        detail: "Treat this as the approval checkpoint before the deploy stage is trusted."
+      },
+      {
+        label: "Frontend deployed?",
+        status: "ready",
+        detail: "The later stages assume the frontend moved through deployment successfully."
+      },
+      {
+        label: "Backend still online?",
+        status: backendHealthy ? "ready" : "attention",
+        detail: backendHealthy
+          ? "The backend health badge is still online."
+          : "Recheck /system/status before closing the task."
+      }
+    ],
     doItems: [
-      "Prefer safe improvements and small upgrades after the deploy.",
-      "Open the live app and verify the user-visible change immediately.",
-      "Capture the files changed and testing notes before starting the next task."
+      "Prefer safe improvements and small upgrades after the task completes.",
+      "Verify the live app quickly before starting the next task.",
+      "Capture files changed and testing notes while the result is fresh."
     ],
     avoidItems: [
-      "Do not stack risky changes on top of an unverified deploy.",
-      "Do not remove working features to make a fix easier.",
-      "Do not assume the backend is healthy if the status badge is offline."
+      "Do not pile risky changes onto an unverified result.",
+      "Do not delete working features to make a change easier.",
+      "Do not assume the backend is healthy if the badge is offline."
     ]
   };
 }
@@ -595,7 +512,6 @@ function renderStructuredBubble(entry: ChatEntry) {
         <div className="max-w-4xl rounded-3xl border border-gray-200 bg-white px-5 py-5 shadow-sm">
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">{entry.title}</p>
           {renderReviewContent(entry.review)}
-
           <p className="mt-4 text-xs text-gray-400">{entry.timestamp}</p>
         </div>
       </div>
@@ -621,10 +537,12 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<CommandCenterTabKey>("command");
   const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">("checking");
   const [executionStatus, setExecutionStatus] = useState<ExecutionStatus>("idle");
-  const [pipelineStage, setPipelineStage] = useState<PipelineStage>("idle");
-  const [refreshCountdown, setRefreshCountdown] = useState<number | null>(null);
+  const [taskStageIndex, setTaskStageIndex] = useState(-1);
+  const [taskStageProgress, setTaskStageProgress] = useState(0);
+  const [activeTaskInstruction, setActiveTaskInstruction] = useState("");
   const [installMessage, setInstallMessage] = useState("");
   const [lastTask, setLastTask] = useState<CommandTask | null>(null);
+  const [completedTaskId, setCompletedTaskId] = useState("");
   const [chatEntries, setChatEntries] = useState<ChatEntry[]>([
     {
       id: "welcome",
@@ -632,73 +550,54 @@ export default function Home() {
       kind: "text",
       title: "Builder Core",
       content:
-        "Ask Builder Core to build, fix, or upgrade anything. I will plan the work, prepare the Codex task, keep the pipeline visible, and show review suggestions inline.",
+        "Ask Builder Core to build, fix, or upgrade anything. I will plan the work, prepare the Codex task, keep the stage bar visible, and explain what to do next.",
       timestamp: "Ready"
     }
   ]);
-  const [progressChecklist, setProgressChecklist] = useState<Record<ProgressChecklistKey, boolean>>({
-    codex_finished: false,
-    codex_commit_hash: false,
-    codex_summary: false,
-    deploy_actions_green: false,
-    deploy_cloud_run_finished: false,
-    deploy_backend_online: false,
-    refresh_deploy_done: false,
-    refresh_ready: false
-  });
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Partial<Record<CommandCenterTabKey, HTMLElement | null>>>({});
 
-  const automationPipeline = useMemo(() => buildAutomationPipeline(pipelineStage), [pipelineStage]);
-  const currentPipelineStep = useMemo(
-    () => getCurrentPipelineStep(automationPipeline, pipelineStage),
-    [automationPipeline, pipelineStage]
-  );
+  const taskStages = useMemo(() => buildTaskStages(taskStageIndex, executionStatus), [taskStageIndex, executionStatus]);
+  const currentTaskStage = taskStageIndex >= 0 ? TASK_STAGE_DEFINITIONS[taskStageIndex] : null;
   const latestReview = useMemo(() => buildReviewSummary(lastTask, backendStatus), [lastTask, backendStatus]);
-  const pipelineProgress = currentPipelineStep?.percent ?? 0;
-  const pipelineProgressText = currentPipelineStep
-    ? `${pipelineProgress}% complete — ${currentPipelineStep.currentText}`
-    : "0% complete — Waiting for your next task";
-  const pipelineCurrentText = currentPipelineStep?.currentText ?? "Waiting for your next command.";
-  const pipelineNextStepText =
-    currentPipelineStep?.nextText ?? "Next: enter a command to start the automation pipeline.";
 
-  const canSendToCodex = pipelineStage === "codex_ready";
-  const canMarkCodexDone = pipelineStage === "codex_working";
-  const canMarkDeployDone = pipelineStage === "github_deploying";
-  const canRefreshNow = pipelineStage === "refresh_pending";
+  const taskStageCounter =
+    currentTaskStage !== null ? `${taskStageIndex + 1}/${TASK_STAGE_DEFINITIONS.length}` : `0/${TASK_STAGE_DEFINITIONS.length}`;
+  const taskBarVisible = currentTaskStage !== null || Boolean(lastTask) || Boolean(activeTaskInstruction);
+  const canAdvanceStage =
+    executionStatus === "awaiting_next" &&
+    taskStageIndex >= 0 &&
+    taskStageIndex < TASK_STAGE_DEFINITIONS.length - 1;
 
-  function setSectionRef(key: CommandCenterTabKey) {
-    return (element: HTMLElement | null) => {
-      sectionRefs.current[key] = element;
-    };
+  const taskBarTaskName =
+    activeTaskInstruction || lastTask?.instruction || "Run a command to start the next task";
+
+  let taskProgressText = "No task is running yet.";
+  let taskStatusText = "Run a command to begin.";
+  let taskNextText = "Next: submit a command in the Command tab.";
+
+  if (currentTaskStage) {
+    if (executionStatus === "active") {
+      taskProgressText = `${taskStageProgress}%`;
+      taskStatusText = currentTaskStage.activeText;
+      taskNextText = currentTaskStage.nextText;
+    } else if (executionStatus === "awaiting_next") {
+      taskProgressText = "100%";
+      taskStatusText = currentTaskStage.completeText;
+      taskNextText =
+        taskStageIndex < TASK_STAGE_DEFINITIONS.length - 1
+          ? `Next: ${TASK_STAGE_DEFINITIONS[taskStageIndex + 1].label} will begin after you press Next.`
+          : "Next: start a new task when you are ready.";
+    } else if (executionStatus === "completed") {
+      taskProgressText = "100%";
+      taskStatusText = "Done - ready for next task";
+      taskNextText = "Next: enter another command when you are ready.";
+    }
   }
 
-  function scrollToSection(key: CommandCenterTabKey) {
-    setActiveTab(key);
-    sectionRefs.current[key]?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  function toggleProgressChecklistItem(key: ProgressChecklistKey) {
-    setProgressChecklist((current) => ({
-      ...current,
-      [key]: !current[key]
-    }));
-  }
-
-  function appendChatEntries(entries: Array<Omit<ChatEntry, "id" | "timestamp">>) {
-    const base = Date.now();
-
-    setChatEntries((current) =>
-      current.concat(
-        entries.map((entry, index) => ({
-          ...entry,
-          id: `${base}-${index}-${Math.random().toString(16).slice(2)}`,
-          timestamp: formatTimestamp(new Date(base + index))
-        }))
-      )
-    );
+  function appendChatEntries(entries: ChatEntry[]) {
+    setChatEntries((current) => [...current, ...entries]);
   }
 
   async function checkBackendStatus() {
@@ -706,7 +605,7 @@ export default function Home() {
       const response = await fetch(`${API_BASE}/system/status`);
 
       if (!response.ok) {
-        throw new Error("Backend status check failed");
+        throw new Error("Backend status check failed.");
       }
 
       setBackendStatus("online");
@@ -719,94 +618,138 @@ export default function Home() {
     try {
       const response = await fetch(`${API_BASE}/projects`);
       const data = await response.json();
-      const items = data.items || [];
+      const items = Array.isArray(data.items) ? data.items : [];
       setProjects(items);
 
-      if (items.length > 0 && !items.find((project: ProjectItem) => project.name === selectedProject)) {
+      if (items.length > 0 && !items.some((item: ProjectItem) => item.name === selectedProject)) {
         setSelectedProject(items[0].name);
       }
     } catch {
-      console.log("Could not load projects");
+      setProjects([]);
     }
   }
 
   useEffect(() => {
-    checkBackendStatus();
-    loadProjects();
+    void checkBackendStatus();
+    void loadProjects();
   }, []);
 
   useEffect(() => {
-    const sections = Object.entries(sectionRefs.current).filter((entry): entry is [CommandCenterTabKey, HTMLElement] => Boolean(entry[1]));
-    if (sections.length === 0) {
+    const nodes = Object.entries(sectionRefs.current).filter((entry): entry is [CommandCenterTabKey, HTMLElement] => Boolean(entry[1]));
+
+    if (nodes.length === 0) {
       return;
     }
 
     const observer = new IntersectionObserver(
       (entries) => {
-        const visibleEntries = entries
+        const visibleEntry = entries
           .filter((entry) => entry.isIntersecting)
-          .sort((left, right) => right.intersectionRatio - left.intersectionRatio);
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
 
-        const activeEntry = visibleEntries[0];
-        if (!activeEntry) {
+        if (!visibleEntry) {
           return;
         }
 
-        const key = activeEntry.target.getAttribute("data-section-key") as CommandCenterTabKey | null;
-        if (key) {
+        const key = visibleEntry.target.getAttribute("data-section-key");
+        if (key === "command" || key === "progress" || key === "review" || key === "download" || key === "help") {
           setActiveTab(key);
         }
       },
       {
-        rootMargin: "-20% 0px -50% 0px",
-        threshold: [0.2, 0.45, 0.7]
+        rootMargin: "-30% 0px -40% 0px",
+        threshold: [0.2, 0.4, 0.6]
       }
     );
 
-    for (const [, element] of sections) {
-      observer.observe(element);
-    }
+    nodes.forEach(([, node]) => observer.observe(node));
 
-    return () => {
-      observer.disconnect();
-    };
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatEntries, pipelineStage, refreshCountdown]);
-
-  function finishRefresh() {
-    setExecutionStatus("completed");
-    setPipelineStage("refreshed");
-    setRefreshCountdown(null);
-
-    window.setTimeout(() => {
-      window.location.reload();
-    }, 300);
-  }
+  }, [chatEntries]);
 
   useEffect(() => {
-    if (pipelineStage !== "refresh_pending" || refreshCountdown === null) {
+    if (executionStatus !== "active" || taskStageIndex < 0) {
       return;
     }
 
-    if (refreshCountdown === 0) {
-      finishRefresh();
+    const interval = window.setInterval(() => {
+      setTaskStageProgress((current) => Math.min(current + 4, 100));
+    }, 180);
+
+    return () => window.clearInterval(interval);
+  }, [executionStatus, taskStageIndex]);
+
+  useEffect(() => {
+    if (executionStatus !== "active" || taskStageIndex < 0 || taskStageProgress < 100) {
       return;
     }
 
-    const timer = window.setTimeout(() => {
-      setRefreshCountdown((current) => (current === null ? null : current - 1));
-    }, 1000);
+    if (taskStageIndex === TASK_STAGE_DEFINITIONS.length - 1) {
+      setExecutionStatus("completed");
+      return;
+    }
 
-    return () => {
-      window.clearTimeout(timer);
+    setExecutionStatus("awaiting_next");
+  }, [executionStatus, taskStageIndex, taskStageProgress]);
+
+  useEffect(() => {
+    if (executionStatus !== "completed" || !lastTask) {
+      return;
+    }
+
+    const completionId = `${lastTask.timestamp}-${lastTask.instruction}`;
+    if (completedTaskId === completionId) {
+      return;
+    }
+
+    appendChatEntries([
+      {
+        id: `${completionId}-done`,
+        role: "assistant",
+        kind: "text",
+        title: "Task Complete",
+        content: "Done - ready for next task. Review the checklist below and pick one safe follow-up when you are ready.",
+        timestamp: formatTimestamp(new Date())
+      },
+      {
+        id: `${completionId}-review`,
+        role: "assistant",
+        kind: "review",
+        title: "Result Review",
+        review: buildReviewSummary(lastTask, backendStatus),
+        timestamp: formatTimestamp(new Date())
+      },
+      {
+        id: `${completionId}-upgrades`,
+        role: "assistant",
+        kind: "text",
+        title: "Next Upgrade Ideas",
+        content: NEXT_UPGRADE_SUGGESTIONS.map((item) => `- ${item}`).join("\n"),
+        timestamp: formatTimestamp(new Date())
+      }
+    ]);
+
+    setCompletedTaskId(completionId);
+  }, [backendStatus, completedTaskId, executionStatus, lastTask]);
+
+  function setSectionRef(key: CommandCenterTabKey) {
+    return (node: HTMLElement | null) => {
+      sectionRefs.current[key] = node;
     };
-  }, [pipelineStage, refreshCountdown]);
+  }
+
+  function scrollToSection(key: CommandCenterTabKey) {
+    setActiveTab(key);
+    sectionRefs.current[key]?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   async function handleCreateProject() {
-    if (!newProjectName.trim()) {
+    const name = newProjectName.trim();
+    if (!name) {
       return;
     }
 
@@ -816,62 +759,76 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          name: newProjectName
-        })
+        body: JSON.stringify({ name })
       });
 
-      const data = await response.json();
-
-      if (data.ok && data.project) {
-        setSelectedProject(data.project.name);
-        setNewProjectName("");
-        await loadProjects();
-        appendChatEntries([
-          {
-            role: "assistant",
-            kind: "text",
-            title: "Project Ready",
-            content: `Created project "${data.project.name}". Future commands will use this project.`
-          }
-        ]);
+      if (!response.ok) {
+        throw new Error("Project create failed.");
       }
+
+      setNewProjectName("");
+      setSelectedProject(name);
+      await loadProjects();
+      appendChatEntries([
+        {
+          id: `project-${Date.now()}`,
+          role: "assistant",
+          kind: "text",
+          title: "Project Ready",
+          content: `Created or confirmed the project "${name}". You can use it for the next Builder Core task.`,
+          timestamp: formatTimestamp(new Date())
+        }
+      ]);
     } catch {
       appendChatEntries([
         {
+          id: `project-error-${Date.now()}`,
           role: "assistant",
           kind: "text",
-          title: "Project Update",
-          content: "I could not create the project right now. Please try again."
+          title: "Project Error",
+          content: "I could not create that project right now. Try again after the backend is online.",
+          timestamp: formatTimestamp(new Date())
         }
       ]);
     }
   }
 
-  async function handleCommandSubmit() {
-    const instruction = commandInput.trim();
+  async function handleCommandSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
 
+    const instruction = commandInput.trim();
     if (!instruction) {
       return;
     }
 
-    const fallbackPlanner = buildPlannerOutput(instruction, selectedProject);
-    const fallbackPrompt = buildCodexPrompt(instruction, selectedProject);
+    const projectName = selectedProject || "Default Project";
+    const timestamp = formatTimestamp(new Date());
+    const fallbackPlanner = buildPlannerOutput(instruction, projectName);
+    const fallbackPrompt = buildCodexPrompt(instruction, projectName);
 
     setCommandInput("");
-    setRefreshCountdown(null);
+    setActiveTaskInstruction(instruction);
+    setExecutionStatus("active");
+    setTaskStageIndex(0);
+    setTaskStageProgress(1);
+    setCompletedTaskId("");
+    setActiveTab("command");
 
     appendChatEntries([
       {
+        id: `user-${Date.now()}`,
         role: "user",
         kind: "text",
-        content: instruction
+        content: instruction,
+        timestamp
       },
       {
+        id: `planning-${Date.now()}`,
         role: "assistant",
         kind: "text",
-        title: "System",
-        content: "Planning..."
+        title: "Builder Core",
+        content: "Planning...",
+        timestamp
       }
     ]);
 
@@ -883,183 +840,148 @@ export default function Home() {
         },
         body: JSON.stringify({
           instruction,
-          project_name: selectedProject
+          project_name: projectName
         })
       });
 
       const data = (await response.json()) as CommandCenterChatResponse;
 
       if (!response.ok || !data.ok) {
-        appendChatEntries([
-          {
-            role: "assistant",
-            kind: "text",
-            title: "Builder Core",
-            content:
-              (typeof data.assistant_reply === "string" && data.assistant_reply) ||
-              (typeof data.message === "string" && data.message) ||
-              "Builder Core could not complete that chat request."
-          }
-        ]);
-        return;
+        throw new Error(typeof data.message === "string" ? data.message : "Chat request failed.");
       }
 
-      const planner = buildPlannerSummary(instruction, selectedProject, data, fallbackPlanner);
-      const prompt =
-        typeof data.codex_prompt === "string" && data.codex_prompt.trim()
-          ? data.codex_prompt
-          : fallbackPrompt;
+      const assistantReply =
+        typeof data.assistant_reply === "string" && data.assistant_reply
+          ? data.assistant_reply
+          : "Builder Core reviewed your request and prepared the next safe move.";
+      const plannerSummary = buildPlannerSummary(instruction, projectName, data, fallbackPlanner);
+      const codexPrompt =
+        typeof data.codex_prompt === "string" && data.codex_prompt ? data.codex_prompt : fallbackPrompt;
       const nextStepsSummary = buildNextStepsSummary(data.next_steps);
       const builderSummary = data.build_triggered ? buildBuilderSummary(data) : null;
-      const nextTask: CommandTask = {
+      const runSummary =
+        data.run_info && typeof data.run_info === "object" ? buildRunSummary(data.run_info as Record<string, unknown>) : null;
+      const responseTimestamp = formatTimestamp(new Date());
+
+      setLastTask({
         instruction,
-        planner,
-        prompt,
-        timestamp: formatTimestamp(new Date()),
-        builderSummary
-      };
-
-      setExecutionStatus("prepared");
-      setPipelineStage("codex_ready");
-      setLastTask(nextTask);
-
-      const responseEntries: Array<Omit<ChatEntry, "id" | "timestamp">> = [
-        {
-          role: "assistant",
-          kind: "text",
-          title: "Builder Core",
-          content:
-            (typeof data.assistant_reply === "string" && data.assistant_reply) ||
-            "I planned the request and prepared the next steps."
-        },
-        {
-          role: "assistant",
-          kind: "planner",
-          title: "ChatGPT Planner",
-          content: planner
-        },
-        {
-          role: "assistant",
-          kind: "text",
-          title: "System",
-          content: "Preparing Codex task..."
-        },
-        {
-          role: "assistant",
-          kind: "codex",
-          title: "Codex Task",
-          content: prompt
-        }
-      ];
-
-      if (builderSummary) {
-        responseEntries.push({
-          role: "assistant",
-          kind: "builder",
-          title: "Builder Core Response",
-          content: builderSummary
-        });
-      }
-
-      if (nextStepsSummary) {
-        responseEntries.push({
-          role: "assistant",
-          kind: "builder",
-          title: "Suggestions / Next Steps",
-          content: nextStepsSummary
-        });
-      }
-
-      if (data.run_info && typeof data.run_info === "object") {
-        responseEntries.push({
-          role: "assistant",
-          kind: "builder",
-          title: "Run Instructions",
-          content: buildRunSummary(data.run_info)
-        });
-      }
-
-      appendChatEntries(responseEntries);
-    } catch {
-      setExecutionStatus("idle");
-      setPipelineStage("idle");
-      setRefreshCountdown(null);
+        planner: plannerSummary,
+        prompt: codexPrompt,
+        timestamp: responseTimestamp,
+        builderSummary,
+        runSummary
+      });
 
       appendChatEntries([
         {
+          id: `assistant-${Date.now()}`,
           role: "assistant",
           kind: "text",
           title: "Builder Core",
-          content: "I could not reach the backend chat service right now. Check the backend status, then try the command again."
+          content: assistantReply,
+          timestamp: responseTimestamp
+        },
+        {
+          id: `planner-${Date.now()}`,
+          role: "assistant",
+          kind: "planner",
+          title: "Planner Output",
+          content: plannerSummary,
+          timestamp: responseTimestamp
+        },
+        {
+          id: `codex-${Date.now()}`,
+          role: "assistant",
+          kind: "codex",
+          title: "Codex Task",
+          content: codexPrompt,
+          timestamp: responseTimestamp
+        },
+        ...(builderSummary
+          ? [
+              {
+                id: `builder-${Date.now()}`,
+                role: "assistant" as const,
+                kind: "builder" as const,
+                title: "Builder Output",
+                content: builderSummary,
+                timestamp: responseTimestamp
+              }
+            ]
+          : []),
+        ...(runSummary
+          ? [
+              {
+                id: `run-${Date.now()}`,
+                role: "assistant" as const,
+                kind: "builder" as const,
+                title: "Run Info",
+                content: runSummary,
+                timestamp: responseTimestamp
+              }
+            ]
+          : []),
+        ...(nextStepsSummary
+          ? [
+              {
+                id: `next-${Date.now()}`,
+                role: "assistant" as const,
+                kind: "text" as const,
+                title: "Next Steps",
+                content: nextStepsSummary,
+                timestamp: responseTimestamp
+              }
+            ]
+          : [])
+      ]);
+    } catch (error) {
+      setExecutionStatus("idle");
+      setTaskStageIndex(-1);
+      setTaskStageProgress(0);
+      setActiveTaskInstruction("");
+
+      appendChatEntries([
+        {
+          id: `error-${Date.now()}`,
+          role: "assistant",
+          kind: "text",
+          title: "Backend Error",
+          content:
+            error instanceof Error
+              ? `I could not complete that request: ${error.message}`
+              : "I could not complete that request because the backend did not respond.",
+          timestamp: formatTimestamp(new Date())
         }
       ]);
     }
   }
 
-  function handleSendToCodex() {
-    if (!lastTask || pipelineStage !== "codex_ready") {
+  function handleNextStage() {
+    if (!canAdvanceStage || !currentTaskStage) {
       return;
     }
 
-    setExecutionStatus("sent");
-    setPipelineStage("codex_working");
+    const nextIndex = taskStageIndex + 1;
+    const nextStage = TASK_STAGE_DEFINITIONS[nextIndex];
 
     appendChatEntries([
       {
+        id: `stage-${Date.now()}`,
         role: "assistant",
         kind: "text",
-        title: "Automation",
-        content: "Codex task sent. Codex Working is now active."
+        title: "Automation Progress",
+        content: `${currentTaskStage.label} is complete. ${nextStage.label} has started.`,
+        timestamp: formatTimestamp(new Date())
       }
     ]);
-  }
 
-  function handleMarkCodexDone() {
-    if (!lastTask || pipelineStage !== "codex_working") {
-      return;
-    }
-
-    setPipelineStage("github_deploying");
-
-    appendChatEntries([
-      {
-        role: "assistant",
-        kind: "text",
-        title: "Automation",
-        content: "Codex work marked done. GitHub Deploying is now active."
-      }
-    ]);
-  }
-
-  function handleMarkDeployDone() {
-    if (!lastTask || pipelineStage !== "github_deploying") {
-      return;
-    }
-
-    const review = buildReviewSummary(lastTask, backendStatus);
-
-    setPipelineStage("refresh_pending");
-    setRefreshCountdown(5);
-
-    appendChatEntries([
-      {
-        role: "assistant",
-        kind: "text",
-        title: "Automation",
-        content: "Cloud Run is live. App refresh is queued. Currently simulated. Full automation coming."
-      },
-      {
-        role: "assistant",
-        kind: "review",
-        title: "Codex Result Review",
-        review
-      }
-    ]);
+    setTaskStageIndex(nextIndex);
+    setTaskStageProgress(1);
+    setExecutionStatus("active");
   }
 
   function handleOpenAppLink() {
     window.open(FRONTEND_APP_URL, "_blank", "noopener,noreferrer");
-    setInstallMessage("Opened the live app link.");
   }
 
   async function handleCopyAppLink() {
@@ -1067,698 +989,479 @@ export default function Home() {
       await navigator.clipboard.writeText(FRONTEND_APP_URL);
       setInstallMessage("App link copied.");
     } catch {
-      setInstallMessage("Copy failed. Copy the link manually from the app URL.");
+      setInstallMessage(`Copy this link manually: ${FRONTEND_APP_URL}`);
     }
   }
 
-  const automationStatusLabel = getAutomationStatusLabel(pipelineStage, refreshCountdown);
-
   return (
-    <main className="min-h-screen bg-slate-100 text-slate-900">
-      <div className="mx-auto flex min-h-screen max-w-6xl flex-col">
-        <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
-          <div className="flex flex-col gap-4 px-4 py-4 sm:px-6">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h1 className="text-2xl font-bold sm:text-3xl">Builder Core</h1>
-                <p className="text-sm text-slate-600">
-                  One unified AI Command Center for planning, Codex tasks, pipeline tracking, deploy review, and cloud-first operation.
-                </p>
+    <main className="min-h-screen bg-[#f7f7f4] text-slate-900">
+      <div className="border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
+          <div>
+            <p className="text-xl font-semibold text-slate-950">Builder Core</p>
+            <p className="text-sm text-slate-500">Cloud-first command center for Builder Core tasks.</p>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <span
+              className={
+                backendStatus === "online"
+                  ? "rounded-full border border-green-200 bg-green-50 px-3 py-1 text-xs font-semibold text-green-700"
+                  : backendStatus === "offline"
+                    ? "rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700"
+                    : "rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600"
+              }
+            >
+              {backendStatus === "checking" && "Backend: Checking..."}
+              {backendStatus === "online" && "Backend: Online"}
+              {backendStatus === "offline" && "Backend: Offline"}
+            </span>
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+              Automation: {getExecutionStatusLabel(executionStatus)}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {taskBarVisible && (
+        <div className="fixed inset-x-0 bottom-20 z-30 px-3 sm:px-6 lg:bottom-6 lg:left-72 lg:right-8 lg:px-0">
+          <div className="mx-auto max-w-5xl rounded-[28px] border border-slate-200 bg-white/95 px-4 py-4 shadow-2xl backdrop-blur sm:px-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0 flex-1">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Stage {taskStageCounter}
+                  </span>
+                  <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-blue-700">
+                    {currentTaskStage ? currentTaskStage.label : "Idle"}
+                  </span>
+                </div>
+
+                <p className="truncate text-sm font-semibold text-slate-900 sm:text-base">{taskBarTaskName}</p>
+                <p className="mt-1 text-sm text-slate-600">{taskStatusText}</p>
+
+                <div className="mt-3 flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <span>Stage Progress</span>
+                  <span>{taskProgressText}</span>
+                </div>
+                <div className="mt-2 h-3 rounded-full bg-slate-200">
+                  <div
+                    className="h-3 rounded-full bg-slate-900 transition-all"
+                    style={{ width: `${Math.max(taskStageProgress, 0)}%` }}
+                  />
+                </div>
+
+                <p className="mt-3 text-xs text-slate-500">Automation permission granted by user.</p>
+                <p className="mt-1 text-xs text-slate-500">Future: Codex will run automatically after approval.</p>
+                <p className="mt-2 text-xs text-slate-500">{taskNextText}</p>
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                <span
+              <div className="flex items-center gap-3 lg:w-auto">
+                <button
+                  type="button"
+                  onClick={handleNextStage}
+                  disabled={!canAdvanceStage}
                   className={
-                    backendStatus === "online"
-                      ? "rounded-full border border-green-200 bg-green-100 px-3 py-1 text-sm font-medium text-green-700"
-                      : backendStatus === "offline"
-                        ? "rounded-full border border-red-200 bg-red-100 px-3 py-1 text-sm font-medium text-red-700"
-                        : "rounded-full border border-gray-200 bg-gray-100 px-3 py-1 text-sm font-medium text-gray-600"
+                    canAdvanceStage
+                      ? "w-full rounded-2xl bg-black px-5 py-3 text-sm font-semibold text-white lg:w-auto"
+                      : "w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 text-sm font-semibold text-slate-400 lg:w-auto"
                   }
                 >
-                  {backendStatus === "checking" && "Backend: Checking..."}
-                  {backendStatus === "online" && "Backend: Online"}
-                  {backendStatus === "offline" && "Backend: Offline"}
-                </span>
-
-                <span className="rounded-full border border-amber-200 bg-amber-100 px-3 py-1 text-sm font-medium text-amber-700">
-                  Automation: {automationStatusLabel}
-                </span>
+                  Next
+                </button>
               </div>
-            </div>
-
-            <div className="grid gap-3 rounded-3xl border border-slate-200 bg-slate-50 p-3 sm:p-4 lg:grid-cols-[1fr,1fr,auto,auto]">
-              <select
-                value={selectedProject}
-                onChange={(e) => setSelectedProject(e.target.value)}
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm"
-              >
-                {projects.length === 0 ? (
-                  <option>Default Project</option>
-                ) : (
-                  projects.map((project) => (
-                    <option key={project.id} value={project.name}>
-                      {project.name}
-                    </option>
-                  ))
-                )}
-              </select>
-
-              <input
-                value={newProjectName}
-                onChange={(e) => setNewProjectName(e.target.value)}
-                placeholder="Create a new project"
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm"
-              />
-
-              <button
-                type="button"
-                onClick={handleCreateProject}
-                className="w-full rounded-2xl bg-black px-5 py-3 text-sm font-medium text-white lg:w-auto"
-              >
-                Create Project
-              </button>
-
-              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-                <p><span className="font-medium text-slate-900">Execution:</span> {getExecutionStatusLabel(executionStatus)}</p>
-                {lastTask && (
-                  <p className="mt-1"><span className="font-medium text-slate-900">Last task:</span> {lastTask.timestamp}</p>
-                )}
-              </div>
-            </div>
-          </div>
-        </header>
-
-        <div className="flex-1 px-4 py-4 pb-28 sm:px-6 lg:pb-6">
-          <div className="lg:grid lg:grid-cols-[250px,minmax(0,1fr)] lg:gap-6">
-            <aside className="mb-6 hidden lg:block">
-              <div className="sticky top-28 space-y-4">
-                <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Navigation</p>
-                  <div className="mt-3 space-y-2">
-                    {COMMAND_CENTER_TABS.map((tab) => (
-                      <button
-                        key={tab.key}
-                        type="button"
-                        onClick={() => scrollToSection(tab.key)}
-                        className={`w-full text-left ${getTabButtonClass(activeTab === tab.key)}`}
-                      >
-                        {tab.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Quick Actions</p>
-                  <div className="mt-3 space-y-2">
-                    <button
-                      type="button"
-                      onClick={() => scrollToSection("download")}
-                      className="w-full rounded-2xl bg-black px-4 py-3 text-left text-sm font-semibold text-white"
-                    >
-                      Install on Phone
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleCopyAppLink}
-                      className="w-full rounded-2xl border border-black px-4 py-3 text-left text-sm font-semibold text-black"
-                    >
-                      Copy App Link
-                    </button>
-                  </div>
-                  {installMessage && (
-                    <p className="mt-3 text-sm text-slate-600">{installMessage}</p>
-                  )}
-                </div>
-              </div>
-            </aside>
-
-            <div className="space-y-6">
-              <section
-                ref={setSectionRef("command")}
-                data-section-key="command"
-                className="scroll-mt-32 rounded-[28px] border border-slate-200 bg-white shadow-sm"
-              >
-                <div className="border-b border-slate-200 px-4 py-4 sm:px-6">
-                  <p className="text-lg font-semibold text-slate-900">Command</p>
-                  <p className="text-sm text-slate-600">
-                    Chat with Builder Core, get the backend response, and prepare the next safe task.
-                  </p>
-                </div>
-
-                <div className="min-h-[440px] max-h-[calc(100vh-340px)] overflow-y-auto p-4 sm:p-6">
-                  <div className="space-y-4">
-                    {chatEntries.map((entry) =>
-                      entry.kind === "text" ? renderTextBubble(entry) : renderStructuredBubble(entry)
-                    )}
-                    <div ref={bottomRef} />
-                  </div>
-                </div>
-
-                <div className="border-t border-slate-200 p-4 sm:p-6">
-                  <div className="rounded-3xl border border-slate-200 bg-slate-50 p-3 sm:p-4">
-                    <textarea
-                      value={commandInput}
-                      onChange={(e) => setCommandInput(e.target.value)}
-                      placeholder="Ask Builder Core to build, fix, or upgrade anything..."
-                      className="h-32 w-full resize-none rounded-2xl border border-slate-200 bg-white p-4 text-sm"
-                    />
-
-                    <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <p className="text-xs text-slate-500">
-                        One command now handles planning, Codex task prep, backend request flow, deploy tracking, and inline review.
-                      </p>
-
-                      <button
-                        type="button"
-                        onClick={handleCommandSubmit}
-                        className="w-full rounded-2xl bg-black px-5 py-3 text-sm font-medium text-white sm:w-auto"
-                      >
-                        Run Command
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <section
-                ref={setSectionRef("progress")}
-                data-section-key="progress"
-                className="scroll-mt-32 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
-              >
-                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-lg font-semibold text-slate-900">Progress</p>
-                    <p className="text-sm text-slate-600">
-                      Watch the automation stages, then use the manual buttons only when the matching checklist is satisfied.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleSendToCodex}
-                    disabled={!canSendToCodex}
-                    className={
-                      canSendToCodex
-                        ? "w-full rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white sm:w-auto"
-                        : "w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-400 sm:w-auto"
-                    }
-                  >
-                    Send to Codex
-                  </button>
-                </div>
-
-                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="mb-3 flex items-center justify-between text-sm font-semibold text-slate-700">
-                    <span>Progress</span>
-                    <span>{pipelineProgress}%</span>
-                  </div>
-                  <div className="mb-3 h-4 rounded-full bg-slate-200">
-                    <div
-                      className="h-4 rounded-full bg-blue-600 transition-all"
-                      style={{ width: `${pipelineProgress}%` }}
-                    />
-                  </div>
-                  <p className="text-sm font-semibold text-slate-900">{pipelineProgressText}</p>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">What is happening now</p>
-                      <p className="mt-2 text-sm font-medium text-slate-900">{pipelineCurrentText}</p>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Next step</p>
-                      <p className="mt-2 text-sm font-medium text-slate-900">{pipelineNextStepText}</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-4 grid gap-4 xl:grid-cols-3">
-                  <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="mb-3 flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-semibold text-slate-900">Mark Codex Done</p>
-                        <p className="text-sm text-slate-600">Click this only when the coding pass is clearly complete.</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleMarkCodexDone}
-                        disabled={!canMarkCodexDone}
-                        className={
-                          canMarkCodexDone
-                            ? "rounded-xl border border-black px-3 py-2 text-xs font-semibold text-black"
-                            : "rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-400"
-                        }
-                      >
-                        Mark Codex Done
-                      </button>
-                    </div>
-
-                    <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Before Mark Codex Done</p>
-                    <div className="space-y-2">
-                      <label className="flex items-center gap-3 text-sm text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={progressChecklist.codex_finished}
-                          onChange={() => toggleProgressChecklistItem("codex_finished")}
-                          className="h-4 w-4 rounded border-slate-300"
-                        />
-                        Codex finished
-                      </label>
-                      <label className="flex items-center gap-3 text-sm text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={progressChecklist.codex_commit_hash}
-                          onChange={() => toggleProgressChecklistItem("codex_commit_hash")}
-                          className="h-4 w-4 rounded border-slate-300"
-                        />
-                        Commit hash received
-                      </label>
-                      <label className="flex items-center gap-3 text-sm text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={progressChecklist.codex_summary}
-                          onChange={() => toggleProgressChecklistItem("codex_summary")}
-                          className="h-4 w-4 rounded border-slate-300"
-                        />
-                        Files changed summary received
-                      </label>
-                    </div>
-
-                    <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-slate-600">
-                      <li>Codex says it committed changes.</li>
-                      <li>Codex gives a commit hash.</li>
-                      <li>Codex summary says files changed.</li>
-                      <li>GitHub repo shows the new commit.</li>
-                    </ul>
-                  </div>
-
-                  <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="mb-3 flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-semibold text-slate-900">Mark Deploy Done</p>
-                        <p className="text-sm text-slate-600">Use this only after GitHub and Cloud Run both finish cleanly.</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleMarkDeployDone}
-                        disabled={!canMarkDeployDone}
-                        className={
-                          canMarkDeployDone
-                            ? "rounded-xl border border-black px-3 py-2 text-xs font-semibold text-black"
-                            : "rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-400"
-                        }
-                      >
-                        Mark Deploy Done
-                      </button>
-                    </div>
-
-                    <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Before Mark Deploy Done</p>
-                    <div className="space-y-2">
-                      <label className="flex items-center gap-3 text-sm text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={progressChecklist.deploy_actions_green}
-                          onChange={() => toggleProgressChecklistItem("deploy_actions_green")}
-                          className="h-4 w-4 rounded border-slate-300"
-                        />
-                        GitHub Actions green
-                      </label>
-                      <label className="flex items-center gap-3 text-sm text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={progressChecklist.deploy_cloud_run_finished}
-                          onChange={() => toggleProgressChecklistItem("deploy_cloud_run_finished")}
-                          className="h-4 w-4 rounded border-slate-300"
-                        />
-                        Cloud Run deploy finished
-                      </label>
-                      <label className="flex items-center gap-3 text-sm text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={progressChecklist.deploy_backend_online || backendStatus === "online"}
-                          onChange={() => toggleProgressChecklistItem("deploy_backend_online")}
-                          className="h-4 w-4 rounded border-slate-300"
-                        />
-                        Backend health still online
-                      </label>
-                    </div>
-
-                    <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-slate-600">
-                      <li>GitHub Actions is green.</li>
-                      <li>Cloud Run revision finished deploying.</li>
-                      <li>Frontend/backend service is live.</li>
-                    </ul>
-                  </div>
-
-                  <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="mb-3 flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-semibold text-slate-900">Refresh App</p>
-                        <p className="text-sm text-slate-600">Reload only after the newest version is actually live.</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={finishRefresh}
-                        disabled={!canRefreshNow}
-                        className={
-                          canRefreshNow
-                            ? "rounded-xl bg-black px-3 py-2 text-xs font-semibold text-white"
-                            : "rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-400"
-                        }
-                      >
-                        Refresh Now
-                      </button>
-                    </div>
-
-                    <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Before Refresh</p>
-                    <div className="space-y-2">
-                      <label className="flex items-center gap-3 text-sm text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={progressChecklist.refresh_deploy_done}
-                          onChange={() => toggleProgressChecklistItem("refresh_deploy_done")}
-                          className="h-4 w-4 rounded border-slate-300"
-                        />
-                        Deploy done
-                      </label>
-                      <label className="flex items-center gap-3 text-sm text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={progressChecklist.refresh_ready}
-                          onChange={() => toggleProgressChecklistItem("refresh_ready")}
-                          className="h-4 w-4 rounded border-slate-300"
-                        />
-                        App ready to reload
-                      </label>
-                    </div>
-
-                    <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-slate-600">
-                      <li>Deploy is done.</li>
-                      <li>You want to load the newest version.</li>
-                    </ul>
-                  </div>
-                </div>
-              </section>
-
-              <section
-                ref={setSectionRef("review")}
-                data-section-key="review"
-                className="scroll-mt-32 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
-              >
-                <div className="mb-4">
-                  <p className="text-lg font-semibold text-slate-900">Review</p>
-                  <p className="text-sm text-slate-600">
-                    Check the latest task result here before you trust the deploy and move on to the next upgrade.
-                  </p>
-                </div>
-
-                {lastTask ? (
-                  <>
-                    <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                      <p><span className="font-semibold text-slate-900">Latest task:</span> {lastTask.instruction}</p>
-                      <p className="mt-1"><span className="font-semibold text-slate-900">Recorded:</span> {lastTask.timestamp}</p>
-                    </div>
-                    {renderReviewContent(latestReview)}
-                  </>
-                ) : (
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-                    Run a command first. After Builder Core responds and the pipeline advances, review guidance will appear here.
-                  </div>
-                )}
-              </section>
-
-              <section
-                ref={setSectionRef("download")}
-                data-section-key="download"
-                className="scroll-mt-32 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
-              >
-                <div className="mb-4">
-                  <p className="text-lg font-semibold text-slate-900">Download</p>
-                  <p className="text-sm text-slate-600">
-                    Keep the app install steps easy to reach from every area of Builder Core.
-                  </p>
-                </div>
-
-                <div className="grid gap-4 lg:grid-cols-[1fr,1fr]">
-                  <div className="space-y-4 text-sm text-slate-700">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <p className="mb-2 font-semibold text-slate-900">iPhone</p>
-                      <ul className="list-disc space-y-1 pl-5">
-                        <li>Open the app in Safari.</li>
-                        <li>Tap Share.</li>
-                        <li>Add to Home Screen.</li>
-                      </ul>
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <p className="mb-2 font-semibold text-slate-900">Android</p>
-                      <ul className="list-disc space-y-1 pl-5">
-                        <li>Open the app in Chrome.</li>
-                        <li>Tap the menu icon.</li>
-                        <li>Install App.</li>
-                      </ul>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                      <p className="mb-2 font-semibold text-slate-900">App Link</p>
-                      <p>{FRONTEND_APP_URL}</p>
-                      <p className="mt-2 text-xs text-slate-500">No App Store needed.</p>
-                    </div>
-
-                    <div className="flex flex-col gap-3 sm:flex-row">
-                      <button
-                        type="button"
-                        onClick={handleOpenAppLink}
-                        className="w-full rounded-2xl bg-black px-5 py-3 text-sm font-medium text-white sm:w-auto"
-                      >
-                        Open App Link
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleCopyAppLink}
-                        className="w-full rounded-2xl border border-black px-5 py-3 text-sm font-medium text-black sm:w-auto"
-                      >
-                        Copy App Link
-                      </button>
-                    </div>
-
-                    {installMessage && (
-                      <p className="text-sm text-slate-600">{installMessage}</p>
-                    )}
-                  </div>
-                </div>
-              </section>
-
-              <section
-                ref={setSectionRef("help")}
-                data-section-key="help"
-                className="scroll-mt-32 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
-              >
-                <div className="mb-4">
-                  <p className="text-lg font-semibold text-slate-900">Help</p>
-                  <p className="text-sm text-slate-600">
-                    Use these tab explanations when you want to know where to go next in the app.
-                  </p>
-                </div>
-
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="mb-3 font-semibold text-slate-900">What each tab means</p>
-                    <ul className="list-disc space-y-2 pl-5 text-sm text-slate-700">
-                      <li><span className="font-semibold text-slate-900">Command:</span> chat with Builder Core and send the next request.</li>
-                      <li><span className="font-semibold text-slate-900">Progress:</span> follow the pipeline and use the manual stage buttons safely.</li>
-                      <li><span className="font-semibold text-slate-900">Review:</span> confirm the latest task result before trusting the rollout.</li>
-                      <li><span className="font-semibold text-slate-900">Download:</span> install the app on your phone or copy the live link.</li>
-                      <li><span className="font-semibold text-slate-900">Help:</span> get quick explanations when you are unsure what to do next.</li>
-                    </ul>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="mb-3 font-semibold text-slate-900">When to mark stages done</p>
-                    <ul className="list-disc space-y-2 pl-5 text-sm text-slate-700">
-                      <li>Use <span className="font-semibold text-slate-900">Mark Codex Done</span> only after Codex reports completed code work and a commit is visible.</li>
-                      <li>Use <span className="font-semibold text-slate-900">Mark Deploy Done</span> only after GitHub Actions is green and Cloud Run is live.</li>
-                      <li>Use <span className="font-semibold text-slate-900">Refresh Now</span> only when the newest deployed version is ready to load.</li>
-                    </ul>
-                  </div>
-                </div>
-              </section>
             </div>
           </div>
         </div>
+      )}
 
-        <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-slate-200 bg-white/95 px-2 py-2 shadow-[0_-10px_30px_rgba(15,23,42,0.08)] backdrop-blur lg:hidden">
-          <div className="grid grid-cols-5 gap-2">
+      <div className="mx-auto flex max-w-7xl gap-6 px-4 pb-28 pt-6 sm:px-6 lg:px-8">
+        <aside className="sticky top-6 hidden h-fit w-64 shrink-0 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm lg:block">
+          <p className="mb-4 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Navigation</p>
+          <div className="space-y-2">
             {COMMAND_CENTER_TABS.map((tab) => (
               <button
                 key={tab.key}
                 type="button"
                 onClick={() => scrollToSection(tab.key)}
-                className={
-                  activeTab === tab.key
-                    ? "rounded-2xl bg-black px-2 py-2 text-[11px] font-semibold text-white"
-                    : "rounded-2xl border border-slate-200 bg-slate-50 px-2 py-2 text-[11px] font-medium text-slate-600"
-                }
+                className={`w-full text-left ${getTabButtonClass(activeTab === tab.key)}`}
               >
                 {tab.label}
               </button>
             ))}
           </div>
-        </nav>
 
-        {lastTask && (
-          <div className="fixed bottom-24 left-4 right-4 z-20 lg:bottom-4 lg:left-auto lg:right-6 lg:w-[430px]">
-            <div className="rounded-[28px] border border-slate-200 bg-white/95 p-4 shadow-2xl backdrop-blur">
-              <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm font-semibold text-slate-900">Quick Actions</p>
+            <div className="mt-3 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => scrollToSection("download")}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700"
+              >
+                Install on Phone
+              </button>
+              <button
+                type="button"
+                onClick={handleCopyAppLink}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700"
+              >
+                Copy App Link
+              </button>
+            </div>
+            {installMessage && <p className="mt-3 text-xs text-slate-500">{installMessage}</p>}
+          </div>
+        </aside>
+
+        <div className="min-w-0 flex-1">
+          <div className="grid gap-6">
+            <section
+              ref={setSectionRef("command")}
+              data-section-key="command"
+              className="scroll-mt-32 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
+            >
+              <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                 <div>
-                  <p className="font-semibold text-slate-900">Automation Pipeline</p>
-                  <p className="text-xs text-slate-500">Currently simulated. Full automation coming.</p>
+                  <p className="text-lg font-semibold text-slate-900">Command Center</p>
+                  <p className="text-sm text-slate-600">
+                    Use one command box to chat with Builder Core, generate the plan, and start the next tracked task.
+                  </p>
                 </div>
-                <span className="rounded-full border border-amber-200 bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
-                  {automationStatusLabel}
-                </span>
+
+                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr),auto,auto]">
+                  <select
+                    value={selectedProject}
+                    onChange={(event) => setSelectedProject(event.target.value)}
+                    className="min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700"
+                  >
+                    {projects.length === 0 && <option value="Default Project">Default Project</option>}
+                    {projects.map((project) => (
+                      <option key={project.id} value={project.name}>
+                        {project.name}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    value={newProjectName}
+                    onChange={(event) => setNewProjectName(event.target.value)}
+                    placeholder="New project name"
+                    className="rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-700"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCreateProject}
+                    className="rounded-2xl border border-black px-4 py-3 text-sm font-semibold text-black"
+                  >
+                    Create Project
+                  </button>
+                </div>
               </div>
 
-              <div className="mb-3 flex items-center justify-between text-sm font-semibold text-slate-700">
-                <span>Progress</span>
-                <span>{pipelineProgress}%</span>
+              <div className="rounded-[28px] border border-slate-200 bg-slate-50 p-3 sm:p-4">
+                <div className="space-y-4">
+                  {chatEntries.map((entry) => {
+                    if (entry.kind === "text") {
+                      return renderTextBubble(entry);
+                    }
+
+                    return renderStructuredBubble(entry);
+                  })}
+                  <div ref={bottomRef} />
+                </div>
               </div>
-              <div className="mb-3 h-4 rounded-full bg-slate-200">
-                <div
-                  className="h-4 rounded-full bg-blue-600 transition-all"
-                  style={{ width: `${pipelineProgress}%` }}
+
+              <form onSubmit={handleCommandSubmit} className="mt-5">
+                <label htmlFor="command-input" className="mb-3 block text-sm font-semibold text-slate-900">
+                  Ask Builder Core to build, fix, or upgrade anything...
+                </label>
+                <textarea
+                  id="command-input"
+                  value={commandInput}
+                  onChange={(event) => setCommandInput(event.target.value)}
+                  placeholder="Ask Builder Core to build, fix, or upgrade anything..."
+                  className="min-h-[140px] w-full rounded-[28px] border border-slate-200 px-4 py-4 text-sm text-slate-700 outline-none transition focus:border-slate-400"
                 />
-              </div>
 
-              <p className="mb-4 text-sm font-semibold text-slate-900">
-                {pipelineProgressText}
-              </p>
-
-              <div className="mb-4 grid gap-3 sm:grid-cols-2">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                    What is happening now
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-slate-500">
+                    Builder Core will call the backend chat route, prepare the Codex task, and open the simplified stage bar.
                   </p>
-                  <p className="mt-2 text-sm font-medium text-slate-900">
-                    {pipelineCurrentText}
-                  </p>
+                  <button
+                    type="submit"
+                    className="rounded-2xl bg-black px-5 py-3 text-sm font-semibold text-white"
+                  >
+                    Run Command
+                  </button>
                 </div>
+              </form>
+            </section>
 
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                    Next step
-                  </p>
-                  <p className="mt-2 text-sm font-medium text-slate-900">
-                    {pipelineNextStepText}
-                  </p>
-                </div>
-              </div>
-
-              {refreshCountdown !== null && (
-                <p className="mb-4 text-sm text-slate-600">
-                  Auto-refresh in {refreshCountdown}s
+            <section
+              ref={setSectionRef("progress")}
+              data-section-key="progress"
+              className="scroll-mt-32 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
+            >
+              <div className="mb-4">
+                <p className="text-lg font-semibold text-slate-900">Progress</p>
+                <p className="text-sm text-slate-600">
+                  One compact task bar controls the stage flow. Each stage progresses from 1% to 100%, then waits for one Next click.
                 </p>
-              )}
-
-              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-                <button
-                  type="button"
-                  onClick={handleSendToCodex}
-                  disabled={!canSendToCodex}
-                  className={
-                    canSendToCodex
-                      ? "w-full rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white sm:w-auto"
-                      : "w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-400 sm:w-auto"
-                  }
-                >
-                  Send to Codex
-                </button>
-                <button
-                  type="button"
-                  onClick={handleMarkCodexDone}
-                  disabled={!canMarkCodexDone}
-                  className={
-                    canMarkCodexDone
-                      ? "w-full rounded-xl border border-black px-3 py-2 text-xs font-semibold text-black sm:w-auto"
-                      : "w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-400 sm:w-auto"
-                  }
-                >
-                  Mark Codex Done
-                </button>
-                <button
-                  type="button"
-                  onClick={handleMarkDeployDone}
-                  disabled={!canMarkDeployDone}
-                  className={
-                    canMarkDeployDone
-                      ? "w-full rounded-xl border border-black px-3 py-2 text-xs font-semibold text-black sm:w-auto"
-                      : "w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-400 sm:w-auto"
-                  }
-                >
-                  Mark Deploy Done
-                </button>
-                <button
-                  type="button"
-                  onClick={finishRefresh}
-                  disabled={!canRefreshNow}
-                  className={
-                    canRefreshNow
-                      ? "w-full rounded-xl bg-black px-3 py-2 text-xs font-semibold text-white sm:w-auto"
-                      : "w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-400 sm:w-auto"
-                  }
-                >
-                  Refresh Now
-                </button>
               </div>
 
-              <div className="space-y-3">
-                {automationPipeline.map((step, index) => (
-                  <div key={step.key} className={getPipelineCardClass(step.status)}>
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <span className={`h-3 w-3 rounded-full ${getPipelineDotClass(step.status)}`} />
+              <div className="mb-5 grid gap-4 lg:grid-cols-[1.4fr,1fr]">
+                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">Current Task</p>
+                      <p className="text-xs text-slate-500">{taskBarTaskName}</p>
+                    </div>
+                    <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
+                      {getExecutionStatusLabel(executionStatus)}
+                    </span>
+                  </div>
+
+                  <div className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    <span>{currentTaskStage ? currentTaskStage.label : "No stage yet"}</span>
+                    <span>{taskProgressText}</span>
+                  </div>
+                  <div className="h-3 rounded-full bg-slate-200">
+                    <div
+                      className="h-3 rounded-full bg-slate-900 transition-all"
+                      style={{ width: `${Math.max(taskStageProgress, 0)}%` }}
+                    />
+                  </div>
+
+                  <p className="mt-3 text-sm font-medium text-slate-900">{taskStatusText}</p>
+                  <p className="mt-2 text-sm text-slate-600">{taskNextText}</p>
+                </div>
+
+                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-sm font-semibold text-slate-900">Permission Model</p>
+                  <p className="mt-3 text-sm text-slate-700">Automation permission granted by user.</p>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Future: Codex will run automatically after approval, with cloud tracking instead of laptop-only state.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleNextStage}
+                    disabled={!canAdvanceStage}
+                    className={
+                      canAdvanceStage
+                        ? "mt-4 rounded-2xl bg-black px-4 py-3 text-sm font-semibold text-white"
+                        : "mt-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-400"
+                    }
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                {taskStages.map((stage, index) => (
+                  <div key={stage.key} className={getTaskStageCardClass(stage.status)}>
+                    <div className="mb-2 flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-3">
+                        <span className={`mt-1 h-3 w-3 rounded-full ${getTaskStageDotClass(stage.status)}`} />
                         <div>
-                          <p className={getPipelineTitleClass(step.status)}>
-                            {index + 1}. {step.label}
+                          <p className={getTaskStageTitleClass(stage.status)}>
+                            {index + 1}. {stage.label}
                           </p>
                           <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                            {step.percent}%
+                            {stage.status === "active" ? `${taskStageProgress}%` : stage.status === "done" ? "100%" : "Pending"}
                           </p>
                         </div>
                       </div>
-                      <span className={`rounded-full px-3 py-1 text-xs font-medium ${getPipelineStatusBadgeClass(step.status)}`}>
-                        {step.status === "pending" && "Pending"}
-                        {step.status === "active" && "Active"}
-                        {step.status === "done" && "Done"}
+                      <span className={`rounded-full px-3 py-1 text-[11px] font-semibold ${getTaskStageBadgeClass(stage.status)}`}>
+                        {stage.status === "active" && "Active"}
+                        {stage.status === "done" && "Done"}
+                        {stage.status === "pending" && "Pending"}
                       </span>
                     </div>
-                    <p className={getPipelineDescriptionClass(step.status)}>
-                      {step.description}
-                    </p>
-                    {step.status === "active" && (
-                      <p className="mt-2 text-sm font-medium text-blue-700">
-                        {step.currentText}
-                      </p>
+                    <p className={getTaskStageDescriptionClass(stage.status)}>{stage.description}</p>
+                    {stage.status === "active" && <p className="mt-2 text-sm font-medium text-blue-700">{stage.activeText}</p>}
+                    {stage.status === "done" && index === taskStageIndex && executionStatus !== "completed" && (
+                      <p className="mt-2 text-sm font-medium text-green-700">{stage.completeText}</p>
                     )}
-                    {step.status === "pending" && (
-                      <p className="mt-2 text-[11px] text-slate-400">
-                        Waiting for earlier steps to finish.
-                      </p>
-                    )}
-                    {step.status === "done" && (
-                      <p className="mt-2 text-[11px] text-green-700">
-                        Completed.
-                      </p>
+                    {stage.status === "done" && executionStatus === "completed" && index === taskStages.length - 1 && (
+                      <p className="mt-2 text-sm font-medium text-green-700">Done - ready for next task</p>
                     )}
                   </div>
                 ))}
               </div>
-            </div>
+
+              {executionStatus === "completed" && (
+                <div className="mt-5 rounded-3xl border border-blue-200 bg-blue-50 p-4">
+                  <p className="text-sm font-semibold text-blue-900">Next upgrade ideas</p>
+                  <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-blue-900">
+                    {NEXT_UPGRADE_SUGGESTIONS.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+
+            <section
+              ref={setSectionRef("review")}
+              data-section-key="review"
+              className="scroll-mt-32 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
+            >
+              <div className="mb-4">
+                <p className="text-lg font-semibold text-slate-900">Review</p>
+                <p className="text-sm text-slate-600">
+                  Use this section after a task completes so you can decide whether the result is safe to keep moving with.
+                </p>
+              </div>
+
+              {lastTask ? (
+                <>
+                  <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                    <p>
+                      <span className="font-semibold text-slate-900">Latest task:</span> {lastTask.instruction}
+                    </p>
+                    <p className="mt-1">
+                      <span className="font-semibold text-slate-900">Recorded:</span> {lastTask.timestamp}
+                    </p>
+                  </div>
+                  {renderReviewContent(latestReview)}
+                </>
+              ) : (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                  Run a command first. Review guidance will appear here after Builder Core responds.
+                </div>
+              )}
+            </section>
+
+            <section
+              ref={setSectionRef("download")}
+              data-section-key="download"
+              className="scroll-mt-32 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
+            >
+              <div className="mb-4">
+                <p className="text-lg font-semibold text-slate-900">Download</p>
+                <p className="text-sm text-slate-600">
+                  Keep the install steps close by so Builder Core is easy to open on your phone any time.
+                </p>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-[1fr,1fr]">
+                <div className="space-y-4 text-sm text-slate-700">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="mb-2 font-semibold text-slate-900">iPhone</p>
+                    <ul className="list-disc space-y-1 pl-5">
+                      <li>Open the app in Safari.</li>
+                      <li>Tap Share.</li>
+                      <li>Add to Home Screen.</li>
+                    </ul>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="mb-2 font-semibold text-slate-900">Android</p>
+                    <ul className="list-disc space-y-1 pl-5">
+                      <li>Open the app in Chrome.</li>
+                      <li>Tap the menu icon.</li>
+                      <li>Install App.</li>
+                    </ul>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                    <p className="mb-2 font-semibold text-slate-900">App Link</p>
+                    <p>{FRONTEND_APP_URL}</p>
+                    <p className="mt-2 text-xs text-slate-500">No App Store needed.</p>
+                  </div>
+
+                  <div className="flex flex-col gap-3 sm:flex-row">
+                    <button
+                      type="button"
+                      onClick={handleOpenAppLink}
+                      className="w-full rounded-2xl bg-black px-5 py-3 text-sm font-medium text-white sm:w-auto"
+                    >
+                      Open App Link
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCopyAppLink}
+                      className="w-full rounded-2xl border border-black px-5 py-3 text-sm font-medium text-black sm:w-auto"
+                    >
+                      Copy App Link
+                    </button>
+                  </div>
+
+                  {installMessage && <p className="text-sm text-slate-600">{installMessage}</p>}
+                </div>
+              </div>
+            </section>
+
+            <section
+              ref={setSectionRef("help")}
+              data-section-key="help"
+              className="scroll-mt-32 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
+            >
+              <div className="mb-4">
+                <p className="text-lg font-semibold text-slate-900">Help</p>
+                <p className="text-sm text-slate-600">
+                  Builder Core now uses one compact task system: let each stage finish, then press Next to move forward.
+                </p>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="mb-3 font-semibold text-slate-900">What each tab means</p>
+                  <ul className="list-disc space-y-2 pl-5 text-sm text-slate-700">
+                    <li>
+                      <span className="font-semibold text-slate-900">Command:</span> chat with Builder Core and send the next request.
+                    </li>
+                    <li>
+                      <span className="font-semibold text-slate-900">Progress:</span> follow the stage bar and use the single Next button.
+                    </li>
+                    <li>
+                      <span className="font-semibold text-slate-900">Review:</span> confirm the latest task result before trusting the rollout.
+                    </li>
+                    <li>
+                      <span className="font-semibold text-slate-900">Download:</span> install the app on your phone or copy the live link.
+                    </li>
+                    <li>
+                      <span className="font-semibold text-slate-900">Help:</span> get quick guidance when you are unsure what to do next.
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="mb-3 font-semibold text-slate-900">How the stage flow works</p>
+                  <ul className="list-disc space-y-2 pl-5 text-sm text-slate-700">
+                    <li>Each stage automatically progresses from 1% to 100%.</li>
+                    <li>When a stage reaches 100%, Builder Core pauses and tells you to press Next.</li>
+                    <li>The only manual control is the Next button in the compact task bar.</li>
+                    <li>The final stage ends with Done - ready for next task.</li>
+                  </ul>
+                </div>
+              </div>
+            </section>
           </div>
-        )}
+        </div>
       </div>
+
+      <nav className="fixed bottom-0 left-0 right-0 z-20 border-t border-slate-200 bg-white/95 px-2 py-2 shadow-[0_-10px_30px_rgba(15,23,42,0.08)] backdrop-blur lg:hidden">
+        <div className="grid grid-cols-5 gap-2">
+          {COMMAND_CENTER_TABS.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => scrollToSection(tab.key)}
+              className={
+                activeTab === tab.key
+                  ? "rounded-2xl bg-black px-2 py-2 text-[11px] font-semibold text-white"
+                  : "rounded-2xl border border-slate-200 bg-slate-50 px-2 py-2 text-[11px] font-medium text-slate-600"
+              }
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </nav>
     </main>
   );
 }
