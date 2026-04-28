@@ -1,132 +1,136 @@
 # Builder Core Command Center
 
 ## Purpose
-Builder Core is a cloud-first AI command center for phone and desktop use.
-
-The goal is one place where the user can submit a request, see the planner output, review the Codex-ready task, track progress stage by stage, review the result, and move toward safe automation without depending on laptop storage.
+Builder Core is becoming a cloud-first AI command center that can accept one instruction, respond through backend chat, record a real task, track rollout progress, and prepare for future automation without depending on laptop storage.
 
 ## Current Workflow
-User -> Command Center -> Backend chat -> Planner -> Codex task -> Stage bar -> GitHub tracking -> Review
+User -> Command Center -> `/chat` + `/automation/tasks` -> task polling -> GitHub tracking -> review
 
-1. The user enters one instruction in the Command tab.
-2. Builder Core calls the backend `/chat` route.
-3. The app shows the assistant reply, planner output, and Codex-ready prompt inline.
-4. The compact task bar starts the progress flow at Planning.
-5. The Progress tab also reads live GitHub repo and workflow status from `GET /github/status`.
-6. Each stage advances from 1% to 100%.
-7. When a stage completes, Builder Core pauses and waits for the user to press `Next`.
-8. After the final stage, review guidance and next-upgrade ideas stay visible in the app.
+### What happens now
+1. The user enters a command in the Command tab.
+2. Builder Core calls `POST /chat` for the assistant reply, plan, Codex-ready task, and next steps.
+3. At the same time, Builder Core creates a task with `POST /automation/tasks`.
+4. The frontend stores the returned task ID and polls `GET /automation/tasks/{id}`.
+5. The compact task bar continues to run the simple stage flow with the single `Next` button.
+6. The Progress tab calls `GET /automation/github-status` for the latest checks and deploy state.
+7. Review guidance stays visible after the task completes.
 
-## Simplified Task Bar
-The old multi-button pipeline has been replaced with one compact task bar.
+## Live Backend Endpoints
 
-### What the task bar shows
-- current task name
-- current stage name
-- stage progress percent
-- progress bar
-- one `Next` button
+### Task storage
+- `POST /automation/tasks`
+- `GET /automation/tasks`
+- `GET /automation/tasks/{id}`
+- `PATCH /automation/tasks/{id}`
 
-### Stages
-1. Planning
-2. Codex Working
-3. GitHub Deploying
-4. Cloud Run Live
-5. App Refreshed
+### GitHub tracking
+- `GET /automation/github-status`
 
-### How it works
-- When a task starts, `Planning` begins at `1%`.
-- The current stage automatically progresses to `100%`.
-- When a stage reaches `100%`, Builder Core shows a completion message and waits.
-- The user presses `Next` to move to the next stage.
-- The next stage resets to `1%`.
-- The final stage ends with `Done - ready for next task`.
+### File storage
+- `POST /storage/files`
+- `GET /storage/files`
+- `GET /storage/files/{id}`
+- `DELETE /storage/files/{id}`
 
-## Approval And Permission
-- Automation permission granted by user is shown in the app.
-- Future: Codex will run automatically after approval.
-- No real automatic repo modification happens yet.
+## Task Storage Model
+Each automation task stores:
+- `id`
+- `command`
+- `status`
+- `current_stage`
+- `progress`
+- `github_commit`
+- `workflow_status`
+- `created_at`
+- `updated_at`
 
-## GitHub Tracking
-Builder Core now includes a lightweight GitHub tracking layer for the current public repo.
+### Storage behavior
+- Firestore-ready structure exists now through the backend task service.
+- Local JSON fallback is used automatically when Firestore is not enabled.
+- This keeps the API stable while the storage backend changes later.
 
-### What it shows
-- latest tracked commit
-- latest `Repo Checks` workflow state
-- latest `Deploy Cloud Run` workflow state
-- current summary
-- next suggested action
+## File Storage Foundation
+Builder Core now includes a file storage service abstraction.
 
-### Backend endpoint
-- `GET /github/status`
+### Local fallback today
+- metadata file
+- local runtime files
 
-### Configuration
-- `GITHUB_OWNER`
-- `GITHUB_REPO`
-- `GITHUB_DEFAULT_BRANCH`
-- `GITHUB_STATUS_TOKEN` for higher GitHub API limits
-- `GITHUB_CHECKS_WORKFLOW_NAME`
-- `GITHUB_DEPLOY_WORKFLOW_NAME`
+### Cloud-ready direction
+- Firestore for task and history records
+- Google Cloud Storage for uploaded or generated files
+- Secret Manager for GitHub tokens, API keys, and future Codex credentials
 
-## Future Workflow
-User -> Builder Core -> Backend task -> Auto Codex -> GitHub -> Deploy -> Status polling -> App refresh
+## Environment Variables
+These belong on the backend only.
 
-Future automation should work like this:
-1. The user enters a task directly in Builder Core.
-2. The backend creates a persistent cloud task record.
-3. After approval and authentication, Builder Core triggers Codex automatically.
-4. GitHub receives the change request.
-5. GitHub Actions deploys after checks pass.
-6. The app polls task and deploy status from the backend.
-7. The UI updates automatically and the live app refreshes when the release is ready.
+### Storage
+- `FIRESTORE_ENABLED=false`
+- `GCP_PROJECT_ID=`
+- `GCS_BUCKET_NAME=`
 
-## Cloud-First Storage Plan
-Builder Core is moving toward cloud-first storage and execution.
+### GitHub
+- `GITHUB_TOKEN=`
+- `GITHUB_OWNER=jagangill001`
+- `GITHUB_REPO=builder-core`
+- `GITHUB_DEFAULT_BRANCH=main`
+- `GITHUB_CHECKS_WORKFLOW_NAME=Repo Checks`
+- `GITHUB_DEPLOY_WORKFLOW_NAME=Deploy Cloud Run`
+
+If GitHub is not configured, Builder Core returns a safe message instead of failing:
+- `GitHub status not connected`
+
+## Cloud-First Architecture
 
 ### Firestore
-- tasks
 - commands
+- tasks
 - progress
 - history
 
 ### Cloud Storage
+- uploaded files
 - generated files
-- uploads
 
 ### Secret Manager
+- GitHub token
 - API keys
+- future Codex credentials
 
 ### Cloud Run
-- backend
-- frontend
+- backend runtime
+- frontend runtime
 
 ### GitHub
-- code source
+- code source of truth
 
 Important note:
-- Laptop is only control device. All data will live in cloud.
+- Laptop and phone are control devices only, not permanent storage.
 
-## Future Backend Endpoints
-These endpoints are planned but not implemented yet:
+## Future Workflow
+User -> Builder Core -> backend task -> auto Codex -> GitHub -> deploy -> status polling -> app refresh
 
-### Automation
-- `POST /automation/tasks`
-- `GET /automation/tasks/{id}`
+### Next automation phase
+1. User submits the command directly in Builder Core.
+2. Backend creates the persistent cloud task.
+3. After authentication and approval, Builder Core triggers Codex automatically.
+4. GitHub receives the change request.
+5. GitHub Actions deploys after checks pass.
+6. Builder Core polls task, workflow, and deploy status from the backend.
+7. The UI updates automatically and refreshes when the rollout is live.
+
+## Future Endpoints
+Still planned:
 - `GET /automation/history`
+- `POST /storage/files` with signed-upload support
+- `GET /storage/files` with richer cloud metadata
 
-### Storage
-- `POST /storage/files`
-- `GET /storage/files`
-
-## App Navigation
-Builder Core keeps app-style navigation so the main areas stay easy to reach on phone or desktop.
-
-### Tabs
-- `Command`: chat with Builder Core and submit the next request
-- `Progress`: follow the compact stage bar and one-button flow
-- `Review`: confirm the latest task result and safe next steps
+## Navigation Meaning
+- `Command`: talk to Builder Core and submit the next request
+- `Progress`: watch the tracked stage bar and GitHub status
+- `Review`: confirm the latest task result before trusting it
 - `Download`: install the app on your phone or copy the live link
-- `Help`: get quick guidance when you are unsure what to do next
+- `Help`: quick guidance for the current operating flow
 
 ## Logs, Auth, And Safety
 - Authentication is required before future automation can act.
@@ -138,5 +142,5 @@ Builder Core keeps app-style navigation so the main areas stay easy to reach on 
 - Prefer original repo-specific implementations.
 - Do not paste recognizable third-party snippets.
 - Keep the code easy to read and easy to review.
-- Use licensed frameworks such as Next.js, React, and FastAPI in a normal supported way.
+- Use licensed frameworks such as Next.js, React, FastAPI, and SQLAlchemy in a normal supported way.
 - Keep the project safe for commercial use by avoiding unknown copyrighted code.

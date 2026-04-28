@@ -9,6 +9,8 @@ const API_BASE = (
 ).replace(/\/$/, "");
 
 const FRONTEND_APP_URL = "https://builder-core-frontend-599596796788.us-central1.run.app";
+const DEFAULT_TASK_TRACKING_MESSAGE =
+  "Cloud-first task tracking active. Local fallback used if Firestore is not enabled.";
 
 const COMMAND_CENTER_TABS = [
   { key: "command", label: "Command" },
@@ -139,6 +141,30 @@ type GithubStatusResponse = {
   error?: string;
 };
 
+type AutomationTask = {
+  id: string;
+  command: string;
+  project_name?: string;
+  status: string;
+  current_stage: string;
+  progress: number;
+  github_commit?: string | null;
+  workflow_status?: string | null;
+  created_at: string;
+  updated_at: string;
+  storage_backend?: string;
+  storage_message?: string;
+};
+
+type AutomationTaskResponse = {
+  ok?: boolean;
+  message?: string;
+  item?: AutomationTask;
+  items?: AutomationTask[];
+  storage_backend?: string;
+  storage_message?: string;
+};
+
 type CommandTask = {
   instruction: string;
   planner: string;
@@ -173,6 +199,18 @@ type ChatEntry = {
   review?: ReviewSummary;
   timestamp: string;
 };
+
+function buildTaskTrackingSummary(task: AutomationTask, storageMessage: string) {
+  return [
+    `Task ID: ${task.id}`,
+    `Storage: ${task.storage_backend ?? "local_json"}`,
+    `Stage: ${task.current_stage}`,
+    `Progress: ${task.progress}%`,
+    task.workflow_status ? `Workflow: ${task.workflow_status}` : "Workflow: waiting for GitHub status sync",
+    "",
+    storageMessage
+  ].join("\n");
+}
 
 function buildCodexPrompt(instruction: string, projectName: string) {
   return [
@@ -428,6 +466,55 @@ function getReviewBadgeClass(status: ReviewStatus) {
   return "border border-amber-200 bg-amber-100 text-amber-700";
 }
 
+function getTaskStageIndexFromName(stageName?: string | null) {
+  if (!stageName) {
+    return -1;
+  }
+
+  const normalized = stageName.trim().toLowerCase().replaceAll(" ", "_");
+  return TASK_STAGE_DEFINITIONS.findIndex((stage) => {
+    const stageKey = stage.key.toLowerCase();
+    const stageLabel = stage.label.trim().toLowerCase().replaceAll(" ", "_");
+    return normalized === stageKey || normalized === stageLabel;
+  });
+}
+
+function normalizeExecutionStatusValue(status?: string | null): ExecutionStatus {
+  if (status === "completed") {
+    return "completed";
+  }
+
+  if (status === "awaiting_next") {
+    return "awaiting_next";
+  }
+
+  if (status === "active") {
+    return "active";
+  }
+
+  return "idle";
+}
+
+function buildWorkflowStatusLabel(githubStatus: GithubStatusResponse | null) {
+  if (githubStatus?.deploy_workflow?.conclusion) {
+    return `deploy:${githubStatus.deploy_workflow.conclusion}`;
+  }
+
+  if (githubStatus?.deploy_workflow?.status) {
+    return `deploy:${githubStatus.deploy_workflow.status}`;
+  }
+
+  if (githubStatus?.checks_workflow?.conclusion) {
+    return `checks:${githubStatus.checks_workflow.conclusion}`;
+  }
+
+  if (githubStatus?.checks_workflow?.status) {
+    return `checks:${githubStatus.checks_workflow.status}`;
+  }
+
+  return githubStatus?.summary ?? "not_connected";
+}
+
 function getGithubTrackingBadgeClass(state: "checking" | "online" | "offline") {
   if (state === "online") {
     return "border border-green-200 bg-green-100 text-green-700";
@@ -646,6 +733,9 @@ export default function Home() {
   const [taskStageIndex, setTaskStageIndex] = useState(-1);
   const [taskStageProgress, setTaskStageProgress] = useState(0);
   const [activeTaskInstruction, setActiveTaskInstruction] = useState("");
+  const [trackedTaskId, setTrackedTaskId] = useState("");
+  const [trackedTask, setTrackedTask] = useState<AutomationTask | null>(null);
+  const [taskTrackingMessage, setTaskTrackingMessage] = useState(DEFAULT_TASK_TRACKING_MESSAGE);
   const [installMessage, setInstallMessage] = useState("");
   const [lastTask, setLastTask] = useState<CommandTask | null>(null);
   const [completedTaskId, setCompletedTaskId] = useState("");
@@ -663,6 +753,7 @@ export default function Home() {
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Partial<Record<CommandCenterTabKey, HTMLElement | null>>>({});
+  const lastSyncedTaskPayloadRef = useRef("");
 
   const taskStages = useMemo(() => buildTaskStages(taskStageIndex, executionStatus), [taskStageIndex, executionStatus]);
   const currentTaskStage = taskStageIndex >= 0 ? TASK_STAGE_DEFINITIONS[taskStageIndex] : null;
@@ -677,11 +768,12 @@ export default function Home() {
     taskStageIndex < TASK_STAGE_DEFINITIONS.length - 1;
 
   const taskBarTaskName =
-    activeTaskInstruction || lastTask?.instruction || "Run a command to start the next task";
+    activeTaskInstruction || trackedTask?.command || lastTask?.instruction || "Run a command to start the next task";
   const githubRepoLabel = githubStatus?.repo ?? "jagangill001/builder-core";
   const githubBranchLabel = githubStatus?.branch ?? "main";
   const githubChecksWorkflow = githubStatus?.checks_workflow ?? null;
   const githubDeployWorkflow = githubStatus?.deploy_workflow ?? null;
+  const effectiveTaskId = trackedTask?.id || trackedTaskId;
   const githubStatusSummary =
     githubStatus?.summary ??
     (githubTrackingState === "checking"
@@ -745,7 +837,7 @@ export default function Home() {
     }
 
     try {
-      const response = await fetch(`${API_BASE}/github/status`);
+      const response = await fetch(`${API_BASE}/automation/github-status`);
       const data = (await response.json()) as GithubStatusResponse;
 
       if (!response.ok) {
@@ -768,6 +860,56 @@ export default function Home() {
       setGithubTrackingState("offline");
       setGithubCheckedAt(formatTimestamp(new Date()));
     }
+  }
+
+  async function createAutomationTask(command: string, projectName: string) {
+    const response = await fetch(`${API_BASE}/automation/tasks`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        command,
+        project_name: projectName,
+        status: "active",
+        current_stage: "Planning",
+        progress: 1
+      })
+    });
+
+    const data = (await response.json()) as AutomationTaskResponse;
+    if (!response.ok || !data.ok || !data.item) {
+      throw new Error(typeof data.message === "string" ? data.message : "Task creation failed.");
+    }
+
+    return data;
+  }
+
+  async function loadAutomationTask(taskId: string) {
+    const response = await fetch(`${API_BASE}/automation/tasks/${taskId}`);
+    const data = (await response.json()) as AutomationTaskResponse;
+    if (!response.ok || !data.ok || !data.item) {
+      throw new Error(typeof data.message === "string" ? data.message : "Task fetch failed.");
+    }
+
+    return data;
+  }
+
+  async function patchAutomationTask(taskId: string, payload: Record<string, unknown>) {
+    const response = await fetch(`${API_BASE}/automation/tasks/${taskId}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = (await response.json()) as AutomationTaskResponse;
+    if (!response.ok || !data.ok || !data.item) {
+      throw new Error(typeof data.message === "string" ? data.message : "Task update failed.");
+    }
+
+    return data;
   }
 
   async function loadProjects() {
@@ -798,6 +940,87 @@ export default function Home() {
 
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!trackedTaskId) {
+      return;
+    }
+
+    const syncTask = async () => {
+      try {
+        const data = await loadAutomationTask(trackedTaskId);
+        setTrackedTask(data.item ?? null);
+        if (data.storage_message) {
+          setTaskTrackingMessage(data.storage_message);
+        }
+      } catch {
+        return;
+      }
+    };
+
+    void syncTask();
+    const interval = window.setInterval(() => {
+      void syncTask();
+    }, 4000);
+
+    return () => window.clearInterval(interval);
+  }, [trackedTaskId]);
+
+  useEffect(() => {
+    if (!trackedTaskId) {
+      return;
+    }
+
+    const stageLabel = currentTaskStage?.label ?? "Idle";
+    const payload = {
+      status: executionStatus,
+      current_stage: stageLabel,
+      progress: taskStageProgress,
+      github_commit: githubStatus?.latest_commit?.short_sha ?? null,
+      workflow_status: buildWorkflowStatusLabel(githubStatus)
+    };
+    const payloadSignature = JSON.stringify(payload);
+
+    const interval = window.setInterval(() => {
+      if (payloadSignature === lastSyncedTaskPayloadRef.current) {
+        return;
+      }
+
+      void patchAutomationTask(trackedTaskId, payload)
+        .then((data) => {
+          lastSyncedTaskPayloadRef.current = payloadSignature;
+          setTrackedTask(data.item ?? null);
+          if (data.storage_message) {
+            setTaskTrackingMessage(data.storage_message);
+          }
+        })
+        .catch(() => {
+          return;
+        });
+    }, 1200);
+
+    return () => window.clearInterval(interval);
+  }, [currentTaskStage, executionStatus, githubStatus, taskStageProgress, trackedTaskId]);
+
+  useEffect(() => {
+    if (!trackedTask) {
+      return;
+    }
+
+    const trackedStageIndex = getTaskStageIndexFromName(trackedTask.current_stage);
+    if (trackedStageIndex >= 0 && trackedStageIndex !== taskStageIndex) {
+      setTaskStageIndex(trackedStageIndex);
+    }
+
+    if (typeof trackedTask.progress === "number" && trackedTask.progress !== taskStageProgress) {
+      setTaskStageProgress(trackedTask.progress);
+    }
+
+    const normalizedStatus = normalizeExecutionStatusValue(trackedTask.status);
+    if (normalizedStatus !== executionStatus) {
+      setExecutionStatus(normalizedStatus);
+    }
+  }, [executionStatus, taskStageIndex, taskStageProgress, trackedTask]);
 
   useEffect(() => {
     const nodes = Object.entries(sectionRefs.current).filter((entry): entry is [CommandCenterTabKey, HTMLElement] => Boolean(entry[1]));
@@ -978,6 +1201,10 @@ export default function Home() {
     setTaskStageProgress(1);
     setCompletedTaskId("");
     setActiveTab("command");
+    setTrackedTaskId("");
+    setTrackedTask(null);
+    setTaskTrackingMessage(DEFAULT_TASK_TRACKING_MESSAGE);
+    lastSyncedTaskPayloadRef.current = "";
 
     appendChatEntries([
       {
@@ -997,24 +1224,59 @@ export default function Home() {
       }
     ]);
 
+    let createdTaskId = "";
+
     try {
-      const response = await fetch(`${API_BASE}/chat`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          instruction,
-          project_name: projectName
-        })
-      });
+      const [chatResult, taskResult] = await Promise.allSettled([
+        fetch(`${API_BASE}/chat`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            instruction,
+            project_name: projectName
+          })
+        }).then(async (response) => {
+          const data = (await response.json()) as CommandCenterChatResponse;
+          if (!response.ok || !data.ok) {
+            throw new Error(typeof data.message === "string" ? data.message : "Chat request failed.");
+          }
 
-      const data = (await response.json()) as CommandCenterChatResponse;
+          return data;
+        }),
+        createAutomationTask(instruction, projectName)
+      ]);
 
-      if (!response.ok || !data.ok) {
-        throw new Error(typeof data.message === "string" ? data.message : "Chat request failed.");
+      let taskTrackingEntry: ChatEntry | null = null;
+      if (taskResult.status === "fulfilled" && taskResult.value.item) {
+        const createdTask = taskResult.value.item;
+        createdTaskId = createdTask.id;
+        const storageMessage = taskResult.value.storage_message ?? createdTask.storage_message ?? DEFAULT_TASK_TRACKING_MESSAGE;
+
+        setTrackedTaskId(createdTask.id);
+        setTrackedTask(createdTask);
+        setTaskTrackingMessage(storageMessage);
+
+        taskTrackingEntry = {
+          id: `task-${Date.now()}`,
+          role: "assistant",
+          kind: "text",
+          title: "Task Tracking",
+          content: buildTaskTrackingSummary(createdTask, storageMessage),
+          timestamp: formatTimestamp(new Date())
+        };
+      } else {
+        setTaskTrackingMessage(
+          "Cloud-first task tracking is not available right now. Builder Core will keep the task bar active locally."
+        );
       }
 
+      if (chatResult.status === "rejected") {
+        throw chatResult.reason instanceof Error ? chatResult.reason : new Error("Chat request failed.");
+      }
+
+      const data = chatResult.value;
       const assistantReply =
         typeof data.assistant_reply === "string" && data.assistant_reply
           ? data.assistant_reply
@@ -1087,6 +1349,7 @@ export default function Home() {
               }
             ]
           : []),
+        ...(taskTrackingEntry ? [taskTrackingEntry] : []),
         ...(nextStepsSummary
           ? [
               {
@@ -1105,6 +1368,17 @@ export default function Home() {
       setTaskStageIndex(-1);
       setTaskStageProgress(0);
       setActiveTaskInstruction("");
+
+      if (createdTaskId) {
+        void patchAutomationTask(createdTaskId, {
+          status: "idle",
+          current_stage: "Planning",
+          progress: 0,
+          workflow_status: "chat_failed"
+        }).catch(() => {
+          return;
+        });
+      }
 
       appendChatEntries([
         {
@@ -1160,7 +1434,7 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f7f7f4] text-slate-900">
+    <main className="min-h-screen overflow-x-hidden bg-[#f7f7f4] text-slate-900">
       <div className="border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div>
@@ -1204,6 +1478,9 @@ export default function Home() {
                 </div>
 
                 <p className="truncate text-sm font-semibold text-slate-900 sm:text-base">{taskBarTaskName}</p>
+                {effectiveTaskId && (
+                  <p className="mt-1 text-xs font-medium text-slate-500">Task ID: {effectiveTaskId}</p>
+                )}
                 <p className="mt-1 text-sm text-slate-600">{taskStatusText}</p>
 
                 <div className="mt-3 flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -1217,7 +1494,8 @@ export default function Home() {
                   />
                 </div>
 
-                <p className="mt-3 text-xs text-slate-500">Automation permission granted by user.</p>
+                <p className="mt-3 text-xs text-slate-500">{taskTrackingMessage}</p>
+                <p className="mt-1 text-xs text-slate-500">Automation permission granted by user.</p>
                 <p className="mt-1 text-xs text-slate-500">Future: Codex will run automatically after approval.</p>
                 <p className="mt-2 text-xs text-slate-500">{taskNextText}</p>
               </div>
@@ -1381,6 +1659,7 @@ export default function Home() {
                     <div>
                       <p className="text-sm font-semibold text-slate-900">Current Task</p>
                       <p className="text-xs text-slate-500">{taskBarTaskName}</p>
+                      {effectiveTaskId && <p className="mt-1 text-xs text-slate-500">Task ID: {effectiveTaskId}</p>}
                     </div>
                     <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
                       {getExecutionStatusLabel(executionStatus)}
@@ -1399,6 +1678,7 @@ export default function Home() {
                   </div>
 
                   <p className="mt-3 text-sm font-medium text-slate-900">{taskStatusText}</p>
+                  <p className="mt-2 text-sm text-slate-600">{taskTrackingMessage}</p>
                   <p className="mt-2 text-sm text-slate-600">{taskNextText}</p>
                 </div>
 
@@ -1530,7 +1810,7 @@ export default function Home() {
                         {githubCheckedAt ? `Last checked ${githubCheckedAt}` : "Builder Core will record the next GitHub status refresh here."}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        Auto-refresh runs every minute. Add `GITHUB_STATUS_TOKEN` later if you want higher GitHub API limits.
+                        Auto-refresh runs every minute. Add `GITHUB_TOKEN` later if you want higher GitHub API limits.
                       </p>
                     </div>
                   </div>

@@ -1,103 +1,135 @@
 # Builder Core
 
-Builder Core is a cloud-first AI command center for planning changes, generating Codex-ready tasks, tracking progress stage by stage, reviewing outcomes, and operating the live app from phone or desktop.
+Builder Core is a cloud-first AI command center for planning repo changes, generating Codex-ready tasks, tracking rollout progress, and reviewing the latest result from phone or desktop.
 
 ## Live Services
 - Frontend: https://builder-core-frontend-599596796788.us-central1.run.app
 - Backend: https://builder-core-599596796788.us-central1.run.app
 
-## What The App Does
-- Accepts one instruction in the Command tab.
-- Calls the backend `/chat` route and shows the assistant reply inline.
-- Generates planner output and a Codex-ready task in the same conversation flow.
-- Runs a compact stage bar that moves one stage at a time with a single `Next` button.
-- Reads `/github/status` to show the latest repo, checks, and deploy workflow state.
-- Shows review guidance after a task completes.
-- Supports phone installation with no App Store needed.
+## What Works Now
+- The Command Center sends instructions to `POST /chat` and shows the assistant reply inline.
+- The frontend creates a real automation task with `POST /automation/tasks`.
+- The app polls `GET /automation/tasks/{id}` to keep task ID, stage, progress, and workflow status in sync.
+- The compact progress bar still runs with the manual `Next` fallback so the current flow stays safe.
+- The Progress tab reads GitHub workflow data from `GET /automation/github-status`.
+- The app keeps working on phone with the existing PWA install flow.
 
-## Simplified Task Progress
-Builder Core now uses a simple stage-by-stage task system.
+## Current Backend Endpoints
 
-### Stages
-1. Planning
-2. Codex Working
-3. GitHub Deploying
-4. Cloud Run Live
-5. App Refreshed
+### Chat And Builder
+- `POST /chat`
+- `POST /plan`
+- `GET /projects`
+- `POST /projects`
+- `GET /history`
+- `GET /project-files`
+- `GET /run-info`
+- `GET /system/status`
 
-### How it works
-- A task starts in `Planning` at `1%`.
-- The current stage automatically advances to `100%`.
-- When it reaches `100%`, Builder Core pauses and tells the user to press `Next`.
-- Pressing `Next` starts the next stage at `1%`.
-- The final stage ends with `Done - ready for next task`.
+### Automation Tasks
+- `POST /automation/tasks`
+- `GET /automation/tasks`
+- `GET /automation/tasks/{id}`
+- `PATCH /automation/tasks/{id}`
+- `GET /automation/github-status`
 
-## Install On Your Phone
-### iPhone Or iPad
-1. Open the frontend URL in Safari.
-2. Tap the Share button.
-3. Tap Add to Home Screen.
-4. Open Builder Core from your home screen.
+### File Storage
+- `POST /storage/files`
+- `GET /storage/files`
+- `GET /storage/files/{id}`
+- `DELETE /storage/files/{id}`
 
-### Android
-1. Open the frontend URL in Chrome.
-2. Open the browser menu.
-3. Tap Install app or Add to Home screen.
-4. Open Builder Core from the installed icon.
+## Cloud-First Task Tracking
+Builder Core now stores task state through a storage abstraction.
 
-## Cloud-First Plan
-Builder Core is moving toward cloud-first storage and automation.
+### Task fields
+- `id`
+- `command`
+- `status`
+- `current_stage`
+- `progress`
+- `github_commit`
+- `workflow_status`
+- `created_at`
+- `updated_at`
+
+### How it works today
+- If Firestore is not enabled, tasks are stored in `backend/runtime_data/automation_tasks.json`.
+- The frontend still works with the manual `Next` button, but the task record is now real and pollable.
+- GitHub workflow details are synced into the task record from the frontend-safe backend flow.
+
+## Cloud-First Storage Foundation
 
 ### Firestore
-- tasks
+Planned source of truth for:
 - commands
+- tasks
 - progress
 - history
 
 ### Cloud Storage
+Prepared for:
+- uploaded files
 - generated files
-- uploads
 
 ### Secret Manager
+Recommended home for:
+- GitHub token
 - API keys
+- future Codex credentials
 
 ### Cloud Run
-- backend
-- frontend
+- backend runtime
+- frontend runtime
 
 ### GitHub
-- code source
+- code source of truth
 
 Important note:
-- Laptop is only control device. All data will live in cloud.
+- Laptop is only the control device. All long-term task and file storage should live in cloud services.
 
-## Future Backend Endpoints
-These are documented for the next automation phase and are not implemented yet.
-
-### Automation
-- `POST /automation/tasks`
-- `GET /automation/tasks/{id}`
-- `GET /automation/history`
+## Environment Variables
+Builder Core reads environment variables only from the backend runtime.
 
 ### Storage
-- `POST /storage/files`
-- `GET /storage/files`
+- `FIRESTORE_ENABLED=false`
+- `GCP_PROJECT_ID=`
+- `GCS_BUCKET_NAME=`
+
+### GitHub
+- `GITHUB_TOKEN=`
+- `GITHUB_OWNER=jagangill001`
+- `GITHUB_REPO=builder-core`
+- `GITHUB_DEFAULT_BRANCH=main`
+- `GITHUB_CHECKS_WORKFLOW_NAME=Repo Checks`
+- `GITHUB_DEPLOY_WORKFLOW_NAME=Deploy Cloud Run`
+
+See [backend/.env.example](backend/.env.example) for the starter shape.
+
+## Local Fallback Behavior
+- If `FIRESTORE_ENABLED` is not `true`, Builder Core uses local JSON task storage.
+- If `GCS_BUCKET_NAME` is missing, Builder Core uses local file storage metadata plus local file fallback.
+- If `GITHUB_TOKEN` is missing, the backend returns `GitHub status not connected` instead of failing the UI.
+
+## Future Endpoints
+These are still planned for the next automation phase:
+- `GET /automation/history`
+- `POST /storage/files` with direct signed-upload flow
+- `GET /storage/files` with richer cloud metadata
 
 ## Deployment Notes
-- Backend is deployed separately to Cloud Run.
-- Frontend is deployed separately to Cloud Run.
+- Backend and frontend are deployed separately to Cloud Run.
 - The frontend uses `NEXT_PUBLIC_API_BASE_URL` or `NEXT_PUBLIC_API_URL` and falls back to the deployed backend URL.
-- GitHub tracking uses `GET /github/status`.
-- Add `GITHUB_STATUS_TOKEN` on the backend later if you want higher GitHub API limits.
+- GitHub status is requested only through the backend so secrets never reach the frontend.
 
 ## Legal And Originality Note
-This project is intended to use original, repo-specific code plus licensed open-source libraries such as Next.js, React, and FastAPI.
+This project is intended to use original, repo-specific code plus licensed open-source libraries such as Next.js, React, FastAPI, and SQLAlchemy.
 
-When adding new features:
-- Prefer fresh implementations over copied snippets.
-- Avoid unknown copyrighted code.
-- Refactor generic patterns into the repo's own structure.
-- Keep changes readable, safe, and suitable for commercial use.
+When adding features:
+- prefer fresh implementations over copied snippets
+- avoid unknown copyrighted code
+- refactor generic patterns into the repo's own structure
+- keep the result readable, safe, and suitable for commercial use
 
 ## License
 This project is released under the MIT License. See `LICENSE` for details.

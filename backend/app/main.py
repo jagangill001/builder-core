@@ -6,11 +6,16 @@ from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import Column, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
+
+try:
+    from app.services import AutomationTaskService, FileStorageService
+except ImportError:
+    from services import AutomationTaskService, FileStorageService
 
 app = FastAPI(title="Builder Core")
 
@@ -38,6 +43,9 @@ DEFAULT_GITHUB_REPO = "builder-core"
 DEFAULT_GITHUB_BRANCH = "main"
 DEFAULT_GITHUB_CHECKS_WORKFLOW = "Repo Checks"
 DEFAULT_GITHUB_DEPLOY_WORKFLOW = "Deploy Cloud Run"
+
+automation_task_service = AutomationTaskService(BASE_DIR)
+file_storage_service = FileStorageService(BASE_DIR)
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
@@ -89,6 +97,36 @@ class BuildRequest(BaseModel):
 
 class ProjectCreate(BaseModel):
     name: str
+
+class AutomationTaskCreate(BaseModel):
+    command: str
+    project_name: Optional[str] = "Default Project"
+    status: Optional[str] = "active"
+    current_stage: Optional[str] = "Planning"
+    progress: Optional[int] = 1
+    github_commit: Optional[str] = None
+    workflow_status: Optional[str] = None
+
+class AutomationTaskUpdate(BaseModel):
+    command: Optional[str] = None
+    project_name: Optional[str] = None
+    status: Optional[str] = None
+    current_stage: Optional[str] = None
+    progress: Optional[int] = None
+    github_commit: Optional[str] = None
+    workflow_status: Optional[str] = None
+
+class StorageFileCreate(BaseModel):
+    filename: str
+    content: str
+    content_type: Optional[str] = "text/plain"
+    task_id: Optional[str] = None
+
+def model_to_dict(model: BaseModel) -> dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(exclude_none=True)
+
+    return model.dict(exclude_none=True)
 
 def safe_name(value: str) -> str:
     return value.strip().replace(" ", "_").replace("-", "_").lower()
@@ -581,7 +619,7 @@ def get_github_repo_config():
     owner = (os.environ.get("GITHUB_OWNER") or DEFAULT_GITHUB_OWNER).strip() or DEFAULT_GITHUB_OWNER
     repo = (os.environ.get("GITHUB_REPO") or DEFAULT_GITHUB_REPO).strip() or DEFAULT_GITHUB_REPO
     branch = (os.environ.get("GITHUB_DEFAULT_BRANCH") or DEFAULT_GITHUB_BRANCH).strip() or DEFAULT_GITHUB_BRANCH
-    token = (os.environ.get("GITHUB_STATUS_TOKEN") or "").strip()
+    token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GITHUB_STATUS_TOKEN") or "").strip()
     checks_workflow = (os.environ.get("GITHUB_CHECKS_WORKFLOW_NAME") or DEFAULT_GITHUB_CHECKS_WORKFLOW).strip() or DEFAULT_GITHUB_CHECKS_WORKFLOW
     deploy_workflow = (os.environ.get("GITHUB_DEPLOY_WORKFLOW_NAME") or DEFAULT_GITHUB_DEPLOY_WORKFLOW).strip() or DEFAULT_GITHUB_DEPLOY_WORKFLOW
 
@@ -708,6 +746,21 @@ def build_github_status_payload():
     token = config["token"]
     repo_label = f"{owner}/{repo}"
 
+    if not token:
+        return {
+            "ok": True,
+            "connected": False,
+            "source": "not_configured",
+            "repo": repo_label,
+            "branch": branch,
+            "configured_with_token": False,
+            "latest_commit": None,
+            "checks_workflow": None,
+            "deploy_workflow": None,
+            "summary": "GitHub status not connected",
+            "next_step": "Next: set GITHUB_TOKEN in the backend environment to enable live GitHub workflow polling."
+        }
+
     commit_url = f"https://api.github.com/repos/{owner}/{repo}/commits/{urlparse.quote(branch, safe='')}"
     runs_url = (
         f"https://api.github.com/repos/{owner}/{repo}/actions/runs"
@@ -747,7 +800,7 @@ def build_github_status_payload():
             "checks_workflow": None,
             "deploy_workflow": None,
             "summary": "GitHub status tracking is not available right now.",
-            "next_step": "Next: try again later or add GITHUB_STATUS_TOKEN for higher GitHub API limits.",
+            "next_step": "Next: try again later or add GITHUB_TOKEN for higher GitHub API limits.",
             "error": f"GitHub API returned HTTP {exc.code}."
         }
     except (urlerror.URLError, json.JSONDecodeError, TimeoutError) as exc:
@@ -836,7 +889,7 @@ def build_next_steps(intent: str, project_name: str, plan: list[str], build_trig
 
     next_steps = [
         "Review the plan and Codex prompt in the conversation before approving the next step.",
-        "Use Send to Codex to continue the simulated automation pipeline.",
+        "Use the compact task bar and Next button to continue the tracked automation stages.",
         f"Run the generated {project_name} project locally after deployment if you want a preview."
     ]
 
@@ -1032,6 +1085,137 @@ def get_project_files(project_name: str):
 def get_run_info(project_name: str):
     return build_run_info_payload(project_name)
 
+@app.post("/automation/tasks")
+def create_automation_task(payload: AutomationTaskCreate):
+    command = payload.command.strip()
+    project_name = normalize_project_name(payload.project_name)
+
+    if not command:
+        return {
+            "ok": False,
+            "message": "Task command is empty.",
+            "storage_backend": automation_task_service.storage_backend,
+            "storage_message": automation_task_service.storage_message
+        }
+
+    item = automation_task_service.create_task(
+        command=command,
+        project_name=project_name,
+        status=payload.status or "active",
+        current_stage=payload.current_stage or "Planning",
+        progress=payload.progress or 1,
+        github_commit=payload.github_commit,
+        workflow_status=payload.workflow_status
+    )
+    return {
+        "ok": True,
+        "message": "Automation task created.",
+        "item": item,
+        "storage_backend": automation_task_service.storage_backend,
+        "storage_message": automation_task_service.storage_message
+    }
+
+@app.get("/automation/tasks")
+def list_automation_tasks():
+    return {
+        "ok": True,
+        "items": automation_task_service.list_tasks(),
+        "storage_backend": automation_task_service.storage_backend,
+        "storage_message": automation_task_service.storage_message
+    }
+
+@app.get("/automation/tasks/{task_id}")
+def get_automation_task(task_id: str):
+    item = automation_task_service.get_task(task_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Automation task not found.")
+
+    return {
+        "ok": True,
+        "item": item,
+        "storage_backend": automation_task_service.storage_backend,
+        "storage_message": automation_task_service.storage_message
+    }
+
+@app.patch("/automation/tasks/{task_id}")
+def update_automation_task(task_id: str, payload: AutomationTaskUpdate):
+    item = automation_task_service.update_task(task_id, model_to_dict(payload))
+    if item is None:
+        raise HTTPException(status_code=404, detail="Automation task not found.")
+
+    return {
+        "ok": True,
+        "message": "Automation task updated.",
+        "item": item,
+        "storage_backend": automation_task_service.storage_backend,
+        "storage_message": automation_task_service.storage_message
+    }
+
+@app.get("/automation/github-status")
+def automation_github_status():
+    return build_github_status_payload()
+
+@app.post("/storage/files")
+def create_storage_file(payload: StorageFileCreate):
+    filename = payload.filename.strip()
+    if not filename:
+        return {
+            "ok": False,
+            "message": "Filename is empty.",
+            "storage_backend": file_storage_service.storage_backend,
+            "storage_message": file_storage_service.storage_message
+        }
+
+    item = file_storage_service.create_file(
+        filename=filename,
+        content=payload.content,
+        content_type=payload.content_type or "text/plain",
+        task_id=payload.task_id
+    )
+    return {
+        "ok": True,
+        "message": "Storage file created.",
+        "item": item,
+        "storage_backend": file_storage_service.storage_backend,
+        "storage_message": file_storage_service.storage_message
+    }
+
+@app.get("/storage/files")
+def list_storage_files():
+    return {
+        "ok": True,
+        "items": file_storage_service.list_files(),
+        "storage_backend": file_storage_service.storage_backend,
+        "storage_message": file_storage_service.storage_message
+    }
+
+@app.get("/storage/files/{file_id}")
+def get_storage_file(file_id: str):
+    item = file_storage_service.get_file(file_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Storage file not found.")
+
+    return {
+        "ok": True,
+        "item": item,
+        "storage_backend": file_storage_service.storage_backend,
+        "storage_message": file_storage_service.storage_message
+    }
+
+@app.delete("/storage/files/{file_id}")
+def delete_storage_file(file_id: str):
+    item = file_storage_service.delete_file(file_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Storage file not found.")
+
+    return {
+        "ok": True,
+        "message": "Storage file deleted.",
+        "item": item,
+        "storage_backend": file_storage_service.storage_backend,
+        "storage_message": file_storage_service.storage_message
+    }
+
 @app.post("/plan")
 def create_plan(payload: BuildRequest):
     instruction = payload.instruction.strip()
@@ -1118,7 +1302,13 @@ def github_status():
         
 @app.get("/system/status")
 def system_status():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "task_storage_backend": automation_task_service.storage_backend,
+        "task_storage_message": automation_task_service.storage_message,
+        "file_storage_backend": file_storage_service.storage_backend,
+        "file_storage_message": file_storage_service.storage_message
+    }
 
 import uvicorn
 
