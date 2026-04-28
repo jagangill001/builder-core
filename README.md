@@ -11,6 +11,7 @@ Builder Core is a cloud-first AI command center for planning changes, generating
 - Calls the backend `/chat` route and shows the assistant reply inline.
 - Generates planner output and a Codex-ready task in the same conversation flow.
 - Runs a compact stage bar that moves one stage at a time with a single `Next` button.
+- Reads `/github/status` to show the latest repo, checks, and deploy workflow state.
 - Shows review guidance after a task completes.
 - Supports phone installation with no App Store needed.
 
@@ -86,6 +87,8 @@ These are documented for the next automation phase and are not implemented yet.
 - Backend is deployed separately to Cloud Run.
 - Frontend is deployed separately to Cloud Run.
 - The frontend uses `NEXT_PUBLIC_API_BASE_URL` or `NEXT_PUBLIC_API_URL` and falls back to the deployed backend URL.
+- GitHub tracking uses `GET /github/status`.
+- Add `GITHUB_STATUS_TOKEN` on the backend later if you want higher GitHub API limits.
 
 ## Legal And Originality Note
 This project is intended to use original, repo-specific code plus licensed open-source libraries such as Next.js, React, and FastAPI.

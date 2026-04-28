@@ -62,11 +62,11 @@ const TASK_STAGE_DEFINITIONS = [
 ] as const;
 
 const NEXT_UPGRADE_SUGGESTIONS = [
-  "Connect GitHub status tracking",
   "Enable real Codex automation",
   "Add live deploy detection",
   "Store tasks in Firestore",
-  "Add multi-project support"
+  "Add multi-project support",
+  "Save GitHub status history"
 ] as const;
 
 type ProjectItem = {
@@ -101,6 +101,42 @@ type ReviewSummary = {
   checklist: ReviewChecklistItem[];
   doItems: string[];
   avoidItems: string[];
+};
+
+type GithubWorkflow = {
+  name?: string;
+  status?: string;
+  conclusion?: string | null;
+  url?: string;
+  event?: string;
+  branch?: string;
+  sha?: string;
+  short_sha?: string;
+  updated_at?: string;
+};
+
+type GithubCommit = {
+  sha?: string;
+  short_sha?: string;
+  message?: string;
+  url?: string;
+  author?: string;
+  timestamp?: string;
+};
+
+type GithubStatusResponse = {
+  ok?: boolean;
+  connected?: boolean;
+  source?: string;
+  repo?: string;
+  branch?: string;
+  configured_with_token?: boolean;
+  latest_commit?: GithubCommit | null;
+  checks_workflow?: GithubWorkflow | null;
+  deploy_workflow?: GithubWorkflow | null;
+  summary?: string;
+  next_step?: string;
+  error?: string;
 };
 
 type CommandTask = {
@@ -392,9 +428,68 @@ function getReviewBadgeClass(status: ReviewStatus) {
   return "border border-amber-200 bg-amber-100 text-amber-700";
 }
 
-function buildReviewSummary(task: CommandTask | null, backendState: "checking" | "online" | "offline"): ReviewSummary {
+function getGithubTrackingBadgeClass(state: "checking" | "online" | "offline") {
+  if (state === "online") {
+    return "border border-green-200 bg-green-100 text-green-700";
+  }
+
+  if (state === "offline") {
+    return "border border-red-200 bg-red-100 text-red-700";
+  }
+
+  return "border border-slate-200 bg-slate-100 text-slate-600";
+}
+
+function getGithubWorkflowBadgeClass(workflow: GithubWorkflow | null | undefined) {
+  if (!workflow) {
+    return "border border-slate-200 bg-slate-100 text-slate-500";
+  }
+
+  if (workflow.status !== "completed") {
+    return "border border-blue-200 bg-blue-100 text-blue-700";
+  }
+
+  if (workflow.conclusion === "success") {
+    return "border border-green-200 bg-green-100 text-green-700";
+  }
+
+  if (workflow.conclusion === "failure" || workflow.conclusion === "timed_out") {
+    return "border border-red-200 bg-red-100 text-red-700";
+  }
+
+  return "border border-amber-200 bg-amber-100 text-amber-700";
+}
+
+function getGithubWorkflowLabel(workflow: GithubWorkflow | null | undefined) {
+  if (!workflow) {
+    return "Not found";
+  }
+
+  if (workflow.status !== "completed") {
+    return workflow.status ? workflow.status.replaceAll("_", " ") : "Running";
+  }
+
+  if (workflow.conclusion) {
+    return workflow.conclusion.replaceAll("_", " ");
+  }
+
+  return "Completed";
+}
+
+function workflowPassed(workflow: GithubWorkflow | null | undefined) {
+  return workflow?.status === "completed" && workflow?.conclusion === "success";
+}
+
+function buildReviewSummary(
+  task: CommandTask | null,
+  backendState: "checking" | "online" | "offline",
+  githubStatus: GithubStatusResponse | null
+): ReviewSummary {
   const hasBuilderSummary = Boolean(task?.builderSummary);
   const backendHealthy = backendState === "online";
+  const githubChecksPassed = workflowPassed(githubStatus?.checks_workflow);
+  const githubDeployPassed = workflowPassed(githubStatus?.deploy_workflow);
+  const githubConnected = githubStatus?.connected === true;
 
   return {
     checklist: [
@@ -412,13 +507,21 @@ function buildReviewSummary(task: CommandTask | null, backendState: "checking" |
       },
       {
         label: "GitHub Actions green?",
-        status: "ready",
-        detail: "Treat this as the approval checkpoint before the deploy stage is trusted."
+        status: githubChecksPassed ? "ready" : "attention",
+        detail: githubChecksPassed
+          ? "GitHub tracking shows the latest Repo Checks run completed successfully."
+          : githubConnected
+            ? "GitHub tracking is connected, but the latest Repo Checks run still needs attention."
+            : "GitHub tracking is not available yet, so confirm the Actions run manually."
       },
       {
         label: "Frontend deployed?",
-        status: "ready",
-        detail: "The later stages assume the frontend moved through deployment successfully."
+        status: githubDeployPassed ? "ready" : "attention",
+        detail: githubDeployPassed
+          ? "GitHub tracking shows the latest deploy workflow completed successfully."
+          : githubConnected
+            ? "GitHub tracking is connected, but the deploy workflow has not reached a successful result yet."
+            : "GitHub deploy status is not connected yet, so verify the live frontend manually."
       },
       {
         label: "Backend still online?",
@@ -536,6 +639,9 @@ export default function Home() {
   const [commandInput, setCommandInput] = useState("");
   const [activeTab, setActiveTab] = useState<CommandCenterTabKey>("command");
   const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">("checking");
+  const [githubTrackingState, setGithubTrackingState] = useState<"checking" | "online" | "offline">("checking");
+  const [githubStatus, setGithubStatus] = useState<GithubStatusResponse | null>(null);
+  const [githubCheckedAt, setGithubCheckedAt] = useState("");
   const [executionStatus, setExecutionStatus] = useState<ExecutionStatus>("idle");
   const [taskStageIndex, setTaskStageIndex] = useState(-1);
   const [taskStageProgress, setTaskStageProgress] = useState(0);
@@ -560,7 +666,7 @@ export default function Home() {
 
   const taskStages = useMemo(() => buildTaskStages(taskStageIndex, executionStatus), [taskStageIndex, executionStatus]);
   const currentTaskStage = taskStageIndex >= 0 ? TASK_STAGE_DEFINITIONS[taskStageIndex] : null;
-  const latestReview = useMemo(() => buildReviewSummary(lastTask, backendStatus), [lastTask, backendStatus]);
+  const latestReview = useMemo(() => buildReviewSummary(lastTask, backendStatus, githubStatus), [lastTask, backendStatus, githubStatus]);
 
   const taskStageCounter =
     currentTaskStage !== null ? `${taskStageIndex + 1}/${TASK_STAGE_DEFINITIONS.length}` : `0/${TASK_STAGE_DEFINITIONS.length}`;
@@ -572,6 +678,20 @@ export default function Home() {
 
   const taskBarTaskName =
     activeTaskInstruction || lastTask?.instruction || "Run a command to start the next task";
+  const githubRepoLabel = githubStatus?.repo ?? "jagangill001/builder-core";
+  const githubBranchLabel = githubStatus?.branch ?? "main";
+  const githubChecksWorkflow = githubStatus?.checks_workflow ?? null;
+  const githubDeployWorkflow = githubStatus?.deploy_workflow ?? null;
+  const githubStatusSummary =
+    githubStatus?.summary ??
+    (githubTrackingState === "checking"
+      ? "Checking the latest GitHub repo and workflow state..."
+      : "GitHub tracking is not available right now.");
+  const githubStatusNextStep =
+    githubStatus?.next_step ??
+    (githubTrackingState === "offline"
+      ? "Next: verify the latest GitHub run manually until tracking reconnects."
+      : "Next: wait for a tracked workflow update.");
 
   let taskProgressText = "No task is running yet.";
   let taskStatusText = "Run a command to begin.";
@@ -596,6 +716,11 @@ export default function Home() {
     }
   }
 
+  if (currentTaskStage?.key === "github_deploying" && githubTrackingState === "online") {
+    taskStatusText = githubStatusSummary;
+    taskNextText = githubStatusNextStep;
+  }
+
   function appendChatEntries(entries: ChatEntry[]) {
     setChatEntries((current) => [...current, ...entries]);
   }
@@ -611,6 +736,37 @@ export default function Home() {
       setBackendStatus("online");
     } catch {
       setBackendStatus("offline");
+    }
+  }
+
+  async function loadGithubStatus(silent = false) {
+    if (!silent) {
+      setGithubTrackingState("checking");
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/github/status`);
+      const data = (await response.json()) as GithubStatusResponse;
+
+      if (!response.ok) {
+        throw new Error(typeof data.error === "string" ? data.error : "GitHub status request failed.");
+      }
+
+      setGithubStatus(data);
+      setGithubTrackingState(data.connected ? "online" : "offline");
+      setGithubCheckedAt(formatTimestamp(new Date()));
+    } catch (error) {
+      setGithubStatus({
+        ok: false,
+        connected: false,
+        repo: githubRepoLabel,
+        branch: githubBranchLabel,
+        summary: "GitHub status tracking is not available right now.",
+        next_step: "Next: verify the latest GitHub run manually until tracking reconnects.",
+        error: error instanceof Error ? error.message : "GitHub status request failed."
+      });
+      setGithubTrackingState("offline");
+      setGithubCheckedAt(formatTimestamp(new Date()));
     }
   }
 
@@ -632,6 +788,15 @@ export default function Home() {
   useEffect(() => {
     void checkBackendStatus();
     void loadProjects();
+    void loadGithubStatus();
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void loadGithubStatus(true);
+    }, 60000);
+
+    return () => window.clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -720,7 +885,7 @@ export default function Home() {
         role: "assistant",
         kind: "review",
         title: "Result Review",
-        review: buildReviewSummary(lastTask, backendStatus),
+        review: buildReviewSummary(lastTask, backendStatus, githubStatus),
         timestamp: formatTimestamp(new Date())
       },
       {
@@ -734,7 +899,7 @@ export default function Home() {
     ]);
 
     setCompletedTaskId(completionId);
-  }, [backendStatus, completedTaskId, executionStatus, lastTask]);
+  }, [backendStatus, completedTaskId, executionStatus, githubStatus, lastTask]);
 
   function setSectionRef(key: CommandCenterTabKey) {
     return (node: HTMLElement | null) => {
@@ -871,6 +1036,7 @@ export default function Home() {
         builderSummary,
         runSummary
       });
+      void loadGithubStatus(true);
 
       appendChatEntries([
         {
@@ -1257,6 +1423,120 @@ export default function Home() {
                 </div>
               </div>
 
+              <div className="mb-5 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">GitHub Tracking</p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Builder Core now reads the repo and workflow state so the GitHub stage is tied to real GitHub status.
+                    </p>
+                  </div>
+                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getGithubTrackingBadgeClass(githubTrackingState)}`}>
+                    {githubTrackingState === "checking" && "Checking"}
+                    {githubTrackingState === "online" && "Connected"}
+                    {githubTrackingState === "offline" && "Unavailable"}
+                  </span>
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-[1.3fr,1fr]">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="mb-3 flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <span>{githubRepoLabel}</span>
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] text-slate-600">
+                        Branch {githubBranchLabel}
+                      </span>
+                    </div>
+
+                    <p className="text-sm font-medium text-slate-900">{githubStatusSummary}</p>
+                    <p className="mt-2 text-sm text-slate-600">{githubStatusNextStep}</p>
+
+                    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Latest Commit</p>
+                      <p className="mt-2 text-sm font-medium text-slate-900">
+                        {githubStatus?.latest_commit?.short_sha
+                          ? `${githubStatus.latest_commit.short_sha} - ${githubStatus.latest_commit.message ?? "No commit message"}`
+                          : "No commit details available yet."}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {githubStatus?.latest_commit?.author && githubStatus?.latest_commit?.timestamp
+                          ? `${githubStatus.latest_commit.author} - ${githubStatus.latest_commit.timestamp}`
+                          : "Builder Core will show commit details when the GitHub API responds."}
+                      </p>
+                      {githubStatus?.latest_commit?.url && (
+                        <a
+                          href={githubStatus.latest_commit.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-2 inline-block text-xs font-semibold text-blue-700"
+                        >
+                          Open commit
+                        </a>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-slate-900">Repo Checks</p>
+                        <span className={`rounded-full px-3 py-1 text-[11px] font-semibold ${getGithubWorkflowBadgeClass(githubChecksWorkflow)}`}>
+                          {getGithubWorkflowLabel(githubChecksWorkflow)}
+                        </span>
+                      </div>
+                      <p className="text-sm text-slate-600">
+                        {githubChecksWorkflow?.updated_at
+                          ? `Updated at ${githubChecksWorkflow.updated_at}`
+                          : "Waiting for a tracked Repo Checks workflow run."}
+                      </p>
+                      {githubChecksWorkflow?.url && (
+                        <a
+                          href={githubChecksWorkflow.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-2 inline-block text-xs font-semibold text-blue-700"
+                        >
+                          Open workflow run
+                        </a>
+                      )}
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-slate-900">Deploy Workflow</p>
+                        <span className={`rounded-full px-3 py-1 text-[11px] font-semibold ${getGithubWorkflowBadgeClass(githubDeployWorkflow)}`}>
+                          {getGithubWorkflowLabel(githubDeployWorkflow)}
+                        </span>
+                      </div>
+                      <p className="text-sm text-slate-600">
+                        {githubDeployWorkflow?.updated_at
+                          ? `Updated at ${githubDeployWorkflow.updated_at}`
+                          : "Waiting for a tracked Deploy Cloud Run workflow run."}
+                      </p>
+                      {githubDeployWorkflow?.url && (
+                        <a
+                          href={githubDeployWorkflow.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-2 inline-block text-xs font-semibold text-blue-700"
+                        >
+                          Open deploy run
+                        </a>
+                      )}
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Status Refresh</p>
+                      <p className="mt-2 text-sm text-slate-700">
+                        {githubCheckedAt ? `Last checked ${githubCheckedAt}` : "Builder Core will record the next GitHub status refresh here."}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Auto-refresh runs every minute. Add `GITHUB_STATUS_TOKEN` later if you want higher GitHub API limits.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 {taskStages.map((stage, index) => (
                   <div key={stage.key} className={getTaskStageCardClass(stage.status)}>
@@ -1415,7 +1695,7 @@ export default function Home() {
                       <span className="font-semibold text-slate-900">Command:</span> chat with Builder Core and send the next request.
                     </li>
                     <li>
-                      <span className="font-semibold text-slate-900">Progress:</span> follow the stage bar and use the single Next button.
+                      <span className="font-semibold text-slate-900">Progress:</span> follow the stage bar, review live GitHub tracking, and use the single Next button.
                     </li>
                     <li>
                       <span className="font-semibold text-slate-900">Review:</span> confirm the latest task result before trusting the rollout.

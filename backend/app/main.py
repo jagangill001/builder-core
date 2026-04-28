@@ -1,6 +1,10 @@
-from pathlib import Path
-from typing import Optional
 import json
+import os
+from pathlib import Path
+from typing import Any, Optional
+from urllib import error as urlerror
+from urllib import parse as urlparse
+from urllib import request as urlrequest
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,6 +32,12 @@ GENERATED_DIR.mkdir(exist_ok=True)
 
 DB_PATH = BASE_DIR / "builder_core.db"
 DATABASE_URL = f"sqlite:///{DB_PATH}"
+
+DEFAULT_GITHUB_OWNER = "jagangill001"
+DEFAULT_GITHUB_REPO = "builder-core"
+DEFAULT_GITHUB_BRANCH = "main"
+DEFAULT_GITHUB_CHECKS_WORKFLOW = "Repo Checks"
+DEFAULT_GITHUB_DEPLOY_WORKFLOW = "Deploy Cloud Run"
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
@@ -567,6 +577,195 @@ def build_run_info_payload(project_name: str):
         "url_hint": "The generated app usually runs on http://localhost:3000 unless you stop the main frontend first or choose another port."
     }
 
+def get_github_repo_config():
+    owner = (os.environ.get("GITHUB_OWNER") or DEFAULT_GITHUB_OWNER).strip() or DEFAULT_GITHUB_OWNER
+    repo = (os.environ.get("GITHUB_REPO") or DEFAULT_GITHUB_REPO).strip() or DEFAULT_GITHUB_REPO
+    branch = (os.environ.get("GITHUB_DEFAULT_BRANCH") or DEFAULT_GITHUB_BRANCH).strip() or DEFAULT_GITHUB_BRANCH
+    token = (os.environ.get("GITHUB_STATUS_TOKEN") or "").strip()
+    checks_workflow = (os.environ.get("GITHUB_CHECKS_WORKFLOW_NAME") or DEFAULT_GITHUB_CHECKS_WORKFLOW).strip() or DEFAULT_GITHUB_CHECKS_WORKFLOW
+    deploy_workflow = (os.environ.get("GITHUB_DEPLOY_WORKFLOW_NAME") or DEFAULT_GITHUB_DEPLOY_WORKFLOW).strip() or DEFAULT_GITHUB_DEPLOY_WORKFLOW
+
+    return {
+        "owner": owner,
+        "repo": repo,
+        "branch": branch,
+        "token": token,
+        "checks_workflow": checks_workflow,
+        "deploy_workflow": deploy_workflow,
+    }
+
+def github_api_json(url: str, token: str):
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "builder-core-github-status"
+    }
+
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    request = urlrequest.Request(url, headers=headers)
+    with urlrequest.urlopen(request, timeout=10) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+def summarize_commit(data: dict[str, Any]):
+    commit = data.get("commit", {})
+    author = commit.get("author", {})
+
+    return {
+        "sha": data.get("sha"),
+        "short_sha": str(data.get("sha", ""))[:7],
+        "message": commit.get("message"),
+        "url": data.get("html_url"),
+        "author": author.get("name"),
+        "timestamp": author.get("date")
+    }
+
+def summarize_workflow_run(run: Optional[dict[str, Any]]):
+    if not run:
+        return None
+
+    return {
+        "name": run.get("name"),
+        "status": run.get("status") or "unknown",
+        "conclusion": run.get("conclusion"),
+        "url": run.get("html_url"),
+        "event": run.get("event"),
+        "branch": run.get("head_branch"),
+        "sha": run.get("head_sha"),
+        "short_sha": str(run.get("head_sha", ""))[:7],
+        "updated_at": run.get("updated_at")
+    }
+
+def find_workflow_run(workflow_runs: list[dict[str, Any]], workflow_name: str):
+    for run in workflow_runs:
+        if run.get("name") == workflow_name:
+            return summarize_workflow_run(run)
+
+    return None
+
+def describe_workflow_state(workflow: Optional[dict[str, Any]]):
+    if not workflow:
+        return "not_found"
+
+    if workflow.get("status") != "completed":
+        return str(workflow.get("status") or "unknown")
+
+    return str(workflow.get("conclusion") or "completed")
+
+def build_github_summary(checks_workflow: Optional[dict[str, Any]], deploy_workflow: Optional[dict[str, Any]], branch: str):
+    deploy_state = describe_workflow_state(deploy_workflow)
+    checks_state = describe_workflow_state(checks_workflow)
+
+    if deploy_state in {"queued", "in_progress", "waiting", "requested"}:
+        return f"GitHub deploy tracking is live. The deploy workflow is currently {deploy_state.replace('_', ' ')} on {branch}."
+
+    if deploy_state == "success":
+        return f"GitHub deploy tracking is live. The deploy workflow completed successfully on {branch}."
+
+    if deploy_state in {"failure", "cancelled", "timed_out"}:
+        return f"GitHub deploy tracking is live. The deploy workflow needs attention because it ended with {deploy_state}."
+
+    if checks_state in {"queued", "in_progress", "waiting", "requested"}:
+        return f"GitHub tracking is connected. Repo checks are still {checks_state.replace('_', ' ')} on {branch}."
+
+    if checks_state == "success":
+        return f"GitHub tracking is connected. Repo checks are green on {branch}, and the deploy workflow is waiting for the next rollout."
+
+    if checks_state in {"failure", "cancelled", "timed_out"}:
+        return f"GitHub tracking is connected. Repo checks need attention because they ended with {checks_state}."
+
+    return "GitHub tracking is connected. Builder Core can see the repo state, but no recent workflow run matched the configured workflow names."
+
+def build_github_next_step(checks_workflow: Optional[dict[str, Any]], deploy_workflow: Optional[dict[str, Any]], branch: str):
+    deploy_state = describe_workflow_state(deploy_workflow)
+    checks_state = describe_workflow_state(checks_workflow)
+
+    if deploy_state in {"queued", "in_progress", "waiting", "requested"}:
+        return "Next: wait for the deploy workflow to finish, then verify the live frontend and backend."
+
+    if deploy_state == "success":
+        return "Next: refresh the app and confirm the newest Cloud Run revision is the one you expect."
+
+    if deploy_state in {"failure", "cancelled", "timed_out"}:
+        return "Next: open the deploy workflow run and review the failing step before moving to the next stage."
+
+    if checks_state in {"queued", "in_progress", "waiting", "requested"}:
+        return "Next: let Repo Checks finish before trusting the deployment stage."
+
+    if checks_state == "success":
+        return f"Next: the repo is ready for the next change on {branch}. Watch for the deploy workflow after the next merge."
+
+    if checks_state in {"failure", "cancelled", "timed_out"}:
+        return "Next: inspect the Repo Checks workflow, fix the issue, and rerun the pipeline."
+
+    return "Next: push or merge a change to create a fresh GitHub workflow run for Builder Core to track."
+
+def build_github_status_payload():
+    config = get_github_repo_config()
+    owner = config["owner"]
+    repo = config["repo"]
+    branch = config["branch"]
+    token = config["token"]
+    repo_label = f"{owner}/{repo}"
+
+    commit_url = f"https://api.github.com/repos/{owner}/{repo}/commits/{urlparse.quote(branch, safe='')}"
+    runs_url = (
+        f"https://api.github.com/repos/{owner}/{repo}/actions/runs"
+        f"?branch={urlparse.quote(branch, safe='')}&per_page=20"
+    )
+
+    try:
+        commit_data = github_api_json(commit_url, token)
+        runs_data = github_api_json(runs_url, token)
+        workflow_runs = runs_data.get("workflow_runs", [])
+
+        checks_workflow = find_workflow_run(workflow_runs, config["checks_workflow"])
+        deploy_workflow = find_workflow_run(workflow_runs, config["deploy_workflow"])
+
+        return {
+            "ok": True,
+            "connected": True,
+            "source": "live_github",
+            "repo": repo_label,
+            "branch": branch,
+            "configured_with_token": bool(token),
+            "latest_commit": summarize_commit(commit_data),
+            "checks_workflow": checks_workflow,
+            "deploy_workflow": deploy_workflow,
+            "summary": build_github_summary(checks_workflow, deploy_workflow, branch),
+            "next_step": build_github_next_step(checks_workflow, deploy_workflow, branch)
+        }
+    except urlerror.HTTPError as exc:
+        return {
+            "ok": False,
+            "connected": False,
+            "source": "github_error",
+            "repo": repo_label,
+            "branch": branch,
+            "configured_with_token": bool(token),
+            "latest_commit": None,
+            "checks_workflow": None,
+            "deploy_workflow": None,
+            "summary": "GitHub status tracking is not available right now.",
+            "next_step": "Next: try again later or add GITHUB_STATUS_TOKEN for higher GitHub API limits.",
+            "error": f"GitHub API returned HTTP {exc.code}."
+        }
+    except (urlerror.URLError, json.JSONDecodeError, TimeoutError) as exc:
+        return {
+            "ok": False,
+            "connected": False,
+            "source": "github_error",
+            "repo": repo_label,
+            "branch": branch,
+            "configured_with_token": bool(token),
+            "latest_commit": None,
+            "checks_workflow": None,
+            "deploy_workflow": None,
+            "summary": "GitHub status tracking is not available right now.",
+            "next_step": "Next: retry the GitHub status check after the network is available again.",
+            "error": str(exc)
+        }
+
 def classify_chat_intent(instruction: str) -> str:
     text = instruction.lower()
 
@@ -912,13 +1111,16 @@ def chat(payload: BuildRequest):
         response.update(build_result)
 
     return response
+
+@app.get("/github/status")
+def github_status():
+    return build_github_status_payload()
         
 @app.get("/system/status")
 def system_status():
     return {"status": "ok"}
 
 import uvicorn
-import os
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
