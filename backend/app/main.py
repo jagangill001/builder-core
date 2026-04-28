@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 from urllib import error as urlerror
@@ -43,6 +44,8 @@ DEFAULT_GITHUB_REPO = "builder-core"
 DEFAULT_GITHUB_BRANCH = "main"
 DEFAULT_GITHUB_CHECKS_WORKFLOW = "Repo Checks"
 DEFAULT_GITHUB_DEPLOY_WORKFLOW = "Deploy Cloud Run"
+DEFAULT_BACKEND_PUBLIC_URL = "https://builder-core-599596796788.us-central1.run.app"
+DEFAULT_FRONTEND_PUBLIC_URL = "https://builder-core-frontend-599596796788.us-central1.run.app"
 
 automation_task_service = AutomationTaskService(BASE_DIR)
 file_storage_service = FileStorageService(BASE_DIR)
@@ -121,6 +124,9 @@ class StorageFileCreate(BaseModel):
     content: str
     content_type: Optional[str] = "text/plain"
     task_id: Optional[str] = None
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 def model_to_dict(model: BaseModel) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
@@ -632,6 +638,70 @@ def get_github_repo_config():
         "deploy_workflow": deploy_workflow,
     }
 
+def get_public_service_urls():
+    backend_url = (os.environ.get("BACKEND_PUBLIC_URL") or DEFAULT_BACKEND_PUBLIC_URL).strip().rstrip("/")
+    frontend_url = (os.environ.get("FRONTEND_PUBLIC_URL") or DEFAULT_FRONTEND_PUBLIC_URL).strip().rstrip("/")
+
+    return {
+        "backend": backend_url,
+        "frontend": frontend_url,
+    }
+
+def check_public_service(url: str, expect_status_json: bool = False):
+    if not url:
+        return {
+            "url": url,
+            "reachable": False,
+            "healthy": False,
+            "status_code": None,
+            "error": "URL not configured."
+        }
+
+    headers = {
+        "User-Agent": "builder-core-deploy-status"
+    }
+    request = urlrequest.Request(url, headers=headers)
+
+    try:
+        with urlrequest.urlopen(request, timeout=8) as response:
+            status_code = getattr(response, "status", response.getcode())
+            body = response.read().decode("utf-8", errors="replace")
+            reachable = 200 <= status_code < 400
+            payload = {
+                "url": url,
+                "reachable": reachable,
+                "healthy": reachable,
+                "status_code": status_code
+            }
+
+            if expect_status_json:
+                try:
+                    data = json.loads(body)
+                    reported_status = str(data.get("status", ""))
+                    payload["reported_status"] = reported_status
+                    payload["healthy"] = reachable and reported_status == "ok"
+                except json.JSONDecodeError:
+                    payload["healthy"] = False
+                    payload["error"] = "Invalid JSON response."
+
+            return payload
+    except urlerror.HTTPError as exc:
+        return {
+            "url": url,
+            "reachable": False,
+            "healthy": False,
+            "status_code": exc.code,
+            "error": f"HTTP {exc.code}"
+        }
+    except (urlerror.URLError, TimeoutError, ValueError) as exc:
+        return {
+            "url": url,
+            "reachable": False,
+            "healthy": False,
+            "status_code": None,
+            "error": str(exc)
+        }
+
 def github_api_json(url: str, token: str):
     headers = {
         "Accept": "application/vnd.github+json",
@@ -738,6 +808,54 @@ def build_github_next_step(checks_workflow: Optional[dict[str, Any]], deploy_wor
 
     return "Next: push or merge a change to create a fresh GitHub workflow run for Builder Core to track."
 
+def build_deploy_status_summary(
+    github_payload: dict[str, Any],
+    deploy_running: bool,
+    deploy_succeeded: bool,
+    backend_healthy: bool,
+    frontend_reachable: Optional[bool]
+):
+    if deploy_running:
+        return "GitHub Actions running"
+
+    if deploy_succeeded and backend_healthy and frontend_reachable:
+        return "Ready to refresh"
+
+    if deploy_succeeded and backend_healthy:
+        return "Cloud Run is live"
+
+    if deploy_succeeded:
+        return "Deploy succeeded"
+
+    if not github_payload.get("connected"):
+        return "GitHub status not connected"
+
+    if backend_healthy:
+        return "Backend health is online while Builder Core waits for the next deploy signal."
+
+    return str(github_payload.get("summary") or "Waiting for deploy status.")
+
+def build_deploy_status_next_step(
+    github_payload: dict[str, Any],
+    deploy_running: bool,
+    deploy_succeeded: bool,
+    backend_healthy: bool,
+    frontend_reachable: Optional[bool]
+):
+    if deploy_running:
+        return "Next: wait for GitHub Actions to finish the deployment."
+
+    if deploy_succeeded and backend_healthy and frontend_reachable:
+        return "Next: refresh the app to load the newest live version."
+
+    if deploy_succeeded and backend_healthy:
+        return "Next: confirm the frontend URL is reachable before refreshing."
+
+    if deploy_succeeded:
+        return "Next: wait for the live backend and frontend checks to finish."
+
+    return str(github_payload.get("next_step") or "Next: wait for the next tracked deployment update.")
+
 def build_github_status_payload():
     config = get_github_repo_config()
     owner = config["owner"]
@@ -818,6 +936,56 @@ def build_github_status_payload():
             "next_step": "Next: retry the GitHub status check after the network is available again.",
             "error": str(exc)
         }
+
+def build_deploy_status_payload():
+    github_payload = build_github_status_payload()
+    public_urls = get_public_service_urls()
+    backend_check = check_public_service(f"{public_urls['backend']}/system/status", expect_status_json=True)
+    frontend_check = check_public_service(public_urls["frontend"]) if public_urls["frontend"] else None
+    deploy_workflow = github_payload.get("deploy_workflow")
+    checks_workflow = github_payload.get("checks_workflow")
+    deploy_state = describe_workflow_state(deploy_workflow)
+
+    deploy_running = deploy_state in {"queued", "in_progress", "waiting", "requested"}
+    deploy_succeeded = deploy_state == "success"
+    backend_healthy = bool(backend_check.get("healthy"))
+    frontend_reachable = None if frontend_check is None else bool(frontend_check.get("healthy"))
+    ready_to_refresh = deploy_succeeded and backend_healthy and frontend_reachable is True
+
+    return {
+        "ok": True,
+        "connected": bool(github_payload.get("connected")),
+        "source": github_payload.get("source", "deploy_status"),
+        "repo": github_payload.get("repo"),
+        "branch": github_payload.get("branch"),
+        "configured_with_token": bool(github_payload.get("configured_with_token")),
+        "latest_commit": github_payload.get("latest_commit"),
+        "checks_workflow": checks_workflow,
+        "deploy_workflow": deploy_workflow,
+        "deploy_running": deploy_running,
+        "deploy_succeeded": deploy_succeeded,
+        "backend_healthy": backend_healthy,
+        "frontend_reachable": frontend_reachable,
+        "ready_to_refresh": ready_to_refresh,
+        "backend_check": backend_check,
+        "frontend_check": frontend_check,
+        "summary": build_deploy_status_summary(
+            github_payload,
+            deploy_running,
+            deploy_succeeded,
+            backend_healthy,
+            frontend_reachable
+        ),
+        "next_step": build_deploy_status_next_step(
+            github_payload,
+            deploy_running,
+            deploy_succeeded,
+            backend_healthy,
+            frontend_reachable
+        ),
+        "updated_at": utc_now_iso(),
+        "error": github_payload.get("error")
+    }
 
 def classify_chat_intent(instruction: str) -> str:
     text = instruction.lower()
@@ -1154,6 +1322,10 @@ def update_automation_task(task_id: str, payload: AutomationTaskUpdate):
 @app.get("/automation/github-status")
 def automation_github_status():
     return build_github_status_payload()
+
+@app.get("/automation/deploy-status")
+def automation_deploy_status():
+    return build_deploy_status_payload()
 
 @app.post("/storage/files")
 def create_storage_file(payload: StorageFileCreate):

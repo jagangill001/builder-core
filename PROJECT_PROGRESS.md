@@ -18,7 +18,8 @@ Builder Core is becoming a cloud-first AI command center for:
 - Command Center chat calls `POST /chat` and shows real assistant replies.
 - The frontend creates real automation task records with `POST /automation/tasks`.
 - The frontend polls `GET /automation/tasks/{id}` and syncs stage progress back with `PATCH /automation/tasks/{id}`.
-- GitHub tracking reads `GET /automation/github-status`.
+- The stage progress bug is fixed so each stage now runs from `1%` to `100%`.
+- Deploy tracking now reads `GET /automation/deploy-status`.
 - The app is installable on phone through the existing PWA setup.
 
 ## Current Backend Endpoints
@@ -38,6 +39,7 @@ Builder Core is becoming a cloud-first AI command center for:
 - `GET /automation/tasks/{id}`
 - `PATCH /automation/tasks/{id}`
 - `GET /automation/github-status`
+- `GET /automation/deploy-status`
 
 ### Storage
 - `POST /storage/files`
@@ -59,12 +61,13 @@ Builder Core is becoming a cloud-first AI command center for:
 ## GitHub Tracking
 - Backend checks public repo and workflow state through GitHub API.
 - If `GITHUB_TOKEN` is missing, the app returns a safe message instead of failing.
-- Frontend shows repo, branch, latest commit, checks workflow, and deploy workflow status.
+- Frontend shows repo, branch, latest commit, checks workflow, deploy workflow status, and live deploy health.
 
 ## Frontend UX Status
 - Unified Command Center UI is in place.
 - Compact task bar is in place.
-- Progress still uses the safe manual `Next` fallback.
+- Progress automatically runs each stage from `1%` to `100%`.
+- Manual `Next` is now the fallback instead of the primary way to move through the flow.
 - Review, download/install, and help sections still exist.
 - Mobile navigation and PWA install remain available.
 
@@ -73,6 +76,8 @@ Builder Core is becoming a cloud-first AI command center for:
 - `FIRESTORE_ENABLED=false`
 - `GCP_PROJECT_ID=`
 - `GCS_BUCKET_NAME=`
+- `BACKEND_PUBLIC_URL=https://builder-core-599596796788.us-central1.run.app`
+- `FRONTEND_PUBLIC_URL=https://builder-core-frontend-599596796788.us-central1.run.app`
 
 ### GitHub
 - `GITHUB_TOKEN=`
@@ -90,10 +95,14 @@ Builder Core is becoming a cloud-first AI command center for:
 - Added cloud-first task storage foundation.
 - Added Google Cloud SDK dependencies for future Firestore, Cloud Storage, and Secret Manager work.
 
+## What Is Automatic Now
+- Stage progress automatically runs from `1%` to `100%`.
+- Deploy detection polls `GET /automation/deploy-status`.
+- GitHub Deploying and Cloud Run Live can react to live backend signals when they match the current task.
+
 ## What Is Still Manual
-- Stage advancement still uses the frontend `Next` button.
+- `Next` is still available as the fallback when a stage completes.
 - Codex is not auto-triggered yet.
-- Deploy completion is not auto-detected yet.
 - Task history is not yet persisted in Firestore by default.
 - Storage uploads are still local fallback unless cloud configuration is enabled.
 
@@ -101,7 +110,7 @@ Builder Core is becoming a cloud-first AI command center for:
 - Enable Firestore-backed task storage in production.
 - Add `GET /automation/history`.
 - Add Cloud Storage signed-upload flow.
-- Add real GitHub Actions or deploy polling to replace manual task progression.
+- Add richer deploy history and rollback-aware rollout tracking.
 - Add authenticated approval flow before automatic repo actions.
 
 ## Legal And Safety Notes

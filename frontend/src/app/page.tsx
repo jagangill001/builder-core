@@ -65,7 +65,8 @@ const TASK_STAGE_DEFINITIONS = [
 
 const NEXT_UPGRADE_SUGGESTIONS = [
   "Enable real Codex automation",
-  "Add live deploy detection",
+  "Enable Firestore in production",
+  "Add deployment history",
   "Store tasks in Firestore",
   "Add multi-project support",
   "Save GitHub status history"
@@ -139,6 +140,26 @@ type GithubStatusResponse = {
   summary?: string;
   next_step?: string;
   error?: string;
+};
+
+type DeployHealthCheck = {
+  url?: string;
+  reachable?: boolean;
+  healthy?: boolean;
+  status_code?: number | null;
+  reported_status?: string;
+  error?: string;
+};
+
+type DeployStatusResponse = GithubStatusResponse & {
+  deploy_running?: boolean;
+  deploy_succeeded?: boolean;
+  backend_healthy?: boolean;
+  frontend_reachable?: boolean | null;
+  ready_to_refresh?: boolean;
+  backend_check?: DeployHealthCheck | null;
+  frontend_check?: DeployHealthCheck | null;
+  updated_at?: string;
 };
 
 type AutomationTask = {
@@ -515,6 +536,34 @@ function buildWorkflowStatusLabel(githubStatus: GithubStatusResponse | null) {
   return githubStatus?.summary ?? "not_connected";
 }
 
+function buildDeployStatusLabel(deployStatus: DeployStatusResponse | null) {
+  if (!deployStatus) {
+    return "Waiting for deploy tracking.";
+  }
+
+  if (!deployStatus.connected) {
+    return "GitHub status not connected";
+  }
+
+  if (deployStatus.deploy_running) {
+    return "GitHub Actions running";
+  }
+
+  if (deployStatus.ready_to_refresh) {
+    return "Ready to refresh";
+  }
+
+  if (deployStatus.backend_healthy) {
+    return "Cloud Run is live";
+  }
+
+  if (deployStatus.deploy_succeeded) {
+    return "Deploy succeeded";
+  }
+
+  return deployStatus.summary ?? "Waiting for deploy tracking.";
+}
+
 function getGithubTrackingBadgeClass(state: "checking" | "online" | "offline") {
   if (state === "online") {
     return "border border-green-200 bg-green-100 text-green-700";
@@ -729,6 +778,7 @@ export default function Home() {
   const [githubTrackingState, setGithubTrackingState] = useState<"checking" | "online" | "offline">("checking");
   const [githubStatus, setGithubStatus] = useState<GithubStatusResponse | null>(null);
   const [githubCheckedAt, setGithubCheckedAt] = useState("");
+  const [deployStatus, setDeployStatus] = useState<DeployStatusResponse | null>(null);
   const [executionStatus, setExecutionStatus] = useState<ExecutionStatus>("idle");
   const [taskStageIndex, setTaskStageIndex] = useState(-1);
   const [taskStageProgress, setTaskStageProgress] = useState(0);
@@ -754,6 +804,10 @@ export default function Home() {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Partial<Record<CommandCenterTabKey, HTMLElement | null>>>({});
   const lastSyncedTaskPayloadRef = useRef("");
+  const lastDeployEventRef = useRef("");
+  const stageProgressTimerRef = useRef<number | null>(null);
+  const refreshCountdownTimerRef = useRef<number | null>(null);
+  const [refreshCountdown, setRefreshCountdown] = useState<number | null>(null);
 
   const taskStages = useMemo(() => buildTaskStages(taskStageIndex, executionStatus), [taskStageIndex, executionStatus]);
   const currentTaskStage = taskStageIndex >= 0 ? TASK_STAGE_DEFINITIONS[taskStageIndex] : null;
@@ -774,6 +828,15 @@ export default function Home() {
   const githubChecksWorkflow = githubStatus?.checks_workflow ?? null;
   const githubDeployWorkflow = githubStatus?.deploy_workflow ?? null;
   const effectiveTaskId = trackedTask?.id || trackedTaskId;
+  const taskCreatedTimestamp = trackedTask?.created_at ? Date.parse(trackedTask.created_at) : Number.NaN;
+  const deployWorkflowTimestamp = deployStatus?.deploy_workflow?.updated_at
+    ? Date.parse(deployStatus.deploy_workflow.updated_at)
+    : Number.NaN;
+  const deploySignalMatchesTask =
+    Number.isFinite(taskCreatedTimestamp) &&
+    Number.isFinite(deployWorkflowTimestamp) &&
+    deployWorkflowTimestamp >= taskCreatedTimestamp;
+  const deployTrackingActiveForTask = Boolean(deployStatus?.deploy_running) || deploySignalMatchesTask;
   const githubStatusSummary =
     githubStatus?.summary ??
     (githubTrackingState === "checking"
@@ -784,6 +847,7 @@ export default function Home() {
     (githubTrackingState === "offline"
       ? "Next: verify the latest GitHub run manually until tracking reconnects."
       : "Next: wait for a tracked workflow update.");
+  const deployStatusSummary = buildDeployStatusLabel(deployStatus);
 
   let taskProgressText = "No task is running yet.";
   let taskStatusText = "Run a command to begin.";
@@ -792,11 +856,11 @@ export default function Home() {
   if (currentTaskStage) {
     if (executionStatus === "active") {
       taskProgressText = `${taskStageProgress}%`;
-      taskStatusText = currentTaskStage.activeText;
+      taskStatusText = `${currentTaskStage.label} in progress...`;
       taskNextText = currentTaskStage.nextText;
     } else if (executionStatus === "awaiting_next") {
       taskProgressText = "100%";
-      taskStatusText = currentTaskStage.completeText;
+      taskStatusText = `${currentTaskStage.label} complete - press Next`;
       taskNextText =
         taskStageIndex < TASK_STAGE_DEFINITIONS.length - 1
           ? `Next: ${TASK_STAGE_DEFINITIONS[taskStageIndex + 1].label} will begin after you press Next.`
@@ -809,8 +873,32 @@ export default function Home() {
   }
 
   if (currentTaskStage?.key === "github_deploying" && githubTrackingState === "online") {
-    taskStatusText = githubStatusSummary;
-    taskNextText = githubStatusNextStep;
+    taskStatusText = deployStatusSummary;
+    taskNextText = deployTrackingActiveForTask
+      ? deployStatus?.next_step ?? githubStatusNextStep
+      : "Next: no new deploy signal is tied to this task yet, so you can use Next as the safe fallback.";
+  }
+
+  if (currentTaskStage?.key === "cloud_run_live" && githubTrackingState === "online") {
+    if (deployStatus?.backend_healthy) {
+      taskStatusText = "Cloud Run is live";
+      taskNextText = deployStatus?.ready_to_refresh
+        ? refreshCountdown !== null
+          ? `Next: the app will refresh automatically in ${refreshCountdown}s.`
+          : "Next: the app is ready to refresh."
+        : deploySignalMatchesTask
+          ? "Next: Builder Core is checking the live services before the final refresh."
+          : "Next: use Next as the fallback if this task is not tied to a live deploy signal yet.";
+    }
+  }
+
+  if (currentTaskStage?.key === "app_refreshed") {
+    taskStatusText =
+      refreshCountdown !== null ? `Ready to refresh in ${refreshCountdown}s...` : "App Refreshed in progress...";
+    taskNextText =
+      refreshCountdown !== null
+        ? "Next: wait for the automatic refresh, or use the Next button only if tracking is unavailable."
+        : "Next: Builder Core will refresh the app when the live deploy checks are complete.";
   }
 
   function appendChatEntries(entries: ChatEntry[]) {
@@ -831,23 +919,38 @@ export default function Home() {
     }
   }
 
-  async function loadGithubStatus(silent = false) {
+  async function loadDeployStatus(silent = false) {
     if (!silent) {
       setGithubTrackingState("checking");
     }
 
     try {
-      const response = await fetch(`${API_BASE}/automation/github-status`);
-      const data = (await response.json()) as GithubStatusResponse;
+      const response = await fetch(`${API_BASE}/automation/deploy-status`);
+      const data = (await response.json()) as DeployStatusResponse;
 
       if (!response.ok) {
         throw new Error(typeof data.error === "string" ? data.error : "GitHub status request failed.");
       }
 
-      setGithubStatus(data);
+      setDeployStatus(data);
+      setGithubStatus({
+        ok: data.ok,
+        connected: data.connected,
+        source: data.source,
+        repo: data.repo,
+        branch: data.branch,
+        configured_with_token: data.configured_with_token,
+        latest_commit: data.latest_commit,
+        checks_workflow: data.checks_workflow,
+        deploy_workflow: data.deploy_workflow,
+        summary: data.summary,
+        next_step: data.next_step,
+        error: data.error
+      });
       setGithubTrackingState(data.connected ? "online" : "offline");
       setGithubCheckedAt(formatTimestamp(new Date()));
     } catch (error) {
+      setDeployStatus(null);
       setGithubStatus({
         ok: false,
         connected: false,
@@ -930,16 +1033,17 @@ export default function Home() {
   useEffect(() => {
     void checkBackendStatus();
     void loadProjects();
-    void loadGithubStatus();
+    void loadDeployStatus();
   }, []);
 
   useEffect(() => {
+    const intervalMs = executionStatus !== "idle" || taskStageIndex >= 2 || Boolean(trackedTaskId) ? 5000 : 60000;
     const interval = window.setInterval(() => {
-      void loadGithubStatus(true);
-    }, 60000);
+      void loadDeployStatus(true);
+    }, intervalMs);
 
     return () => window.clearInterval(interval);
-  }, []);
+  }, [executionStatus, taskStageIndex, trackedTaskId]);
 
   useEffect(() => {
     if (!trackedTaskId) {
@@ -1008,12 +1112,24 @@ export default function Home() {
     }
 
     const trackedStageIndex = getTaskStageIndexFromName(trackedTask.current_stage);
-    if (trackedStageIndex >= 0 && trackedStageIndex !== taskStageIndex) {
+    if (trackedStageIndex >= 0 && (taskStageIndex < 0 || trackedStageIndex > taskStageIndex)) {
       setTaskStageIndex(trackedStageIndex);
     }
 
-    if (typeof trackedTask.progress === "number" && trackedTask.progress !== taskStageProgress) {
-      setTaskStageProgress(trackedTask.progress);
+    if (typeof trackedTask.progress === "number") {
+      if (trackedStageIndex > taskStageIndex) {
+        setTaskStageProgress(trackedTask.progress);
+      } else if (trackedStageIndex === taskStageIndex) {
+        if (executionStatus === "active") {
+          if (trackedTask.progress > taskStageProgress) {
+            setTaskStageProgress(trackedTask.progress);
+          }
+        } else if (trackedTask.progress !== taskStageProgress) {
+          setTaskStageProgress(trackedTask.progress);
+        }
+      } else if (executionStatus !== "active" && trackedTask.progress !== taskStageProgress) {
+        setTaskStageProgress(trackedTask.progress);
+      }
     }
 
     const normalizedStatus = normalizeExecutionStatusValue(trackedTask.status);
@@ -1060,19 +1176,53 @@ export default function Home() {
   }, [chatEntries]);
 
   useEffect(() => {
+    if (stageProgressTimerRef.current !== null) {
+      window.clearInterval(stageProgressTimerRef.current);
+      stageProgressTimerRef.current = null;
+    }
+
     if (executionStatus !== "active" || taskStageIndex < 0) {
       return;
     }
 
-    const interval = window.setInterval(() => {
-      setTaskStageProgress((current) => Math.min(current + 4, 100));
+    stageProgressTimerRef.current = window.setInterval(() => {
+      setTaskStageProgress((current) => {
+        if (current >= 100) {
+          return 100;
+        }
+
+        return Math.min(current + 4, 100);
+      });
     }, 180);
 
-    return () => window.clearInterval(interval);
+    return () => {
+      if (stageProgressTimerRef.current !== null) {
+        window.clearInterval(stageProgressTimerRef.current);
+        stageProgressTimerRef.current = null;
+      }
+    };
   }, [executionStatus, taskStageIndex]);
 
   useEffect(() => {
-    if (executionStatus !== "active" || taskStageIndex < 0 || taskStageProgress < 100) {
+    if (executionStatus !== "active" || taskStageIndex < 0 || taskStageProgress < 100 || !currentTaskStage) {
+      return;
+    }
+
+    if (
+      currentTaskStage.key === "github_deploying" &&
+      githubTrackingState === "online" &&
+      deployTrackingActiveForTask &&
+      !deployStatus?.deploy_succeeded
+    ) {
+      return;
+    }
+
+    if (
+      currentTaskStage.key === "cloud_run_live" &&
+      githubTrackingState === "online" &&
+      deploySignalMatchesTask &&
+      !deployStatus?.ready_to_refresh
+    ) {
       return;
     }
 
@@ -1082,7 +1232,105 @@ export default function Home() {
     }
 
     setExecutionStatus("awaiting_next");
-  }, [executionStatus, taskStageIndex, taskStageProgress]);
+  }, [
+    currentTaskStage,
+    deploySignalMatchesTask,
+    deployStatus,
+    deployTrackingActiveForTask,
+    executionStatus,
+    githubTrackingState,
+    taskStageIndex,
+    taskStageProgress
+  ]);
+
+  useEffect(() => {
+    if (!currentTaskStage || !deployStatus || githubTrackingState !== "online") {
+      return;
+    }
+
+    if (currentTaskStage.key === "github_deploying" && deploySignalMatchesTask && deployStatus.deploy_succeeded) {
+      const transitionKey = `github:${deployStatus.updated_at ?? "unknown"}`;
+      if (lastDeployEventRef.current === transitionKey) {
+        return;
+      }
+
+      lastDeployEventRef.current = transitionKey;
+      appendChatEntries([
+        {
+          id: `deploy-${Date.now()}`,
+          role: "assistant",
+          kind: "text",
+          title: "Deploy Detection",
+          content: "Deploy succeeded. Builder Core is now checking whether Cloud Run is live.",
+          timestamp: formatTimestamp(new Date())
+        }
+      ]);
+
+      setTaskStageIndex(3);
+      setTaskStageProgress(1);
+      setExecutionStatus("active");
+      return;
+    }
+
+    if (currentTaskStage.key === "cloud_run_live" && deploySignalMatchesTask && deployStatus.ready_to_refresh) {
+      const transitionKey = `cloud:${deployStatus.updated_at ?? "unknown"}`;
+      if (lastDeployEventRef.current === transitionKey) {
+        return;
+      }
+
+      lastDeployEventRef.current = transitionKey;
+      appendChatEntries([
+        {
+          id: `refresh-${Date.now()}`,
+          role: "assistant",
+          kind: "text",
+          title: "Deploy Detection",
+          content: "Cloud Run is live and the frontend is reachable. Builder Core is preparing the automatic refresh.",
+          timestamp: formatTimestamp(new Date())
+        }
+      ]);
+
+      setTaskStageIndex(4);
+      setTaskStageProgress(1);
+      setExecutionStatus("active");
+      setRefreshCountdown(5);
+    }
+  }, [currentTaskStage, deploySignalMatchesTask, deployStatus, githubTrackingState]);
+
+  useEffect(() => {
+    if (currentTaskStage?.key !== "app_refreshed") {
+      if (refreshCountdownTimerRef.current !== null) {
+        window.clearTimeout(refreshCountdownTimerRef.current);
+        refreshCountdownTimerRef.current = null;
+      }
+      return;
+    }
+
+    if (refreshCountdown === null) {
+      return;
+    }
+
+    if (refreshCountdown <= 0) {
+      setTaskStageProgress(100);
+      setExecutionStatus("completed");
+      const reloadTimer = window.setTimeout(() => {
+        window.location.reload();
+      }, 300);
+
+      return () => window.clearTimeout(reloadTimer);
+    }
+
+    refreshCountdownTimerRef.current = window.setTimeout(() => {
+      setRefreshCountdown((current) => (current === null ? null : current - 1));
+    }, 1000);
+
+    return () => {
+      if (refreshCountdownTimerRef.current !== null) {
+        window.clearTimeout(refreshCountdownTimerRef.current);
+        refreshCountdownTimerRef.current = null;
+      }
+    };
+  }, [currentTaskStage, refreshCountdown]);
 
   useEffect(() => {
     if (executionStatus !== "completed" || !lastTask) {
@@ -1203,8 +1451,10 @@ export default function Home() {
     setActiveTab("command");
     setTrackedTaskId("");
     setTrackedTask(null);
+    setRefreshCountdown(null);
     setTaskTrackingMessage(DEFAULT_TASK_TRACKING_MESSAGE);
     lastSyncedTaskPayloadRef.current = "";
+    lastDeployEventRef.current = "";
 
     appendChatEntries([
       {
@@ -1298,7 +1548,7 @@ export default function Home() {
         builderSummary,
         runSummary
       });
-      void loadGithubStatus(true);
+      void loadDeployStatus(true);
 
       appendChatEntries([
         {
@@ -1368,6 +1618,7 @@ export default function Home() {
       setTaskStageIndex(-1);
       setTaskStageProgress(0);
       setActiveTaskInstruction("");
+      setRefreshCountdown(null);
 
       if (createdTaskId) {
         void patchAutomationTask(createdTaskId, {
@@ -1418,6 +1669,11 @@ export default function Home() {
     setTaskStageIndex(nextIndex);
     setTaskStageProgress(1);
     setExecutionStatus("active");
+    if (nextStage.key === "app_refreshed") {
+      setRefreshCountdown(5);
+    } else {
+      setRefreshCountdown(null);
+    }
   }
 
   function handleOpenAppLink() {
@@ -1629,7 +1885,7 @@ export default function Home() {
 
                 <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-sm text-slate-500">
-                    Builder Core will call the backend chat route, prepare the Codex task, and open the simplified stage bar.
+                    Builder Core will call the backend chat route, create a tracked task record, and use live deploy checks when they are available.
                   </p>
                   <button
                     type="submit"
@@ -1649,7 +1905,7 @@ export default function Home() {
               <div className="mb-4">
                 <p className="text-lg font-semibold text-slate-900">Progress</p>
                 <p className="text-sm text-slate-600">
-                  One compact task bar controls the stage flow. Each stage progresses from 1% to 100%, then waits for one Next click.
+                  One compact task bar controls the stage flow. Each stage now runs from 1% to 100%, while live deploy detection takes over when GitHub and Cloud Run signals are available.
                 </p>
               </div>
 
@@ -1708,7 +1964,7 @@ export default function Home() {
                   <div>
                     <p className="text-sm font-semibold text-slate-900">GitHub Tracking</p>
                     <p className="mt-1 text-sm text-slate-600">
-                      Builder Core now reads the repo and workflow state so the GitHub stage is tied to real GitHub status.
+                      Builder Core now reads the repo, workflow state, and deploy health so the progress bar can react to real rollout signals.
                     </p>
                   </div>
                   <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getGithubTrackingBadgeClass(githubTrackingState)}`}>
@@ -1805,12 +2061,29 @@ export default function Home() {
                     </div>
 
                     <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Status Refresh</p>
-                      <p className="mt-2 text-sm text-slate-700">
-                        {githubCheckedAt ? `Last checked ${githubCheckedAt}` : "Builder Core will record the next GitHub status refresh here."}
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Deploy Detection</p>
+                      <div className="mt-3 space-y-2 text-sm text-slate-700">
+                        <p>
+                          <span className="font-semibold text-slate-900">Status:</span> {deployStatusSummary}
+                        </p>
+                        <p>
+                          <span className="font-semibold text-slate-900">Backend:</span>{" "}
+                          {deployStatus?.backend_healthy ? "Online" : "Waiting for healthy status"}
+                        </p>
+                        <p>
+                          <span className="font-semibold text-slate-900">Frontend:</span>{" "}
+                          {deployStatus?.frontend_reachable === true
+                            ? "Reachable"
+                            : deployStatus?.frontend_reachable === false
+                              ? "Not reachable yet"
+                              : "Not checked yet"}
+                        </p>
+                      </div>
+                      <p className="mt-3 text-xs text-slate-500">
+                        {githubCheckedAt ? `Last checked ${githubCheckedAt}` : "Builder Core will record the next deploy check here."}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        Auto-refresh runs every minute. Add `GITHUB_TOKEN` later if you want higher GitHub API limits.
+                        Fast polling starts while a task is active. `GITHUB_TOKEN` stays on the backend only.
                       </p>
                     </div>
                   </div>
@@ -1963,7 +2236,7 @@ export default function Home() {
               <div className="mb-4">
                 <p className="text-lg font-semibold text-slate-900">Help</p>
                 <p className="text-sm text-slate-600">
-                  Builder Core now uses one compact task system: let each stage finish, then press Next to move forward.
+                  Builder Core now uses one compact task system: stages auto-run from 1% to 100%, deploy stages watch live backend signals when possible, and Next stays available as the fallback.
                 </p>
               </div>
 
@@ -1975,7 +2248,7 @@ export default function Home() {
                       <span className="font-semibold text-slate-900">Command:</span> chat with Builder Core and send the next request.
                     </li>
                     <li>
-                      <span className="font-semibold text-slate-900">Progress:</span> follow the stage bar, review live GitHub tracking, and use the single Next button.
+                    <span className="font-semibold text-slate-900">Progress:</span> follow the stage bar, watch deploy detection, and use the single Next button only when Builder Core pauses.
                     </li>
                     <li>
                       <span className="font-semibold text-slate-900">Review:</span> confirm the latest task result before trusting the rollout.
@@ -1993,8 +2266,9 @@ export default function Home() {
                   <p className="mb-3 font-semibold text-slate-900">How the stage flow works</p>
                   <ul className="list-disc space-y-2 pl-5 text-sm text-slate-700">
                     <li>Each stage automatically progresses from 1% to 100%.</li>
-                    <li>When a stage reaches 100%, Builder Core pauses and tells you to press Next.</li>
-                    <li>The only manual control is the Next button in the compact task bar.</li>
+                    <li>Planning and Codex Working pause at 100% and ask you to press Next.</li>
+                    <li>GitHub Deploying and Cloud Run Live can advance automatically when backend deploy checks confirm the rollout.</li>
+                    <li>The only manual control is the Next button in the compact task bar, and it remains the fallback.</li>
                     <li>The final stage ends with Done - ready for next task.</li>
                   </ul>
                 </div>

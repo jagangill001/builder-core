@@ -10,8 +10,8 @@ Builder Core is a cloud-first AI command center for planning repo changes, gener
 - The Command Center sends instructions to `POST /chat` and shows the assistant reply inline.
 - The frontend creates a real automation task with `POST /automation/tasks`.
 - The app polls `GET /automation/tasks/{id}` to keep task ID, stage, progress, and workflow status in sync.
-- The compact progress bar still runs with the manual `Next` fallback so the current flow stays safe.
-- The Progress tab reads GitHub workflow data from `GET /automation/github-status`.
+- The compact progress bar now runs each stage from `1%` to `100%` instead of getting stuck at `1%`.
+- The Progress tab reads deploy and live health data from `GET /automation/deploy-status`.
 - The app keeps working on phone with the existing PWA install flow.
 
 ## Current Backend Endpoints
@@ -32,6 +32,7 @@ Builder Core is a cloud-first AI command center for planning repo changes, gener
 - `GET /automation/tasks/{id}`
 - `PATCH /automation/tasks/{id}`
 - `GET /automation/github-status`
+- `GET /automation/deploy-status`
 
 ### File Storage
 - `POST /storage/files`
@@ -55,8 +56,10 @@ Builder Core now stores task state through a storage abstraction.
 
 ### How it works today
 - If Firestore is not enabled, tasks are stored in `backend/runtime_data/automation_tasks.json`.
-- The frontend still works with the manual `Next` button, but the task record is now real and pollable.
+- The frontend now lets each stage progress automatically from `1%` to `100%`.
+- The manual `Next` button remains as the fallback after a stage completes.
 - GitHub workflow details are synced into the task record from the frontend-safe backend flow.
+- Deploy health now comes from `GET /automation/deploy-status`, which checks GitHub workflow state plus backend and frontend reachability.
 
 ## Cloud-First Storage Foundation
 
@@ -95,6 +98,8 @@ Builder Core reads environment variables only from the backend runtime.
 - `FIRESTORE_ENABLED=false`
 - `GCP_PROJECT_ID=`
 - `GCS_BUCKET_NAME=`
+- `BACKEND_PUBLIC_URL=https://builder-core-599596796788.us-central1.run.app`
+- `FRONTEND_PUBLIC_URL=https://builder-core-frontend-599596796788.us-central1.run.app`
 
 ### GitHub
 - `GITHUB_TOKEN=`
@@ -110,6 +115,7 @@ See [backend/.env.example](backend/.env.example) for the starter shape.
 - If `FIRESTORE_ENABLED` is not `true`, Builder Core uses local JSON task storage.
 - If `GCS_BUCKET_NAME` is missing, Builder Core uses local file storage metadata plus local file fallback.
 - If `GITHUB_TOKEN` is missing, the backend returns `GitHub status not connected` instead of failing the UI.
+- GitHub tokens remain backend-only, and the frontend never receives them directly.
 
 ## Future Endpoints
 These are still planned for the next automation phase:
