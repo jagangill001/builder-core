@@ -14,9 +14,17 @@ from sqlalchemy import Column, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 try:
+    from app.bridge import BridgeService
+    from app.learning import LearningService
     from app.services import AutomationTaskService, FileStorageService
+    from app.storage import ProjectStorageService
+    from app.tasks import BackendTaskRunner
 except ImportError:
+    from bridge import BridgeService
+    from learning import LearningService
     from services import AutomationTaskService, FileStorageService
+    from storage import ProjectStorageService
+    from tasks import BackendTaskRunner
 
 app = FastAPI(title="Builder Core")
 
@@ -33,6 +41,7 @@ app.add_middleware(
 )
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+REPO_ROOT = BASE_DIR.parent
 GENERATED_DIR = BASE_DIR / "generated"
 GENERATED_DIR.mkdir(exist_ok=True)
 
@@ -49,6 +58,9 @@ DEFAULT_FRONTEND_PUBLIC_URL = "https://builder-core-frontend-599596796788.us-cen
 
 automation_task_service = AutomationTaskService(BASE_DIR)
 file_storage_service = FileStorageService(BASE_DIR)
+project_storage_service = ProjectStorageService(BASE_DIR)
+bridge_service = BridgeService()
+learning_service = LearningService(REPO_ROOT, project_storage_service)
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
@@ -94,6 +106,20 @@ class CreatedFile(Base):
 
 Base.metadata.create_all(bind=engine)
 
+
+def get_route_paths() -> set[str]:
+    return {route.path for route in app.routes}
+
+
+task_runner = BackendTaskRunner(
+    task_service=automation_task_service,
+    project_storage=project_storage_service,
+    learning_service=learning_service,
+    bridge_service=bridge_service,
+    repo_root=REPO_ROOT,
+    route_provider=get_route_paths,
+)
+
 class BuildRequest(BaseModel):
     instruction: str
     project_name: Optional[str] = "Default Project"
@@ -104,20 +130,53 @@ class ProjectCreate(BaseModel):
 class AutomationTaskCreate(BaseModel):
     command: str
     project_name: Optional[str] = "Default Project"
-    status: Optional[str] = "active"
-    current_stage: Optional[str] = "Planning"
+    status: Optional[str] = "received"
+    current_stage: Optional[str] = "received"
     progress: Optional[int] = 1
     github_commit: Optional[str] = None
     workflow_status: Optional[str] = None
+    logs: Optional[list[str]] = None
+    errors: Optional[list[str]] = None
+    summary: Optional[dict[str, Any]] = None
+    bridge_status: Optional[dict[str, Any]] = None
+    files_changed: Optional[list[str]] = None
 
 class AutomationTaskUpdate(BaseModel):
     command: Optional[str] = None
     project_name: Optional[str] = None
     status: Optional[str] = None
     current_stage: Optional[str] = None
+    stage: Optional[str] = None
     progress: Optional[int] = None
     github_commit: Optional[str] = None
     workflow_status: Optional[str] = None
+    logs: Optional[list[str]] = None
+    errors: Optional[list[str]] = None
+    summary: Optional[dict[str, Any]] = None
+    bridge_status: Optional[dict[str, Any]] = None
+    files_changed: Optional[list[str]] = None
+    stage_history: Optional[list[dict[str, Any]]] = None
+    config_problems: Optional[list[str]] = None
+    manual_setup: Optional[list[str]] = None
+    testing_result: Optional[dict[str, Any]] = None
+    deploy_result: Optional[dict[str, Any]] = None
+    manual_advance: Optional[bool] = False
+
+class TaskCreateRequest(BaseModel):
+    command: str
+    project_name: Optional[str] = "Default Project"
+
+class TaskUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    stage: Optional[str] = None
+    current_stage: Optional[str] = None
+    progress: Optional[int] = None
+    manual_advance: Optional[bool] = False
+
+class MemoryEntryCreate(BaseModel):
+    note: str
+    category: Optional[str] = "manual_note"
+    project_name: Optional[str] = "Builder Core"
 
 class StorageFileCreate(BaseModel):
     filename: str
@@ -1253,27 +1312,76 @@ def get_project_files(project_name: str):
 def get_run_info(project_name: str):
     return build_run_info_payload(project_name)
 
+@app.post("/tasks")
+def create_task(payload: TaskCreateRequest):
+    command = payload.command.strip()
+    project_name = normalize_project_name(payload.project_name)
+
+    if not command:
+        raise HTTPException(status_code=400, detail="Command is empty.")
+
+    item = task_runner.create_task(command=command, project_name=project_name)
+    return {
+        "task_id": item["id"],
+        "status": item["status"],
+        "stage": item["stage"],
+        "storage_backend": automation_task_service.storage_backend,
+        "storage_message": automation_task_service.storage_message,
+    }
+
+@app.get("/tasks")
+def list_tasks(limit: int = 20):
+    return {
+        "items": automation_task_service.list_tasks(limit=limit),
+        "storage_backend": automation_task_service.storage_backend,
+        "storage_message": automation_task_service.storage_message,
+    }
+
+@app.get("/tasks/{task_id}")
+def get_task(task_id: str):
+    item = automation_task_service.get_task(task_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+
+    return item
+
+@app.patch("/tasks/{task_id}")
+def update_task(task_id: str, payload: TaskUpdateRequest):
+    task = automation_task_service.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+
+    if payload.manual_advance:
+        item = task_runner.manual_advance(task_id)
+    else:
+        item = automation_task_service.update_task(task_id, model_to_dict(payload))
+
+    if item is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+
+    return item
+
 @app.post("/automation/tasks")
 def create_automation_task(payload: AutomationTaskCreate):
     command = payload.command.strip()
     project_name = normalize_project_name(payload.project_name)
 
     if not command:
-        return {
-            "ok": False,
-            "message": "Task command is empty.",
-            "storage_backend": automation_task_service.storage_backend,
-            "storage_message": automation_task_service.storage_message
-        }
+        raise HTTPException(status_code=400, detail="Task command is empty.")
 
     item = automation_task_service.create_task(
         command=command,
         project_name=project_name,
-        status=payload.status or "active",
-        current_stage=payload.current_stage or "Planning",
+        status=payload.status or "received",
+        current_stage=payload.current_stage or "received",
         progress=payload.progress or 1,
         github_commit=payload.github_commit,
-        workflow_status=payload.workflow_status
+        workflow_status=payload.workflow_status,
+        logs=payload.logs,
+        errors=payload.errors,
+        summary=payload.summary,
+        bridge_status=payload.bridge_status,
+        files_changed=payload.files_changed,
     )
     return {
         "ok": True,
@@ -1307,7 +1415,11 @@ def get_automation_task(task_id: str):
 
 @app.patch("/automation/tasks/{task_id}")
 def update_automation_task(task_id: str, payload: AutomationTaskUpdate):
-    item = automation_task_service.update_task(task_id, model_to_dict(payload))
+    if payload.manual_advance:
+        item = task_runner.manual_advance(task_id)
+    else:
+        item = automation_task_service.update_task(task_id, model_to_dict(payload))
+
     if item is None:
         raise HTTPException(status_code=404, detail="Automation task not found.")
 
@@ -1321,11 +1433,69 @@ def update_automation_task(task_id: str, payload: AutomationTaskUpdate):
 
 @app.get("/automation/github-status")
 def automation_github_status():
-    return build_github_status_payload()
+    return bridge_service.build_github_status_payload()
 
 @app.get("/automation/deploy-status")
 def automation_deploy_status():
-    return build_deploy_status_payload()
+    return bridge_service.build_deploy_status_payload()
+
+@app.get("/memory")
+def get_memory():
+    return {
+        "ok": True,
+        "storage_backend": project_storage_service.storage_backend,
+        "storage_message": project_storage_service.storage_message,
+        "project_memory": project_storage_service.get_project_memory(20),
+        "latest_summary": project_storage_service.get_latest_summary(),
+        "latest_bridge_status": project_storage_service.get_latest_bridge_status(),
+        "known_environment_problems": project_storage_service.get_known_environment_problems(),
+    }
+
+@app.post("/memory")
+def create_memory_entry(payload: MemoryEntryCreate):
+    note = payload.note.strip()
+    if not note:
+        raise HTTPException(status_code=400, detail="Memory note is empty.")
+
+    entry = project_storage_service.save_project_memory(
+        {
+            "type": payload.category or "manual_note",
+            "project_name": payload.project_name or "Builder Core",
+            "note": note,
+        }
+    )
+    return {
+        "ok": True,
+        "item": entry,
+        "storage_backend": project_storage_service.storage_backend,
+        "storage_message": project_storage_service.storage_message,
+    }
+
+@app.get("/learning")
+def get_learning():
+    payload = learning_service.build_learning_payload()
+    return {
+        "ok": True,
+        **payload,
+    }
+
+@app.post("/learning/scan")
+def scan_learning():
+    summary = learning_service.scan_project_structure()
+    project_storage_service.save_project_memory(
+        {
+            "type": "learning_scan",
+            "project_name": "Builder Core",
+            "note": "Project structure scan completed.",
+            "summary": summary,
+        }
+    )
+    return {
+        "ok": True,
+        "summary": summary,
+        "storage_backend": project_storage_service.storage_backend,
+        "storage_message": project_storage_service.storage_message,
+    }
 
 @app.post("/storage/files")
 def create_storage_file(payload: StorageFileCreate):
@@ -1470,16 +1640,22 @@ def chat(payload: BuildRequest):
 
 @app.get("/github/status")
 def github_status():
-    return build_github_status_payload()
+    return bridge_service.build_github_status_payload()
         
 @app.get("/system/status")
 def system_status():
     return {
         "status": "ok",
+        "service": "Builder Core",
+        "bridge_status": bridge_service.build_bridge_status_payload(),
         "task_storage_backend": automation_task_service.storage_backend,
         "task_storage_message": automation_task_service.storage_message,
+        "memory_storage_backend": project_storage_service.storage_backend,
+        "memory_storage_message": project_storage_service.storage_message,
         "file_storage_backend": file_storage_service.storage_backend,
-        "file_storage_message": file_storage_service.storage_message
+        "file_storage_message": file_storage_service.storage_message,
+        "latest_summary_available": project_storage_service.get_latest_summary() is not None,
+        "project_structure_scanned": project_storage_service.get_project_structure_summary() is not None,
     }
 
 import uvicorn

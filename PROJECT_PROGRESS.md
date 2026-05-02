@@ -1,120 +1,155 @@
-﻿# Builder Core Progress Summary
+# Builder Core Progress Summary
 
-This file is a quick handoff for ChatGPT or Codex so they can understand what Builder Core already does, what changed recently, and what still needs work.
+This file is the fastest handoff for ChatGPT or Codex before doing the next Builder Core upgrade.
+
+## Repo Folder Used
+- `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
+
+## What Changed In This Upgrade
+- Added a real backend task runner.
+- Added real backend task polling endpoints.
+- Added persistent local JSON task history with logs, errors, summary, and bridge status.
+- Added project memory storage.
+- Added learning storage and project structure scanning.
+- Replaced frontend fake progress with backend stage and progress polling.
+- Added honest bridge checks for GitHub and Codex configuration.
+
+## Files Edited
+- `backend/app/main.py`
+- `backend/app/tasks.py`
+- `backend/app/storage.py`
+- `backend/app/bridge.py`
+- `backend/app/learning.py`
+- `backend/app/services/task_service.py`
+- `backend/.env.example`
+- `frontend/src/app/page.tsx`
+- `README.md`
+- `COMMAND_CENTER.md`
+- `PROJECT_PROGRESS.md`
 
 ## Current Purpose
-Builder Core is becoming a cloud-first AI command center for:
-- receiving user instructions in one app UI
-- responding through backend chat
-- generating planning output and Codex-ready tasks
-- tracking task progress
-- checking GitHub workflow state
-- preparing for real automation and cloud storage
+Builder Core is now a real command center shell with:
+- one command input
+- real backend task creation
+- real backend stage tracking
+- real task logs and errors
+- real saved summaries
+- real project memory
+- simple learning from project history
 
-## What Works Right Now
-- Frontend and backend are deployed separately on Cloud Run.
-- Frontend talks to backend through `API_BASE` using the deployed backend URL fallback.
-- Backend health indicator checks `GET /system/status`.
-- Command Center chat calls `POST /chat` and shows real assistant replies.
-- The frontend creates real automation task records with `POST /automation/tasks`.
-- The frontend polls `GET /automation/tasks/{id}` and syncs stage progress back with `PATCH /automation/tasks/{id}`.
-- The stage progress bug is fixed so each stage now runs from `1%` to `100%`.
-- Deploy tracking now reads `GET /automation/deploy-status`.
-- The app is installable on phone through the existing PWA setup.
+## What Is Real Now
+- `POST /tasks` creates a real backend task record.
+- `GET /tasks/{task_id}` returns real backend progress, logs, errors, and summary.
+- `GET /tasks` returns recent saved tasks.
+- `GET /memory` returns project memory and the latest summary.
+- `GET /learning` returns lessons, known issues, recommended next steps, and project structure summary.
+- `GET /automation/deploy-status` returns real backend health checks and real GitHub workflow status when the token exists.
 
-## Current Backend Endpoints
-### Chat and builder
-- `POST /chat`
-- `POST /plan`
-- `GET /projects`
-- `POST /projects`
-- `GET /history`
-- `GET /project-files`
-- `GET /run-info`
-- `GET /system/status`
+## What Is Still Not Real
+- Real Codex repo execution is not implemented yet.
+- Real GitHub write actions are not implemented from the backend yet.
+- Real repo changes cannot happen until bridge credentials are added and a real executor is built.
+- Firestore and Cloud Storage are still optional future backends.
 
-### Automation
-- `POST /automation/tasks`
-- `GET /automation/tasks`
-- `GET /automation/tasks/{id}`
-- `PATCH /automation/tasks/{id}`
-- `GET /automation/github-status`
-- `GET /automation/deploy-status`
+## Storage Used Today
+- Task history: `backend/runtime_data/automation_tasks.json`
+- Memory and latest summary: `backend/runtime_data/project_memory.json`
+- File storage metadata: `backend/runtime_data/storage_files.json`
+- Local file storage fallback: `backend/runtime_data/storage_files/`
 
-### Storage
-- `POST /storage/files`
-- `GET /storage/files`
-- `GET /storage/files/{id}`
-- `DELETE /storage/files/{id}`
+## Cloud-First Direction
+- Firestore: future task, history, memory, and lesson storage
+- Cloud Storage: future uploaded and generated file storage
+- Secret Manager: future GitHub, Codex, and API credentials
+- Cloud Run: frontend and backend runtime
+- GitHub: code source of truth
 
-## Storage Model Today
-### Task storage
-- Firestore-ready service abstraction exists.
-- If `FIRESTORE_ENABLED=true` and Google client setup is available, the backend can switch to Firestore.
-- Otherwise it falls back to local JSON in `backend/runtime_data/automation_tasks.json`.
+Important:
+- Laptop and phone are control devices only.
+- Current local JSON storage is a fallback, not a permanent cloud database.
 
-### File storage
-- Google Cloud Storage-ready service abstraction exists.
-- If `GCS_BUCKET_NAME` and Google client setup are available, the backend can switch to GCS.
-- Otherwise it falls back to local metadata and files under `backend/runtime_data/`.
+## Required Environment Variables
+- `FIRESTORE_ENABLED`
+- `GCP_PROJECT_ID`
+- `GCS_BUCKET_NAME`
+- `GITHUB_TOKEN`
+- `GITHUB_OWNER`
+- `GITHUB_REPO`
+- `GITHUB_BRANCH`
+- `CODEX_API_KEY`
+- `CODEX_MODE`
+- `FRONTEND_URL`
+- `BACKEND_URL`
 
-## GitHub Tracking
-- Backend checks public repo and workflow state through GitHub API.
-- If `GITHUB_TOKEN` is missing, the app returns a safe message instead of failing.
-- Frontend shows repo, branch, latest commit, checks workflow, deploy workflow status, and live deploy health.
+## Learning System Status
 
-## Frontend UX Status
-- Unified Command Center UI is in place.
-- Compact task bar is in place.
-- Progress automatically runs each stage from `1%` to `100%`.
-- Manual `Next` is now the fallback instead of the primary way to move through the flow.
-- Review, download/install, and help sections still exist.
-- Mobile navigation and PWA install remain available.
+### What it can do now
+- scan project structure
+- save lessons from each task
+- save known issues from recent failures
+- recommend next steps based on recent summaries and bridge problems
 
-## Environment Variables
-### Storage
-- `FIRESTORE_ENABLED=false`
-- `GCP_PROJECT_ID=`
-- `GCS_BUCKET_NAME=`
-- `BACKEND_PUBLIC_URL=https://builder-core-599596796788.us-central1.run.app`
-- `FRONTEND_PUBLIC_URL=https://builder-core-frontend-599596796788.us-central1.run.app`
+### What it cannot do yet
+- train a new AI model
+- reason over the full repo deeply
+- make autonomous repo changes
+- infer real code changes without a real bridge/executor
 
-### GitHub
-- `GITHUB_TOKEN=`
-- `GITHUB_OWNER=jagangill001`
-- `GITHUB_REPO=builder-core`
-- `GITHUB_DEFAULT_BRANCH=main`
-- `GITHUB_CHECKS_WORKFLOW_NAME=Repo Checks`
-- `GITHUB_DEPLOY_WORKFLOW_NAME=Deploy Cloud Run`
+Builder Core is learning from:
+- project structure
+- saved tasks
+- saved summaries
+- saved lessons
 
-## Recent Milestones
-- Added unified Command Center experience.
-- Wired frontend command flow to backend `/chat`.
-- Added compact task progress system.
-- Added GitHub status tracking.
-- Added cloud-first task storage foundation.
-- Added Google Cloud SDK dependencies for future Firestore, Cloud Storage, and Secret Manager work.
+It is **not** training a custom AI model.
 
-## What Is Automatic Now
-- Stage progress automatically runs from `1%` to `100%`.
-- Deploy detection polls `GET /automation/deploy-status`.
-- GitHub Deploying and Cloud Run Live can react to live backend signals when they match the current task.
+## Local Run
 
-## What Is Still Manual
-- `Next` is still available as the fallback when a stage completes.
-- Codex is not auto-triggered yet.
-- Task history is not yet persisted in Firestore by default.
-- Storage uploads are still local fallback unless cloud configuration is enabled.
+### Backend
+```powershell
+cd backend
+uvicorn app.main:app --reload
+```
 
-## Best Next Upgrades
-- Enable Firestore-backed task storage in production.
-- Add `GET /automation/history`.
-- Add Cloud Storage signed-upload flow.
-- Add richer deploy history and rollback-aware rollout tracking.
-- Add authenticated approval flow before automatic repo actions.
+### Frontend
+```powershell
+cd frontend
+npm install
+npm run dev
+```
 
-## Legal And Safety Notes
-- Prefer original repo-specific code.
-- Avoid blind copying from third-party sources.
-- Use licensed frameworks normally.
-- Keep automation gated by approval, auth, and logs.
+## Next Safe Upgrade
+- Add a real backend executor once GitHub and Codex credentials are available.
+- Move memory and lessons from local JSON fallback to Firestore.
+- Move file storage from local fallback to Cloud Storage.
+- Add authenticated approval before any real repo write action.
+
+## Latest Codex Work Summary
+- Date/time: 2026-05-02 America/Toronto
+- Folder used: `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
+- Files changed:
+  - `backend/app/main.py`
+  - `backend/app/tasks.py`
+  - `backend/app/storage.py`
+  - `backend/app/bridge.py`
+  - `backend/app/learning.py`
+  - `backend/app/services/task_service.py`
+  - `backend/.env.example`
+  - `frontend/src/app/page.tsx`
+  - `README.md`
+  - `COMMAND_CENTER.md`
+  - `PROJECT_PROGRESS.md`
+- Problem fixed:
+  - fake frontend-only progress was replaced with backend task tracking
+  - Builder Core now saves task history, memory, and learning notes
+  - bridge status is now honest about missing GitHub or Codex credentials
+- Current status:
+  - backend task system is real
+  - storage is real with local JSON fallback
+  - learning is real as a saved knowledge system
+  - no real repo changes can happen until credentials are added
+- Remaining setup required:
+  - add `GITHUB_TOKEN`
+  - add `CODEX_API_KEY`
+  - choose whether to keep `CODEX_MODE=disabled` or enable it later
+  - migrate task, memory, and lesson storage to Firestore or another real database for long-term Cloud Run persistence

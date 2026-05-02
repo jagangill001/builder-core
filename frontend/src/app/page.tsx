@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 const API_BASE = (
   process.env.NEXT_PUBLIC_API_BASE_URL ??
@@ -9,1670 +9,530 @@ const API_BASE = (
 ).replace(/\/$/, "");
 
 const FRONTEND_APP_URL = "https://builder-core-frontend-599596796788.us-central1.run.app";
-const DEFAULT_TASK_TRACKING_MESSAGE =
-  "Cloud-first task tracking active. Local fallback used if Firestore is not enabled.";
-
-const COMMAND_CENTER_TABS = [
-  { key: "command", label: "Command" },
-  { key: "progress", label: "Progress" },
-  { key: "review", label: "Review" },
-  { key: "download", label: "Download" },
-  { key: "help", label: "Help" }
-] as const;
-
-const TASK_STAGE_DEFINITIONS = [
-  {
-    key: "planning",
-    label: "Planning",
-    description: "Builder Core is shaping the safest plan for the request.",
-    activeText: "Builder Core is creating a safe plan.",
-    completeText: "Planning complete - press Next",
-    nextText: "Next: Codex Working will begin after you press Next."
-  },
-  {
-    key: "codex_working",
-    label: "Codex Working",
-    description: "The simulated Codex stage is working through the requested repo change.",
-    activeText: "Codex is expected to work on the code change.",
-    completeText: "Codex Working complete - press Next",
-    nextText: "Next: GitHub Deploying will begin after you press Next."
-  },
-  {
-    key: "github_deploying",
-    label: "GitHub Deploying",
-    description: "GitHub Actions is treated as the next deploy checkpoint.",
-    activeText: "GitHub Actions is expected to deploy the update.",
-    completeText: "GitHub Deploying complete - press Next",
-    nextText: "Next: Cloud Run Live will begin after you press Next."
-  },
-  {
-    key: "cloud_run_live",
-    label: "Cloud Run Live",
-    description: "The live service stage represents the new cloud revision coming online.",
-    activeText: "A new Cloud Run version is expected to go live.",
-    completeText: "Cloud Run Live complete - press Next",
-    nextText: "Next: App Refreshed will begin after you press Next."
-  },
-  {
-    key: "app_refreshed",
-    label: "App Refreshed",
-    description: "The final stage confirms the app is ready for the next instruction.",
-    activeText: "Builder Core is preparing the refreshed app state.",
-    completeText: "Done - ready for next task",
-    nextText: "Next: start a new task when you are ready."
-  }
-] as const;
-
-const NEXT_UPGRADE_SUGGESTIONS = [
-  "Enable real Codex automation",
-  "Enable Firestore in production",
-  "Add deployment history",
-  "Store tasks in Firestore",
-  "Add multi-project support",
-  "Save GitHub status history"
-] as const;
 
 type ProjectItem = {
   id: number;
   name: string;
 };
 
-type CommandCenterTabKey = "command" | "progress" | "review" | "download" | "help";
-type ExecutionStatus = "idle" | "active" | "awaiting_next" | "completed";
-type TaskStageKey = (typeof TASK_STAGE_DEFINITIONS)[number]["key"];
-type TaskStageStatus = "pending" | "active" | "done";
-
-type TaskStage = {
-  key: TaskStageKey;
-  label: string;
-  description: string;
-  activeText: string;
-  completeText: string;
-  nextText: string;
-  status: TaskStageStatus;
-};
-
-type ReviewStatus = "ready" | "attention";
-
-type ReviewChecklistItem = {
-  label: string;
-  status: ReviewStatus;
-  detail: string;
-};
-
-type ReviewSummary = {
-  checklist: ReviewChecklistItem[];
-  doItems: string[];
-  avoidItems: string[];
-};
-
-type GithubWorkflow = {
-  name?: string;
-  status?: string;
-  conclusion?: string | null;
-  url?: string;
-  event?: string;
-  branch?: string;
-  sha?: string;
-  short_sha?: string;
-  updated_at?: string;
-};
-
-type GithubCommit = {
-  sha?: string;
-  short_sha?: string;
+type BridgeStatus = {
+  ready_for_repo_work?: boolean;
+  github_configured?: boolean;
+  codex_mode?: string;
+  codex_configured?: boolean;
+  missing?: string[];
+  notes?: string[];
   message?: string;
-  url?: string;
-  author?: string;
-  timestamp?: string;
-};
-
-type GithubStatusResponse = {
-  ok?: boolean;
-  connected?: boolean;
-  source?: string;
   repo?: string;
   branch?: string;
-  configured_with_token?: boolean;
-  latest_commit?: GithubCommit | null;
-  checks_workflow?: GithubWorkflow | null;
-  deploy_workflow?: GithubWorkflow | null;
-  summary?: string;
-  next_step?: string;
-  error?: string;
+  frontend_url?: string;
+  backend_url?: string;
+  checked_at?: string;
 };
 
-type DeployHealthCheck = {
-  url?: string;
-  reachable?: boolean;
-  healthy?: boolean;
-  status_code?: number | null;
-  reported_status?: string;
-  error?: string;
+type SystemStatusResponse = {
+  status?: string;
+  service?: string;
+  bridge_status?: BridgeStatus;
+  task_storage_backend?: string;
+  task_storage_message?: string;
+  memory_storage_backend?: string;
+  memory_storage_message?: string;
+  file_storage_backend?: string;
+  file_storage_message?: string;
+  latest_summary_available?: boolean;
+  project_structure_scanned?: boolean;
 };
 
-type DeployStatusResponse = GithubStatusResponse & {
-  deploy_running?: boolean;
-  deploy_succeeded?: boolean;
-  backend_healthy?: boolean;
-  frontend_reachable?: boolean | null;
-  ready_to_refresh?: boolean;
-  backend_check?: DeployHealthCheck | null;
-  frontend_check?: DeployHealthCheck | null;
+type TaskSummary = {
+  task_id?: string;
+  original_command?: string;
+  final_status?: string;
+  stages_completed?: string[];
+  files_changed?: string[];
+  folder_used?: string;
+  backend_logs?: string[];
+  errors?: string[];
+  what_completed?: string[];
+  what_still_needs_manual_setup?: string[];
+  next_recommended_step?: string;
+  message?: string;
   updated_at?: string;
 };
 
-type AutomationTask = {
+type TaskRecord = {
   id: string;
   command: string;
   project_name?: string;
   status: string;
-  current_stage: string;
+  stage?: string;
+  current_stage?: string;
   progress: number;
   github_commit?: string | null;
   workflow_status?: string | null;
-  created_at: string;
-  updated_at: string;
+  logs?: string[];
+  errors?: string[];
+  summary?: TaskSummary | null;
+  bridge_status?: BridgeStatus;
+  files_changed?: string[];
+  stage_history?: {
+    stage: string;
+    status: string;
+    progress: number;
+    timestamp: string;
+    message?: string;
+  }[];
+  config_problems?: string[];
+  manual_setup?: string[];
+  testing_result?: {
+    ok?: boolean;
+    checks?: string[];
+    missing_routes?: string[];
+  } | null;
+  deploy_result?: {
+    summary?: string;
+    next_step?: string;
+    connected?: boolean;
+    deploy_running?: boolean;
+    deploy_succeeded?: boolean;
+    backend_healthy?: boolean;
+    frontend_reachable?: boolean;
+  } | null;
+  created_at?: string;
+  updated_at?: string;
   storage_backend?: string;
   storage_message?: string;
 };
 
-type AutomationTaskResponse = {
-  ok?: boolean;
-  message?: string;
-  item?: AutomationTask;
-  items?: AutomationTask[];
+type TasksListResponse = {
+  items?: TaskRecord[];
   storage_backend?: string;
   storage_message?: string;
 };
 
-type CommandTask = {
-  instruction: string;
-  planner: string;
-  prompt: string;
-  timestamp: string;
-  builderSummary?: string | null;
-  runSummary?: string | null;
+type TaskCreateResponse = {
+  task_id: string;
+  status: string;
+  stage?: string;
+  storage_backend?: string;
+  storage_message?: string;
 };
 
-type CommandCenterChatResponse = Record<string, unknown> & {
-  ok?: boolean;
-  message?: string;
-  assistant_reply?: string;
-  project_name?: string;
-  intent?: string;
-  plan?: string[];
-  risks?: string[];
-  testing_plan?: string[];
-  next_steps?: string[];
-  codex_prompt?: string;
-  build_triggered?: boolean;
-  created_files?: string[];
-  run_info?: Record<string, unknown>;
-};
-
-type ChatEntry = {
+type MemoryEntry = {
   id: string;
-  role: "user" | "assistant";
-  kind: "text" | "planner" | "codex" | "builder" | "review";
-  title?: string;
-  content?: string;
-  review?: ReviewSummary;
-  timestamp: string;
+  type?: string;
+  project_name?: string;
+  note?: string;
+  summary?: unknown;
+  task_id?: string;
+  command?: string;
+  status?: string;
+  created_at?: string;
 };
 
-function buildTaskTrackingSummary(task: AutomationTask, storageMessage: string) {
-  return [
-    `Task ID: ${task.id}`,
-    `Storage: ${task.storage_backend ?? "local_json"}`,
-    `Stage: ${task.current_stage}`,
-    `Progress: ${task.progress}%`,
-    task.workflow_status ? `Workflow: ${task.workflow_status}` : "Workflow: waiting for GitHub status sync",
-    "",
-    storageMessage
-  ].join("\n");
-}
+type MemoryResponse = {
+  ok?: boolean;
+  storage_backend?: string;
+  storage_message?: string;
+  project_memory?: MemoryEntry[];
+  latest_summary?: TaskSummary | null;
+  latest_bridge_status?: BridgeStatus | null;
+  known_environment_problems?: string[];
+};
 
-function buildCodexPrompt(instruction: string, projectName: string) {
-  return [
-    "Repo: jagangill001/builder-core",
-    `Selected project: ${projectName}`,
-    "",
-    "Goal:",
-    instruction,
-    "",
-    "Safety rules:",
-    "- Inspect the repo before editing.",
-    "- Do not break working features.",
-    "- Commit to main.",
-    "- Explain files changed.",
-    "- Provide testing steps.",
-    "",
-    "Legal rules:",
-    "- Write original code for this repo.",
-    "- Do not blindly copy third-party snippets.",
-    "- Licensed frameworks are allowed when used normally.",
-    "",
-    "Do not break:",
-    "- Frontend/backend connection",
-    "- Health indicator",
-    "- Request submission flow",
-    "- PWA install behavior"
-  ].join("\n");
-}
+type Lesson = {
+  id: string;
+  task_id?: string;
+  command?: string;
+  what_happened?: string[] | string;
+  files_changed?: string[];
+  error?: string | null;
+  lesson_learned?: string;
+  next_recommendation?: string;
+  status?: string;
+  created_at?: string;
+};
 
-function buildPlannerOutput(instruction: string, projectName: string) {
-  return [
-    "ChatGPT Planner",
-    `Project: ${projectName}`,
-    `Instruction: ${instruction}`,
-    "",
-    "Step-by-step plan:",
-    "1. Inspect the current frontend, backend, and deployment context for the request.",
-    "2. Choose the smallest safe change that solves the problem.",
-    "3. Preserve working features before changing anything else.",
-    "4. Prepare a Codex-ready implementation task.",
-    "5. Verify the result with focused testing and a live check.",
-    "",
-    "Risks:",
-    "- Breaking the frontend/backend connection.",
-    "- Regressing the mobile install or health indicator experience.",
-    "- Making a broad UI change when a smaller one is safer.",
-    "",
-    "Testing plan:",
-    "- Confirm /system/status still reports correctly in the app.",
-    "- Confirm the main command submission flow still works.",
-    "- Confirm the latest UI works on desktop and phone widths.",
-    "- Confirm the deployed frontend and backend still load after deployment."
-  ].join("\n");
-}
+type LearningResponse = {
+  ok?: boolean;
+  storage_backend?: string;
+  storage_message?: string;
+  project_structure_summary?: {
+    scanned_at?: string;
+    root?: string;
+    top_level_folders?: string[];
+    important_files?: string[];
+    sample_tree?: string[];
+    notes?: string[];
+  } | null;
+  lessons?: Lesson[];
+  known_issues?: string[];
+  recommended_next_steps?: string[];
+  notes?: string[];
+};
 
-function buildPlannerSummary(
-  instruction: string,
-  projectName: string,
-  data: CommandCenterChatResponse,
-  fallbackPlanner: string
-) {
-  const plan = Array.isArray(data.plan) ? data.plan : [];
-  const risks = Array.isArray(data.risks) ? data.risks : [];
-  const testingPlan = Array.isArray(data.testing_plan) ? data.testing_plan : [];
-  const intent = typeof data.intent === "string" && data.intent ? data.intent : "build";
-  const resolvedProjectName =
-    typeof data.project_name === "string" && data.project_name ? data.project_name : projectName;
-
-  if (plan.length === 0 && risks.length === 0 && testingPlan.length === 0) {
-    return fallbackPlanner;
+function formatTimestamp(value?: string | null) {
+  if (!value) {
+    return "Unknown";
   }
 
-  return [
-    "ChatGPT Planner",
-    `Project: ${resolvedProjectName}`,
-    `Instruction: ${instruction}`,
-    `Intent: ${intent}`,
-    "",
-    "Step-by-step plan:",
-    ...(plan.length > 0
-      ? plan.map((step, index) => `${index + 1}. ${step}`)
-      : ["1. Review the request and choose the next safe step."]),
-    "",
-    "Risks:",
-    ...(risks.length > 0 ? risks.map((risk) => `- ${risk}`) : ["- No risks were returned by the backend."]),
-    "",
-    "Testing plan:",
-    ...(testingPlan.length > 0
-      ? testingPlan.map((step) => `- ${step}`)
-      : ["- Confirm the request outcome manually after the reply."])
-  ].join("\n");
-}
-
-function buildNextStepsSummary(nextSteps: unknown) {
-  if (!Array.isArray(nextSteps) || nextSteps.length === 0) {
-    return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
   }
 
-  return ["Next Steps", ...nextSteps.map((step) => `- ${String(step)}`)].join("\n");
-}
-
-function buildBuilderSummary(data: Record<string, unknown>) {
-  const createdFiles = Array.isArray(data.created_files) ? data.created_files : [];
-
-  return [
-    `Message: ${String(data.message ?? "Builder Core responded.")}`,
-    `Project: ${String(data.project_name ?? "Unknown project")}`,
-    `Module Key: ${String(data.module_key ?? "n/a")}`,
-    `Title: ${String(data.title ?? "n/a")}`,
-    `Route Path: ${String(data.route_path ?? "n/a")}`,
-    "",
-    "Created Files:",
-    createdFiles.length > 0 ? "- " + createdFiles.join("\n- ") : "- No files generated for this request."
-  ].join("\n");
-}
-
-function buildRunSummary(data: Record<string, unknown>) {
-  const commands = Array.isArray(data.commands) ? data.commands : [];
-
-  return [
-    "Run Instructions",
-    `Project: ${String(data.project_name ?? "Unknown project")}`,
-    `Path: ${String(data.project_path ?? "n/a")}`,
-    `Run Script: ${String(data.run_script ?? "n/a")}`,
-    `URL Hint: ${String(data.url_hint ?? "n/a")}`,
-    "",
-    "Commands:",
-    commands.length > 0 ? String(commands.join("\n")) : "No run commands returned."
-  ].join("\n");
-}
-
-function formatTimestamp(date: Date) {
   return date.toLocaleString(undefined, {
     month: "short",
     day: "numeric",
     hour: "numeric",
-    minute: "2-digit"
+    minute: "2-digit",
   });
 }
 
-function getExecutionStatusLabel(status: ExecutionStatus) {
-  if (status === "active") {
-    return "Running";
+function titleCaseStage(stage?: string | null) {
+  if (!stage) {
+    return "Waiting";
   }
 
-  if (status === "awaiting_next") {
-    return "Press Next";
+  return stage
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function getProgressBarClass(status: string) {
+  if (status === "failed") {
+    return "bg-red-500";
   }
 
   if (status === "completed") {
-    return "Done";
-  }
-
-  return "Idle";
-}
-
-function buildTaskStages(currentStageIndex: number, executionStatus: ExecutionStatus) {
-  return TASK_STAGE_DEFINITIONS.map((stage, index) => {
-    let status: TaskStageStatus = "pending";
-
-    if (currentStageIndex < 0) {
-      status = "pending";
-    } else if (executionStatus === "completed") {
-      status = "done";
-    } else if (index < currentStageIndex) {
-      status = "done";
-    } else if (index === currentStageIndex && executionStatus === "active") {
-      status = "active";
-    } else if (index === currentStageIndex && executionStatus === "awaiting_next") {
-      status = "done";
-    }
-
-    return {
-      ...stage,
-      status
-    };
-  });
-}
-
-function getTaskStageCardClass(status: TaskStageStatus) {
-  if (status === "active") {
-    return "rounded-3xl border-2 border-blue-200 bg-blue-50 p-4 shadow-sm";
-  }
-
-  if (status === "done") {
-    return "rounded-2xl border border-green-200 bg-green-50/80 p-3";
-  }
-
-  return "rounded-2xl border border-slate-100 bg-slate-50/80 p-2.5 opacity-60";
-}
-
-function getTaskStageBadgeClass(status: TaskStageStatus) {
-  if (status === "active") {
-    return "border border-blue-200 bg-blue-100 text-blue-700";
-  }
-
-  if (status === "done") {
-    return "border border-green-200 bg-green-100 text-green-700";
-  }
-
-  return "border border-slate-200 bg-slate-100 text-slate-500";
-}
-
-function getTaskStageDotClass(status: TaskStageStatus) {
-  if (status === "active") {
-    return "bg-blue-600";
-  }
-
-  if (status === "done") {
     return "bg-green-600";
   }
 
-  return "bg-slate-300";
+  return "bg-blue-600";
 }
 
-function getTaskStageTitleClass(status: TaskStageStatus) {
-  if (status === "active") {
-    return "text-base font-semibold text-slate-900";
-  }
-
-  if (status === "done") {
-    return "text-sm font-medium text-slate-900";
-  }
-
-  return "text-sm font-medium text-slate-500";
-}
-
-function getTaskStageDescriptionClass(status: TaskStageStatus) {
-  if (status === "active") {
-    return "text-sm text-slate-700";
-  }
-
-  if (status === "done") {
-    return "text-xs text-slate-600";
-  }
-
-  return "text-xs text-slate-400";
-}
-
-function getTabButtonClass(isActive: boolean) {
-  if (isActive) {
-    return "rounded-2xl bg-black px-4 py-3 text-sm font-semibold text-white shadow-sm";
-  }
-
-  return "rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-600";
-}
-
-function getReviewBadgeClass(status: ReviewStatus) {
-  if (status === "ready") {
-    return "border border-green-200 bg-green-100 text-green-700";
-  }
-
-  return "border border-amber-200 bg-amber-100 text-amber-700";
-}
-
-function getTaskStageIndexFromName(stageName?: string | null) {
-  if (!stageName) {
-    return -1;
-  }
-
-  const normalized = stageName.trim().toLowerCase().replaceAll(" ", "_");
-  return TASK_STAGE_DEFINITIONS.findIndex((stage) => {
-    const stageKey = stage.key.toLowerCase();
-    const stageLabel = stage.label.trim().toLowerCase().replaceAll(" ", "_");
-    return normalized === stageKey || normalized === stageLabel;
-  });
-}
-
-function normalizeExecutionStatusValue(status?: string | null): ExecutionStatus {
+function getStatusBadgeClass(status: string) {
   if (status === "completed") {
-    return "completed";
+    return "border border-green-200 bg-green-50 text-green-700";
   }
 
-  if (status === "awaiting_next") {
-    return "awaiting_next";
+  if (status === "failed") {
+    return "border border-red-200 bg-red-50 text-red-700";
   }
 
-  if (status === "active") {
-    return "active";
+  if (status === "received") {
+    return "border border-slate-200 bg-slate-50 text-slate-700";
   }
 
-  return "idle";
+  return "border border-blue-200 bg-blue-50 text-blue-700";
 }
 
-function buildWorkflowStatusLabel(githubStatus: GithubStatusResponse | null) {
-  if (githubStatus?.deploy_workflow?.conclusion) {
-    return `deploy:${githubStatus.deploy_workflow.conclusion}`;
+function getBackendBadgeClass(status: "checking" | "online" | "offline") {
+  if (status === "online") {
+    return "border border-green-200 bg-green-50 text-green-700";
   }
 
-  if (githubStatus?.deploy_workflow?.status) {
-    return `deploy:${githubStatus.deploy_workflow.status}`;
+  if (status === "offline") {
+    return "border border-red-200 bg-red-50 text-red-700";
   }
 
-  if (githubStatus?.checks_workflow?.conclusion) {
-    return `checks:${githubStatus.checks_workflow.conclusion}`;
-  }
-
-  if (githubStatus?.checks_workflow?.status) {
-    return `checks:${githubStatus.checks_workflow.status}`;
-  }
-
-  return githubStatus?.summary ?? "not_connected";
+  return "border border-slate-200 bg-slate-50 text-slate-600";
 }
 
-function buildDeployStatusLabel(deployStatus: DeployStatusResponse | null) {
-  if (!deployStatus) {
-    return "Waiting for deploy tracking.";
+async function parseJsonSafe<T>(response: Response): Promise<T | null> {
+  try {
+    return (await response.json()) as T;
+  } catch {
+    return null;
   }
-
-  if (!deployStatus.connected) {
-    return "GitHub status not connected";
-  }
-
-  if (deployStatus.deploy_running) {
-    return "GitHub Actions running";
-  }
-
-  if (deployStatus.ready_to_refresh) {
-    return "Ready to refresh";
-  }
-
-  if (deployStatus.backend_healthy) {
-    return "Cloud Run is live";
-  }
-
-  if (deployStatus.deploy_succeeded) {
-    return "Deploy succeeded";
-  }
-
-  return deployStatus.summary ?? "Waiting for deploy tracking.";
-}
-
-function getGithubTrackingBadgeClass(state: "checking" | "online" | "offline") {
-  if (state === "online") {
-    return "border border-green-200 bg-green-100 text-green-700";
-  }
-
-  if (state === "offline") {
-    return "border border-red-200 bg-red-100 text-red-700";
-  }
-
-  return "border border-slate-200 bg-slate-100 text-slate-600";
-}
-
-function getGithubWorkflowBadgeClass(workflow: GithubWorkflow | null | undefined) {
-  if (!workflow) {
-    return "border border-slate-200 bg-slate-100 text-slate-500";
-  }
-
-  if (workflow.status !== "completed") {
-    return "border border-blue-200 bg-blue-100 text-blue-700";
-  }
-
-  if (workflow.conclusion === "success") {
-    return "border border-green-200 bg-green-100 text-green-700";
-  }
-
-  if (workflow.conclusion === "failure" || workflow.conclusion === "timed_out") {
-    return "border border-red-200 bg-red-100 text-red-700";
-  }
-
-  return "border border-amber-200 bg-amber-100 text-amber-700";
-}
-
-function getGithubWorkflowLabel(workflow: GithubWorkflow | null | undefined) {
-  if (!workflow) {
-    return "Not found";
-  }
-
-  if (workflow.status !== "completed") {
-    return workflow.status ? workflow.status.replaceAll("_", " ") : "Running";
-  }
-
-  if (workflow.conclusion) {
-    return workflow.conclusion.replaceAll("_", " ");
-  }
-
-  return "Completed";
-}
-
-function workflowPassed(workflow: GithubWorkflow | null | undefined) {
-  return workflow?.status === "completed" && workflow?.conclusion === "success";
-}
-
-function buildReviewSummary(
-  task: CommandTask | null,
-  backendState: "checking" | "online" | "offline",
-  githubStatus: GithubStatusResponse | null
-): ReviewSummary {
-  const hasBuilderSummary = Boolean(task?.builderSummary);
-  const backendHealthy = backendState === "online";
-  const githubChecksPassed = workflowPassed(githubStatus?.checks_workflow);
-  const githubDeployPassed = workflowPassed(githubStatus?.deploy_workflow);
-  const githubConnected = githubStatus?.connected === true;
-
-  return {
-    checklist: [
-      {
-        label: "Files changed?",
-        status: hasBuilderSummary ? "ready" : "attention",
-        detail: hasBuilderSummary
-          ? "Builder Core returned a change summary for this task."
-          : "Confirm the exact files changed before treating the task as complete."
-      },
-      {
-        label: "Build passed?",
-        status: "ready",
-        detail: "The simplified flow assumes the build was checked before moving forward."
-      },
-      {
-        label: "GitHub Actions green?",
-        status: githubChecksPassed ? "ready" : "attention",
-        detail: githubChecksPassed
-          ? "GitHub tracking shows the latest Repo Checks run completed successfully."
-          : githubConnected
-            ? "GitHub tracking is connected, but the latest Repo Checks run still needs attention."
-            : "GitHub tracking is not available yet, so confirm the Actions run manually."
-      },
-      {
-        label: "Frontend deployed?",
-        status: githubDeployPassed ? "ready" : "attention",
-        detail: githubDeployPassed
-          ? "GitHub tracking shows the latest deploy workflow completed successfully."
-          : githubConnected
-            ? "GitHub tracking is connected, but the deploy workflow has not reached a successful result yet."
-            : "GitHub deploy status is not connected yet, so verify the live frontend manually."
-      },
-      {
-        label: "Backend still online?",
-        status: backendHealthy ? "ready" : "attention",
-        detail: backendHealthy
-          ? "The backend health badge is still online."
-          : "Recheck /system/status before closing the task."
-      }
-    ],
-    doItems: [
-      "Prefer safe improvements and small upgrades after the task completes.",
-      "Verify the live app quickly before starting the next task.",
-      "Capture files changed and testing notes while the result is fresh."
-    ],
-    avoidItems: [
-      "Do not pile risky changes onto an unverified result.",
-      "Do not delete working features to make a change easier.",
-      "Do not assume the backend is healthy if the badge is offline."
-    ]
-  };
-}
-
-function renderReviewContent(review: ReviewSummary) {
-  return (
-    <>
-      <div className="space-y-3">
-        {review.checklist.map((item) => (
-          <div key={item.label} className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-            <div className="mb-2 flex items-center justify-between gap-3">
-              <p className="font-semibold text-gray-900">{item.label}</p>
-              <span className={`rounded-full px-3 py-1 text-xs font-medium ${getReviewBadgeClass(item.status)}`}>
-                {item.status === "ready" ? "Looks good" : "Check this"}
-              </span>
-            </div>
-            <p className="text-sm text-gray-600">{item.detail}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-5 grid gap-4 lg:grid-cols-2">
-        <div className="rounded-2xl border border-green-200 bg-green-50 p-4">
-          <p className="mb-3 font-semibold text-green-900">Suggestions: Do</p>
-          <ul className="list-disc space-y-2 pl-5 text-sm text-green-900">
-            {review.doItems.map((item, index) => (
-              <li key={index}>{item}</li>
-            ))}
-          </ul>
-        </div>
-
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-          <p className="mb-3 font-semibold text-amber-900">Suggestions: Do Not</p>
-          <ul className="list-disc space-y-2 pl-5 text-sm text-amber-900">
-            {review.avoidItems.map((item, index) => (
-              <li key={index}>{item}</li>
-            ))}
-          </ul>
-        </div>
-      </div>
-    </>
-  );
-}
-
-function renderTextBubble(entry: ChatEntry) {
-  const isUser = entry.role === "user";
-
-  return (
-    <div key={entry.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div
-        className={
-          isUser
-            ? "max-w-3xl rounded-3xl bg-black px-5 py-4 text-white shadow-sm"
-            : "max-w-3xl rounded-3xl border border-gray-200 bg-white px-5 py-4 text-black shadow-sm"
-        }
-      >
-        {entry.title && (
-          <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${isUser ? "text-white/70" : "text-gray-500"}`}>
-            {entry.title}
-          </p>
-        )}
-        <p className="whitespace-pre-wrap text-sm leading-6">{entry.content}</p>
-        <p className={`mt-3 text-xs ${isUser ? "text-white/70" : "text-gray-400"}`}>{entry.timestamp}</p>
-      </div>
-    </div>
-  );
-}
-
-function renderStructuredBubble(entry: ChatEntry) {
-  if (entry.kind === "review" && entry.review) {
-    return (
-      <div key={entry.id} className="flex justify-start">
-        <div className="max-w-4xl rounded-3xl border border-gray-200 bg-white px-5 py-5 shadow-sm">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">{entry.title}</p>
-          {renderReviewContent(entry.review)}
-          <p className="mt-4 text-xs text-gray-400">{entry.timestamp}</p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div key={entry.id} className="flex justify-start">
-      <div className="max-w-4xl rounded-3xl border border-gray-200 bg-white px-5 py-5 shadow-sm">
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">{entry.title}</p>
-        <pre className="whitespace-pre-wrap text-sm leading-6 text-gray-800">{entry.content}</pre>
-        <p className="mt-4 text-xs text-gray-400">{entry.timestamp}</p>
-      </div>
-    </div>
-  );
 }
 
 export default function Home() {
-  const [projects, setProjects] = useState<ProjectItem[]>([]);
-  const [selectedProject, setSelectedProject] = useState("Default Project");
-  const [newProjectName, setNewProjectName] = useState("");
-  const [commandInput, setCommandInput] = useState("");
-  const [activeTab, setActiveTab] = useState<CommandCenterTabKey>("command");
   const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">("checking");
-  const [githubTrackingState, setGithubTrackingState] = useState<"checking" | "online" | "offline">("checking");
-  const [githubStatus, setGithubStatus] = useState<GithubStatusResponse | null>(null);
-  const [githubCheckedAt, setGithubCheckedAt] = useState("");
-  const [deployStatus, setDeployStatus] = useState<DeployStatusResponse | null>(null);
-  const [executionStatus, setExecutionStatus] = useState<ExecutionStatus>("idle");
-  const [taskStageIndex, setTaskStageIndex] = useState(-1);
-  const [taskStageProgress, setTaskStageProgress] = useState(0);
-  const [activeTaskInstruction, setActiveTaskInstruction] = useState("");
-  const [trackedTaskId, setTrackedTaskId] = useState("");
-  const [trackedTask, setTrackedTask] = useState<AutomationTask | null>(null);
-  const [taskTrackingMessage, setTaskTrackingMessage] = useState(DEFAULT_TASK_TRACKING_MESSAGE);
+  const [systemStatus, setSystemStatus] = useState<SystemStatusResponse | null>(null);
+  const [projects, setProjects] = useState<ProjectItem[]>([]);
+  const [projectName, setProjectName] = useState("Default Project");
+  const [commandInput, setCommandInput] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [pollError, setPollError] = useState("");
+  const [currentTaskId, setCurrentTaskId] = useState("");
+  const [currentTask, setCurrentTask] = useState<TaskRecord | null>(null);
+  const [recentTasks, setRecentTasks] = useState<TaskRecord[]>([]);
+  const [memoryData, setMemoryData] = useState<MemoryResponse | null>(null);
+  const [learningData, setLearningData] = useState<LearningResponse | null>(null);
+  const [memoryNote, setMemoryNote] = useState("");
+  const [memoryMessage, setMemoryMessage] = useState("");
   const [installMessage, setInstallMessage] = useState("");
-  const [lastTask, setLastTask] = useState<CommandTask | null>(null);
-  const [completedTaskId, setCompletedTaskId] = useState("");
-  const [chatEntries, setChatEntries] = useState<ChatEntry[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      kind: "text",
-      title: "Builder Core",
-      content:
-        "Ask Builder Core to build, fix, or upgrade anything. I will plan the work, prepare the Codex task, keep the stage bar visible, and explain what to do next.",
-      timestamp: "Ready"
+
+  const activeStage = currentTask?.stage ?? currentTask?.current_stage ?? "received";
+  const activeProgress = currentTask?.progress ?? 0;
+  const taskLogs = currentTask?.logs ?? [];
+  const taskErrors = currentTask?.errors ?? [];
+  const bridgeStatus = currentTask?.bridge_status ?? systemStatus?.bridge_status ?? null;
+
+  const isTaskActive = useMemo(() => {
+    if (!currentTask) {
+      return false;
     }
-  ]);
 
-  const bottomRef = useRef<HTMLDivElement | null>(null);
-  const sectionRefs = useRef<Partial<Record<CommandCenterTabKey, HTMLElement | null>>>({});
-  const lastSyncedTaskPayloadRef = useRef("");
-  const lastDeployEventRef = useRef("");
-  const stageProgressTimerRef = useRef<number | null>(null);
-  const refreshCountdownTimerRef = useRef<number | null>(null);
-  const [refreshCountdown, setRefreshCountdown] = useState<number | null>(null);
+    return !["completed", "failed"].includes(currentTask.status);
+  }, [currentTask]);
 
-  const taskStages = useMemo(() => buildTaskStages(taskStageIndex, executionStatus), [taskStageIndex, executionStatus]);
-  const currentTaskStage = taskStageIndex >= 0 ? TASK_STAGE_DEFINITIONS[taskStageIndex] : null;
-  const latestReview = useMemo(() => buildReviewSummary(lastTask, backendStatus, githubStatus), [lastTask, backendStatus, githubStatus]);
-
-  const taskStageCounter =
-    currentTaskStage !== null ? `${taskStageIndex + 1}/${TASK_STAGE_DEFINITIONS.length}` : `0/${TASK_STAGE_DEFINITIONS.length}`;
-  const taskBarVisible = currentTaskStage !== null || Boolean(lastTask) || Boolean(activeTaskInstruction);
-  const canAdvanceStage =
-    executionStatus === "awaiting_next" &&
-    taskStageIndex >= 0 &&
-    taskStageIndex < TASK_STAGE_DEFINITIONS.length - 1;
-
-  const taskBarTaskName =
-    activeTaskInstruction || trackedTask?.command || lastTask?.instruction || "Run a command to start the next task";
-  const githubRepoLabel = githubStatus?.repo ?? "jagangill001/builder-core";
-  const githubBranchLabel = githubStatus?.branch ?? "main";
-  const githubChecksWorkflow = githubStatus?.checks_workflow ?? null;
-  const githubDeployWorkflow = githubStatus?.deploy_workflow ?? null;
-  const effectiveTaskId = trackedTask?.id || trackedTaskId;
-  const taskCreatedTimestamp = trackedTask?.created_at ? Date.parse(trackedTask.created_at) : Number.NaN;
-  const deployWorkflowTimestamp = deployStatus?.deploy_workflow?.updated_at
-    ? Date.parse(deployStatus.deploy_workflow.updated_at)
-    : Number.NaN;
-  const deploySignalMatchesTask =
-    Number.isFinite(taskCreatedTimestamp) &&
-    Number.isFinite(deployWorkflowTimestamp) &&
-    deployWorkflowTimestamp >= taskCreatedTimestamp;
-  const deployTrackingActiveForTask = Boolean(deployStatus?.deploy_running) || deploySignalMatchesTask;
-  const githubStatusSummary =
-    githubStatus?.summary ??
-    (githubTrackingState === "checking"
-      ? "Checking the latest GitHub repo and workflow state..."
-      : "GitHub tracking is not available right now.");
-  const githubStatusNextStep =
-    githubStatus?.next_step ??
-    (githubTrackingState === "offline"
-      ? "Next: verify the latest GitHub run manually until tracking reconnects."
-      : "Next: wait for a tracked workflow update.");
-  const deployStatusSummary = buildDeployStatusLabel(deployStatus);
-
-  let taskProgressText = "No task is running yet.";
-  let taskStatusText = "Run a command to begin.";
-  let taskNextText = "Next: submit a command in the Command tab.";
-
-  if (currentTaskStage) {
-    if (executionStatus === "active") {
-      taskProgressText = `${taskStageProgress}%`;
-      taskStatusText = `${currentTaskStage.label} in progress...`;
-      taskNextText = currentTaskStage.nextText;
-    } else if (executionStatus === "awaiting_next") {
-      taskProgressText = "100%";
-      taskStatusText = `${currentTaskStage.label} complete - press Next`;
-      taskNextText =
-        taskStageIndex < TASK_STAGE_DEFINITIONS.length - 1
-          ? `Next: ${TASK_STAGE_DEFINITIONS[taskStageIndex + 1].label} will begin after you press Next.`
-          : "Next: start a new task when you are ready.";
-    } else if (executionStatus === "completed") {
-      taskProgressText = "100%";
-      taskStatusText = "Done - ready for next task";
-      taskNextText = "Next: enter another command when you are ready.";
-    }
-  }
-
-  if (currentTaskStage?.key === "github_deploying" && githubTrackingState === "online") {
-    taskStatusText = deployStatusSummary;
-    taskNextText = deployTrackingActiveForTask
-      ? deployStatus?.next_step ?? githubStatusNextStep
-      : "Next: no new deploy signal is tied to this task yet, so you can use Next as the safe fallback.";
-  }
-
-  if (currentTaskStage?.key === "cloud_run_live" && githubTrackingState === "online") {
-    if (deployStatus?.backend_healthy) {
-      taskStatusText = "Cloud Run is live";
-      taskNextText = deployStatus?.ready_to_refresh
-        ? refreshCountdown !== null
-          ? `Next: the app will refresh automatically in ${refreshCountdown}s.`
-          : "Next: the app is ready to refresh."
-        : deploySignalMatchesTask
-          ? "Next: Builder Core is checking the live services before the final refresh."
-          : "Next: use Next as the fallback if this task is not tied to a live deploy signal yet.";
-    }
-  }
-
-  if (currentTaskStage?.key === "app_refreshed") {
-    taskStatusText =
-      refreshCountdown !== null ? `Ready to refresh in ${refreshCountdown}s...` : "App Refreshed in progress...";
-    taskNextText =
-      refreshCountdown !== null
-        ? "Next: wait for the automatic refresh, or use the Next button only if tracking is unavailable."
-        : "Next: Builder Core will refresh the app when the live deploy checks are complete.";
-  }
-
-  function appendChatEntries(entries: ChatEntry[]) {
-    setChatEntries((current) => [...current, ...entries]);
-  }
-
-  async function checkBackendStatus() {
+  async function loadSystemStatus(silent = false) {
     try {
       const response = await fetch(`${API_BASE}/system/status`);
-
-      if (!response.ok) {
-        throw new Error("Backend status check failed.");
+      const data = await parseJsonSafe<SystemStatusResponse>(response);
+      if (!response.ok || !data) {
+        throw new Error("System status request failed.");
       }
 
+      setSystemStatus(data);
       setBackendStatus("online");
-    } catch {
-      setBackendStatus("offline");
-    }
-  }
-
-  async function loadDeployStatus(silent = false) {
-    if (!silent) {
-      setGithubTrackingState("checking");
-    }
-
-    try {
-      const response = await fetch(`${API_BASE}/automation/deploy-status`);
-      const data = (await response.json()) as DeployStatusResponse;
-
-      if (!response.ok) {
-        throw new Error(typeof data.error === "string" ? data.error : "GitHub status request failed.");
+      if (!silent) {
+        setSubmitError("");
       }
-
-      setDeployStatus(data);
-      setGithubStatus({
-        ok: data.ok,
-        connected: data.connected,
-        source: data.source,
-        repo: data.repo,
-        branch: data.branch,
-        configured_with_token: data.configured_with_token,
-        latest_commit: data.latest_commit,
-        checks_workflow: data.checks_workflow,
-        deploy_workflow: data.deploy_workflow,
-        summary: data.summary,
-        next_step: data.next_step,
-        error: data.error
-      });
-      setGithubTrackingState(data.connected ? "online" : "offline");
-      setGithubCheckedAt(formatTimestamp(new Date()));
     } catch (error) {
-      setDeployStatus(null);
-      setGithubStatus({
-        ok: false,
-        connected: false,
-        repo: githubRepoLabel,
-        branch: githubBranchLabel,
-        summary: "GitHub status tracking is not available right now.",
-        next_step: "Next: verify the latest GitHub run manually until tracking reconnects.",
-        error: error instanceof Error ? error.message : "GitHub status request failed."
-      });
-      setGithubTrackingState("offline");
-      setGithubCheckedAt(formatTimestamp(new Date()));
+      setBackendStatus("offline");
+      if (!silent) {
+        setSubmitError(
+          error instanceof Error
+            ? error.message
+            : "Backend is offline right now.",
+        );
+      }
     }
-  }
-
-  async function createAutomationTask(command: string, projectName: string) {
-    const response = await fetch(`${API_BASE}/automation/tasks`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        command,
-        project_name: projectName,
-        status: "active",
-        current_stage: "Planning",
-        progress: 1
-      })
-    });
-
-    const data = (await response.json()) as AutomationTaskResponse;
-    if (!response.ok || !data.ok || !data.item) {
-      throw new Error(typeof data.message === "string" ? data.message : "Task creation failed.");
-    }
-
-    return data;
-  }
-
-  async function loadAutomationTask(taskId: string) {
-    const response = await fetch(`${API_BASE}/automation/tasks/${taskId}`);
-    const data = (await response.json()) as AutomationTaskResponse;
-    if (!response.ok || !data.ok || !data.item) {
-      throw new Error(typeof data.message === "string" ? data.message : "Task fetch failed.");
-    }
-
-    return data;
-  }
-
-  async function patchAutomationTask(taskId: string, payload: Record<string, unknown>) {
-    const response = await fetch(`${API_BASE}/automation/tasks/${taskId}`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-
-    const data = (await response.json()) as AutomationTaskResponse;
-    if (!response.ok || !data.ok || !data.item) {
-      throw new Error(typeof data.message === "string" ? data.message : "Task update failed.");
-    }
-
-    return data;
   }
 
   async function loadProjects() {
     try {
       const response = await fetch(`${API_BASE}/projects`);
-      const data = await response.json();
+      const data = (await parseJsonSafe<{ items?: ProjectItem[] }>(response)) ?? {};
       const items = Array.isArray(data.items) ? data.items : [];
       setProjects(items);
 
-      if (items.length > 0 && !items.some((item: ProjectItem) => item.name === selectedProject)) {
-        setSelectedProject(items[0].name);
+      if (items.length > 0 && !items.some((item) => item.name === projectName)) {
+        setProjectName(items[0].name);
       }
     } catch {
       setProjects([]);
     }
   }
 
-  useEffect(() => {
-    void checkBackendStatus();
-    void loadProjects();
-    void loadDeployStatus();
-  }, []);
-
-  useEffect(() => {
-    const intervalMs = executionStatus !== "idle" || taskStageIndex >= 2 || Boolean(trackedTaskId) ? 5000 : 60000;
-    const interval = window.setInterval(() => {
-      void loadDeployStatus(true);
-    }, intervalMs);
-
-    return () => window.clearInterval(interval);
-  }, [executionStatus, taskStageIndex, trackedTaskId]);
-
-  useEffect(() => {
-    if (!trackedTaskId) {
-      return;
-    }
-
-    const syncTask = async () => {
-      try {
-        const data = await loadAutomationTask(trackedTaskId);
-        setTrackedTask(data.item ?? null);
-        if (data.storage_message) {
-          setTaskTrackingMessage(data.storage_message);
-        }
-      } catch {
-        return;
-      }
-    };
-
-    void syncTask();
-    const interval = window.setInterval(() => {
-      void syncTask();
-    }, 4000);
-
-    return () => window.clearInterval(interval);
-  }, [trackedTaskId]);
-
-  useEffect(() => {
-    if (!trackedTaskId) {
-      return;
-    }
-
-    const stageLabel = currentTaskStage?.label ?? "Idle";
-    const payload = {
-      status: executionStatus,
-      current_stage: stageLabel,
-      progress: taskStageProgress,
-      github_commit: githubStatus?.latest_commit?.short_sha ?? null,
-      workflow_status: buildWorkflowStatusLabel(githubStatus)
-    };
-    const payloadSignature = JSON.stringify(payload);
-
-    const interval = window.setInterval(() => {
-      if (payloadSignature === lastSyncedTaskPayloadRef.current) {
-        return;
-      }
-
-      void patchAutomationTask(trackedTaskId, payload)
-        .then((data) => {
-          lastSyncedTaskPayloadRef.current = payloadSignature;
-          setTrackedTask(data.item ?? null);
-          if (data.storage_message) {
-            setTaskTrackingMessage(data.storage_message);
-          }
-        })
-        .catch(() => {
-          return;
-        });
-    }, 1200);
-
-    return () => window.clearInterval(interval);
-  }, [currentTaskStage, executionStatus, githubStatus, taskStageProgress, trackedTaskId]);
-
-  useEffect(() => {
-    if (!trackedTask) {
-      return;
-    }
-
-    const trackedStageIndex = getTaskStageIndexFromName(trackedTask.current_stage);
-    if (trackedStageIndex >= 0 && (taskStageIndex < 0 || trackedStageIndex > taskStageIndex)) {
-      setTaskStageIndex(trackedStageIndex);
-    }
-
-    if (typeof trackedTask.progress === "number") {
-      if (trackedStageIndex > taskStageIndex) {
-        setTaskStageProgress(trackedTask.progress);
-      } else if (trackedStageIndex === taskStageIndex) {
-        if (executionStatus === "active") {
-          if (trackedTask.progress > taskStageProgress) {
-            setTaskStageProgress(trackedTask.progress);
-          }
-        } else if (trackedTask.progress !== taskStageProgress) {
-          setTaskStageProgress(trackedTask.progress);
-        }
-      } else if (executionStatus !== "active" && trackedTask.progress !== taskStageProgress) {
-        setTaskStageProgress(trackedTask.progress);
-      }
-    }
-
-    const normalizedStatus = normalizeExecutionStatusValue(trackedTask.status);
-    if (normalizedStatus !== executionStatus) {
-      setExecutionStatus(normalizedStatus);
-    }
-  }, [executionStatus, taskStageIndex, taskStageProgress, trackedTask]);
-
-  useEffect(() => {
-    const nodes = Object.entries(sectionRefs.current).filter((entry): entry is [CommandCenterTabKey, HTMLElement] => Boolean(entry[1]));
-
-    if (nodes.length === 0) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visibleEntry = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-
-        if (!visibleEntry) {
-          return;
-        }
-
-        const key = visibleEntry.target.getAttribute("data-section-key");
-        if (key === "command" || key === "progress" || key === "review" || key === "download" || key === "help") {
-          setActiveTab(key);
-        }
-      },
-      {
-        rootMargin: "-30% 0px -40% 0px",
-        threshold: [0.2, 0.4, 0.6]
-      }
-    );
-
-    nodes.forEach(([, node]) => observer.observe(node));
-
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatEntries]);
-
-  useEffect(() => {
-    if (stageProgressTimerRef.current !== null) {
-      window.clearInterval(stageProgressTimerRef.current);
-      stageProgressTimerRef.current = null;
-    }
-
-    if (executionStatus !== "active" || taskStageIndex < 0) {
-      return;
-    }
-
-    stageProgressTimerRef.current = window.setInterval(() => {
-      setTaskStageProgress((current) => {
-        if (current >= 100) {
-          return 100;
-        }
-
-        return Math.min(current + 4, 100);
-      });
-    }, 180);
-
-    return () => {
-      if (stageProgressTimerRef.current !== null) {
-        window.clearInterval(stageProgressTimerRef.current);
-        stageProgressTimerRef.current = null;
-      }
-    };
-  }, [executionStatus, taskStageIndex]);
-
-  useEffect(() => {
-    if (executionStatus !== "active" || taskStageIndex < 0 || taskStageProgress < 100 || !currentTaskStage) {
-      return;
-    }
-
-    if (
-      currentTaskStage.key === "github_deploying" &&
-      githubTrackingState === "online" &&
-      deployTrackingActiveForTask &&
-      !deployStatus?.deploy_succeeded
-    ) {
-      return;
-    }
-
-    if (
-      currentTaskStage.key === "cloud_run_live" &&
-      githubTrackingState === "online" &&
-      deploySignalMatchesTask &&
-      !deployStatus?.ready_to_refresh
-    ) {
-      return;
-    }
-
-    if (taskStageIndex === TASK_STAGE_DEFINITIONS.length - 1) {
-      setExecutionStatus("completed");
-      return;
-    }
-
-    setExecutionStatus("awaiting_next");
-  }, [
-    currentTaskStage,
-    deploySignalMatchesTask,
-    deployStatus,
-    deployTrackingActiveForTask,
-    executionStatus,
-    githubTrackingState,
-    taskStageIndex,
-    taskStageProgress
-  ]);
-
-  useEffect(() => {
-    if (!currentTaskStage || !deployStatus || githubTrackingState !== "online") {
-      return;
-    }
-
-    if (currentTaskStage.key === "github_deploying" && deploySignalMatchesTask && deployStatus.deploy_succeeded) {
-      const transitionKey = `github:${deployStatus.updated_at ?? "unknown"}`;
-      if (lastDeployEventRef.current === transitionKey) {
-        return;
-      }
-
-      lastDeployEventRef.current = transitionKey;
-      appendChatEntries([
-        {
-          id: `deploy-${Date.now()}`,
-          role: "assistant",
-          kind: "text",
-          title: "Deploy Detection",
-          content: "Deploy succeeded. Builder Core is now checking whether Cloud Run is live.",
-          timestamp: formatTimestamp(new Date())
-        }
-      ]);
-
-      setTaskStageIndex(3);
-      setTaskStageProgress(1);
-      setExecutionStatus("active");
-      return;
-    }
-
-    if (currentTaskStage.key === "cloud_run_live" && deploySignalMatchesTask && deployStatus.ready_to_refresh) {
-      const transitionKey = `cloud:${deployStatus.updated_at ?? "unknown"}`;
-      if (lastDeployEventRef.current === transitionKey) {
-        return;
-      }
-
-      lastDeployEventRef.current = transitionKey;
-      appendChatEntries([
-        {
-          id: `refresh-${Date.now()}`,
-          role: "assistant",
-          kind: "text",
-          title: "Deploy Detection",
-          content: "Cloud Run is live and the frontend is reachable. Builder Core is preparing the automatic refresh.",
-          timestamp: formatTimestamp(new Date())
-        }
-      ]);
-
-      setTaskStageIndex(4);
-      setTaskStageProgress(1);
-      setExecutionStatus("active");
-      setRefreshCountdown(5);
-    }
-  }, [currentTaskStage, deploySignalMatchesTask, deployStatus, githubTrackingState]);
-
-  useEffect(() => {
-    if (currentTaskStage?.key !== "app_refreshed") {
-      if (refreshCountdownTimerRef.current !== null) {
-        window.clearTimeout(refreshCountdownTimerRef.current);
-        refreshCountdownTimerRef.current = null;
-      }
-      return;
-    }
-
-    if (refreshCountdown === null) {
-      return;
-    }
-
-    if (refreshCountdown <= 0) {
-      setTaskStageProgress(100);
-      setExecutionStatus("completed");
-      const reloadTimer = window.setTimeout(() => {
-        window.location.reload();
-      }, 300);
-
-      return () => window.clearTimeout(reloadTimer);
-    }
-
-    refreshCountdownTimerRef.current = window.setTimeout(() => {
-      setRefreshCountdown((current) => (current === null ? null : current - 1));
-    }, 1000);
-
-    return () => {
-      if (refreshCountdownTimerRef.current !== null) {
-        window.clearTimeout(refreshCountdownTimerRef.current);
-        refreshCountdownTimerRef.current = null;
-      }
-    };
-  }, [currentTaskStage, refreshCountdown]);
-
-  useEffect(() => {
-    if (executionStatus !== "completed" || !lastTask) {
-      return;
-    }
-
-    const completionId = `${lastTask.timestamp}-${lastTask.instruction}`;
-    if (completedTaskId === completionId) {
-      return;
-    }
-
-    appendChatEntries([
-      {
-        id: `${completionId}-done`,
-        role: "assistant",
-        kind: "text",
-        title: "Task Complete",
-        content: "Done - ready for next task. Review the checklist below and pick one safe follow-up when you are ready.",
-        timestamp: formatTimestamp(new Date())
-      },
-      {
-        id: `${completionId}-review`,
-        role: "assistant",
-        kind: "review",
-        title: "Result Review",
-        review: buildReviewSummary(lastTask, backendStatus, githubStatus),
-        timestamp: formatTimestamp(new Date())
-      },
-      {
-        id: `${completionId}-upgrades`,
-        role: "assistant",
-        kind: "text",
-        title: "Next Upgrade Ideas",
-        content: NEXT_UPGRADE_SUGGESTIONS.map((item) => `- ${item}`).join("\n"),
-        timestamp: formatTimestamp(new Date())
-      }
-    ]);
-
-    setCompletedTaskId(completionId);
-  }, [backendStatus, completedTaskId, executionStatus, githubStatus, lastTask]);
-
-  function setSectionRef(key: CommandCenterTabKey) {
-    return (node: HTMLElement | null) => {
-      sectionRefs.current[key] = node;
-    };
-  }
-
-  function scrollToSection(key: CommandCenterTabKey) {
-    setActiveTab(key);
-    sectionRefs.current[key]?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  async function handleCreateProject() {
-    const name = newProjectName.trim();
-    if (!name) {
-      return;
-    }
-
+  async function loadRecentTasks() {
     try {
-      const response = await fetch(`${API_BASE}/projects`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ name })
-      });
-
-      if (!response.ok) {
-        throw new Error("Project create failed.");
-      }
-
-      setNewProjectName("");
-      setSelectedProject(name);
-      await loadProjects();
-      appendChatEntries([
-        {
-          id: `project-${Date.now()}`,
-          role: "assistant",
-          kind: "text",
-          title: "Project Ready",
-          content: `Created or confirmed the project "${name}". You can use it for the next Builder Core task.`,
-          timestamp: formatTimestamp(new Date())
-        }
-      ]);
+      const response = await fetch(`${API_BASE}/tasks`);
+      const data = (await parseJsonSafe<TasksListResponse>(response)) ?? {};
+      setRecentTasks(Array.isArray(data.items) ? data.items : []);
     } catch {
-      appendChatEntries([
-        {
-          id: `project-error-${Date.now()}`,
-          role: "assistant",
-          kind: "text",
-          title: "Project Error",
-          content: "I could not create that project right now. Try again after the backend is online.",
-          timestamp: formatTimestamp(new Date())
-        }
-      ]);
+      setRecentTasks([]);
     }
   }
 
-  async function handleCommandSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    const instruction = commandInput.trim();
-    if (!instruction) {
-      return;
-    }
-
-    const projectName = selectedProject || "Default Project";
-    const timestamp = formatTimestamp(new Date());
-    const fallbackPlanner = buildPlannerOutput(instruction, projectName);
-    const fallbackPrompt = buildCodexPrompt(instruction, projectName);
-
-    setCommandInput("");
-    setActiveTaskInstruction(instruction);
-    setExecutionStatus("active");
-    setTaskStageIndex(0);
-    setTaskStageProgress(1);
-    setCompletedTaskId("");
-    setActiveTab("command");
-    setTrackedTaskId("");
-    setTrackedTask(null);
-    setRefreshCountdown(null);
-    setTaskTrackingMessage(DEFAULT_TASK_TRACKING_MESSAGE);
-    lastSyncedTaskPayloadRef.current = "";
-    lastDeployEventRef.current = "";
-
-    appendChatEntries([
-      {
-        id: `user-${Date.now()}`,
-        role: "user",
-        kind: "text",
-        content: instruction,
-        timestamp
-      },
-      {
-        id: `planning-${Date.now()}`,
-        role: "assistant",
-        kind: "text",
-        title: "Builder Core",
-        content: "Planning...",
-        timestamp
-      }
-    ]);
-
-    let createdTaskId = "";
-
+  async function loadMemory() {
     try {
-      const [chatResult, taskResult] = await Promise.allSettled([
-        fetch(`${API_BASE}/chat`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            instruction,
-            project_name: projectName
-          })
-        }).then(async (response) => {
-          const data = (await response.json()) as CommandCenterChatResponse;
-          if (!response.ok || !data.ok) {
-            throw new Error(typeof data.message === "string" ? data.message : "Chat request failed.");
-          }
+      const response = await fetch(`${API_BASE}/memory`);
+      const data = await parseJsonSafe<MemoryResponse>(response);
+      if (!response.ok || !data) {
+        throw new Error("Memory request failed.");
+      }
 
-          return data;
-        }),
-        createAutomationTask(instruction, projectName)
-      ]);
+      setMemoryData(data);
+    } catch {
+      setMemoryData(null);
+    }
+  }
 
-      let taskTrackingEntry: ChatEntry | null = null;
-      if (taskResult.status === "fulfilled" && taskResult.value.item) {
-        const createdTask = taskResult.value.item;
-        createdTaskId = createdTask.id;
-        const storageMessage = taskResult.value.storage_message ?? createdTask.storage_message ?? DEFAULT_TASK_TRACKING_MESSAGE;
+  async function loadLearning() {
+    try {
+      const response = await fetch(`${API_BASE}/learning`);
+      const data = await parseJsonSafe<LearningResponse>(response);
+      if (!response.ok || !data) {
+        throw new Error("Learning request failed.");
+      }
 
-        setTrackedTaskId(createdTask.id);
-        setTrackedTask(createdTask);
-        setTaskTrackingMessage(storageMessage);
+      setLearningData(data);
+    } catch {
+      setLearningData(null);
+    }
+  }
 
-        taskTrackingEntry = {
-          id: `task-${Date.now()}`,
-          role: "assistant",
-          kind: "text",
-          title: "Task Tracking",
-          content: buildTaskTrackingSummary(createdTask, storageMessage),
-          timestamp: formatTimestamp(new Date())
-        };
-      } else {
-        setTaskTrackingMessage(
-          "Cloud-first task tracking is not available right now. Builder Core will keep the task bar active locally."
+  async function loadTask(taskId: string, silent = false) {
+    try {
+      const response = await fetch(`${API_BASE}/tasks/${taskId}`);
+      const data = await parseJsonSafe<TaskRecord>(response);
+      if (!response.ok || !data) {
+        throw new Error("Task polling failed.");
+      }
+
+      setCurrentTask(data);
+      setPollError("");
+
+      if (["completed", "failed"].includes(data.status)) {
+        await Promise.all([loadRecentTasks(), loadMemory(), loadLearning(), loadSystemStatus(true)]);
+      }
+    } catch (error) {
+      if (!silent) {
+        setPollError(
+          error instanceof Error
+            ? error.message
+            : "Task polling failed.",
         );
       }
-
-      if (chatResult.status === "rejected") {
-        throw chatResult.reason instanceof Error ? chatResult.reason : new Error("Chat request failed.");
-      }
-
-      const data = chatResult.value;
-      const assistantReply =
-        typeof data.assistant_reply === "string" && data.assistant_reply
-          ? data.assistant_reply
-          : "Builder Core reviewed your request and prepared the next safe move.";
-      const plannerSummary = buildPlannerSummary(instruction, projectName, data, fallbackPlanner);
-      const codexPrompt =
-        typeof data.codex_prompt === "string" && data.codex_prompt ? data.codex_prompt : fallbackPrompt;
-      const nextStepsSummary = buildNextStepsSummary(data.next_steps);
-      const builderSummary = data.build_triggered ? buildBuilderSummary(data) : null;
-      const runSummary =
-        data.run_info && typeof data.run_info === "object" ? buildRunSummary(data.run_info as Record<string, unknown>) : null;
-      const responseTimestamp = formatTimestamp(new Date());
-
-      setLastTask({
-        instruction,
-        planner: plannerSummary,
-        prompt: codexPrompt,
-        timestamp: responseTimestamp,
-        builderSummary,
-        runSummary
-      });
-      void loadDeployStatus(true);
-
-      appendChatEntries([
-        {
-          id: `assistant-${Date.now()}`,
-          role: "assistant",
-          kind: "text",
-          title: "Builder Core",
-          content: assistantReply,
-          timestamp: responseTimestamp
-        },
-        {
-          id: `planner-${Date.now()}`,
-          role: "assistant",
-          kind: "planner",
-          title: "Planner Output",
-          content: plannerSummary,
-          timestamp: responseTimestamp
-        },
-        {
-          id: `codex-${Date.now()}`,
-          role: "assistant",
-          kind: "codex",
-          title: "Codex Task",
-          content: codexPrompt,
-          timestamp: responseTimestamp
-        },
-        ...(builderSummary
-          ? [
-              {
-                id: `builder-${Date.now()}`,
-                role: "assistant" as const,
-                kind: "builder" as const,
-                title: "Builder Output",
-                content: builderSummary,
-                timestamp: responseTimestamp
-              }
-            ]
-          : []),
-        ...(runSummary
-          ? [
-              {
-                id: `run-${Date.now()}`,
-                role: "assistant" as const,
-                kind: "builder" as const,
-                title: "Run Info",
-                content: runSummary,
-                timestamp: responseTimestamp
-              }
-            ]
-          : []),
-        ...(taskTrackingEntry ? [taskTrackingEntry] : []),
-        ...(nextStepsSummary
-          ? [
-              {
-                id: `next-${Date.now()}`,
-                role: "assistant" as const,
-                kind: "text" as const,
-                title: "Next Steps",
-                content: nextStepsSummary,
-                timestamp: responseTimestamp
-              }
-            ]
-          : [])
-      ]);
-    } catch (error) {
-      setExecutionStatus("idle");
-      setTaskStageIndex(-1);
-      setTaskStageProgress(0);
-      setActiveTaskInstruction("");
-      setRefreshCountdown(null);
-
-      if (createdTaskId) {
-        void patchAutomationTask(createdTaskId, {
-          status: "idle",
-          current_stage: "Planning",
-          progress: 0,
-          workflow_status: "chat_failed"
-        }).catch(() => {
-          return;
-        });
-      }
-
-      appendChatEntries([
-        {
-          id: `error-${Date.now()}`,
-          role: "assistant",
-          kind: "text",
-          title: "Backend Error",
-          content:
-            error instanceof Error
-              ? `I could not complete that request: ${error.message}`
-              : "I could not complete that request because the backend did not respond.",
-          timestamp: formatTimestamp(new Date())
-        }
-      ]);
     }
   }
 
-  function handleNextStage() {
-    if (!canAdvanceStage || !currentTaskStage) {
+  useEffect(() => {
+    void Promise.all([loadSystemStatus(), loadProjects(), loadRecentTasks(), loadMemory(), loadLearning()]);
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void loadSystemStatus(true);
+    }, 15000);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (!currentTaskId) {
       return;
     }
 
-    const nextIndex = taskStageIndex + 1;
-    const nextStage = TASK_STAGE_DEFINITIONS[nextIndex];
+    void loadTask(currentTaskId);
 
-    appendChatEntries([
-      {
-        id: `stage-${Date.now()}`,
-        role: "assistant",
-        kind: "text",
-        title: "Automation Progress",
-        content: `${currentTaskStage.label} is complete. ${nextStage.label} has started.`,
-        timestamp: formatTimestamp(new Date())
+    const interval = window.setInterval(() => {
+      void loadTask(currentTaskId, true);
+    }, 2500);
+
+    return () => window.clearInterval(interval);
+  }, [currentTaskId]);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const command = commandInput.trim();
+    if (!command) {
+      setSubmitError("Enter a command before submitting.");
+      return;
+    }
+
+    setSubmitting(true);
+    setSubmitError("");
+    setPollError("");
+    setCurrentTask(null);
+
+    try {
+      const response = await fetch(`${API_BASE}/tasks`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          command,
+          project_name: projectName || "Default Project",
+        }),
+      });
+      const data = await parseJsonSafe<TaskCreateResponse>(response);
+
+      if (!response.ok || !data?.task_id) {
+        const errorMessage =
+          typeof (data as Record<string, unknown> | null)?.["detail"] === "string"
+            ? String((data as Record<string, unknown>)["detail"])
+            : "Task creation failed.";
+        throw new Error(errorMessage);
       }
-    ]);
 
-    setTaskStageIndex(nextIndex);
-    setTaskStageProgress(1);
-    setExecutionStatus("active");
-    if (nextStage.key === "app_refreshed") {
-      setRefreshCountdown(5);
-    } else {
-      setRefreshCountdown(null);
+      setCommandInput("");
+      setCurrentTaskId(data.task_id);
+      await Promise.all([loadTask(data.task_id), loadRecentTasks(), loadMemory(), loadLearning(), loadSystemStatus(true)]);
+    } catch (error) {
+      setSubmitError(
+        error instanceof Error
+          ? error.message
+          : "Backend is online, but the task request failed.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleManualNext() {
+    if (!currentTaskId) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/tasks/${currentTaskId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          manual_advance: true,
+        }),
+      });
+      const data = await parseJsonSafe<TaskRecord>(response);
+      if (!response.ok || !data) {
+        throw new Error("Manual debug advance failed.");
+      }
+
+      setCurrentTask(data);
+    } catch (error) {
+      setPollError(
+        error instanceof Error ? error.message : "Manual debug advance failed.",
+      );
+    }
+  }
+
+  async function handleSaveMemoryNote() {
+    const note = memoryNote.trim();
+    if (!note) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/memory`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          note,
+          category: "manual_note",
+          project_name: projectName || "Builder Core",
+        }),
+      });
+
+      const data = await parseJsonSafe<{ ok?: boolean }>(response);
+      if (!response.ok || !data?.ok) {
+        throw new Error("Could not save the memory note.");
+      }
+
+      setMemoryNote("");
+      setMemoryMessage("Memory note saved.");
+      await loadMemory();
+    } catch (error) {
+      setMemoryMessage(
+        error instanceof Error ? error.message : "Could not save the memory note.",
+      );
+    }
+  }
+
+  async function handleLearningScan() {
+    try {
+      const response = await fetch(`${API_BASE}/learning/scan`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error("Learning scan failed.");
+      }
+
+      await loadLearning();
+    } catch (error) {
+      setMemoryMessage(
+        error instanceof Error ? error.message : "Learning scan failed.",
+      );
     }
   }
 
@@ -1690,612 +550,523 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-[#f7f7f4] text-slate-900">
+    <main className="min-h-screen overflow-x-hidden bg-[#f6f7fb] text-slate-900">
       <div className="border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
+        <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
           <div>
-            <p className="text-xl font-semibold text-slate-950">Builder Core</p>
-            <p className="text-sm text-slate-500">Cloud-first command center for Builder Core tasks.</p>
+            <h1 className="text-xl font-semibold text-slate-950 sm:text-2xl">Builder Core</h1>
+            <p className="text-sm text-slate-500">
+              Real backend task tracking, honest bridge checks, project memory, and learning in one place.
+            </p>
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <span
-              className={
-                backendStatus === "online"
-                  ? "rounded-full border border-green-200 bg-green-50 px-3 py-1 text-xs font-semibold text-green-700"
-                  : backendStatus === "offline"
-                    ? "rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700"
-                    : "rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600"
-              }
-            >
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getBackendBadgeClass(backendStatus)}`}>
               {backendStatus === "checking" && "Backend: Checking..."}
               {backendStatus === "online" && "Backend: Online"}
               {backendStatus === "offline" && "Backend: Offline"}
             </span>
             <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
-              Automation: {getExecutionStatusLabel(executionStatus)}
+              Task Storage: {systemStatus?.task_storage_backend ?? "loading"}
+            </span>
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+              Memory: {systemStatus?.memory_storage_backend ?? "loading"}
             </span>
           </div>
         </div>
       </div>
 
-      {taskBarVisible && (
-        <div className="fixed inset-x-0 bottom-20 z-30 px-3 sm:px-6 lg:bottom-6 lg:left-72 lg:right-8 lg:px-0">
-          <div className="mx-auto max-w-5xl rounded-[28px] border border-slate-200 bg-white/95 px-4 py-4 shadow-2xl backdrop-blur sm:px-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div className="min-w-0 flex-1">
-                <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                    Stage {taskStageCounter}
-                  </span>
-                  <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-blue-700">
-                    {currentTaskStage ? currentTaskStage.label : "Idle"}
-                  </span>
-                </div>
+      <div className="mx-auto grid max-w-6xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)] lg:px-8">
+        <section className="space-y-6">
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Command Center</p>
+                <h2 className="mt-2 text-lg font-semibold text-slate-950">Send one real backend task</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Builder Core now creates a real backend task, stores it, runs stage updates in the backend, and returns an honest final summary.
+                </p>
+              </div>
 
-                <p className="truncate text-sm font-semibold text-slate-900 sm:text-base">{taskBarTaskName}</p>
-                {effectiveTaskId && (
-                  <p className="mt-1 text-xs font-medium text-slate-500">Task ID: {effectiveTaskId}</p>
-                )}
-                <p className="mt-1 text-sm text-slate-600">{taskStatusText}</p>
-
-                <div className="mt-3 flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  <span>Stage Progress</span>
-                  <span>{taskProgressText}</span>
+              {bridgeStatus && (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                  <p className="font-semibold text-slate-900">Bridge status</p>
+                  <p className="mt-1">{bridgeStatus.message ?? "Bridge status unavailable."}</p>
                 </div>
-                <div className="mt-2 h-3 rounded-full bg-slate-200">
-                  <div
-                    className="h-3 rounded-full bg-slate-900 transition-all"
-                    style={{ width: `${Math.max(taskStageProgress, 0)}%` }}
+              )}
+            </div>
+
+            <form className="mt-5 space-y-4" onSubmit={handleSubmit}>
+              <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_220px]">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="command">
+                    Command
+                  </label>
+                  <textarea
+                    id="command"
+                    value={commandInput}
+                    onChange={(event) => setCommandInput(event.target.value)}
+                    placeholder="Ask Builder Core to build, fix, inspect, or upgrade something..."
+                    rows={5}
+                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
                   />
                 </div>
 
-                <p className="mt-3 text-xs text-slate-500">{taskTrackingMessage}</p>
-                <p className="mt-1 text-xs text-slate-500">Automation permission granted by user.</p>
-                <p className="mt-1 text-xs text-slate-500">Future: Codex will run automatically after approval.</p>
-                <p className="mt-2 text-xs text-slate-500">{taskNextText}</p>
+                <div className="space-y-4">
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="project-name">
+                      Project
+                    </label>
+                    <input
+                      id="project-name"
+                      list="project-options"
+                      value={projectName}
+                      onChange={(event) => setProjectName(event.target.value)}
+                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+                    />
+                    <datalist id="project-options">
+                      {projects.map((project) => (
+                        <option key={project.id} value={project.name} />
+                      ))}
+                    </datalist>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={submitting || backendStatus !== "online"}
+                    className={
+                      submitting || backendStatus !== "online"
+                        ? "w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-400"
+                        : "w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white"
+                    }
+                  >
+                    {submitting ? "Creating task..." : "Submit Task"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleManualNext}
+                    disabled={!currentTaskId}
+                    className={
+                      currentTaskId
+                        ? "w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+                        : "w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-400"
+                    }
+                  >
+                    Manual Next (debug fallback)
+                  </button>
+                </div>
               </div>
 
-              <div className="flex items-center gap-3 lg:w-auto">
-                <button
-                  type="button"
-                  onClick={handleNextStage}
-                  disabled={!canAdvanceStage}
-                  className={
-                    canAdvanceStage
-                      ? "w-full rounded-2xl bg-black px-5 py-3 text-sm font-semibold text-white lg:w-auto"
-                      : "w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 text-sm font-semibold text-slate-400 lg:w-auto"
-                  }
-                >
-                  Next
-                </button>
+              {submitError && (
+                <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {submitError}
+                </div>
+              )}
+
+              {systemStatus?.task_storage_message && (
+                <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+                  {systemStatus.task_storage_message}
+                </div>
+              )}
+            </form>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Live Task</p>
+                <h2 className="mt-2 text-lg font-semibold text-slate-950">Backend-controlled progress</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Progress comes from backend task stages, not frontend-only timers.
+                </p>
+              </div>
+
+              {currentTask && (
+                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getStatusBadgeClass(currentTask.status)}`}>
+                  {currentTask.status}
+                </span>
+              )}
+            </div>
+
+            {currentTask ? (
+              <div className="mt-5 space-y-5">
+                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">{currentTask.command}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Task ID: {currentTask.id} · Project: {currentTask.project_name ?? "Default Project"}
+                      </p>
+                    </div>
+                    <div className="text-sm font-medium text-slate-700">
+                      {titleCaseStage(activeStage)} · {activeProgress}%
+                    </div>
+                  </div>
+
+                  <div className="mt-4 h-3 rounded-full bg-slate-200">
+                    <div
+                      className={`h-3 rounded-full transition-all ${getProgressBarClass(currentTask.status)}`}
+                      style={{ width: `${Math.max(0, Math.min(activeProgress, 100))}%` }}
+                    />
+                  </div>
+
+                  <p className="mt-3 text-sm text-slate-600">
+                    {currentTask.status === "failed"
+                      ? `${titleCaseStage(activeStage)} stopped. Review the errors and summary below.`
+                      : currentTask.status === "completed"
+                        ? "Task complete. Review the final summary and learning notes."
+                        : `${titleCaseStage(activeStage)} in progress...`}
+                  </p>
+
+                  {currentTask.workflow_status && (
+                    <p className="mt-2 text-xs text-slate-500">Workflow: {currentTask.workflow_status}</p>
+                  )}
+                  {currentTask.github_commit && (
+                    <p className="mt-1 text-xs text-slate-500">Latest commit: {currentTask.github_commit}</p>
+                  )}
+                </div>
+
+                {pollError && (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    {pollError}
+                  </div>
+                )}
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="rounded-3xl border border-slate-200 p-4">
+                    <p className="text-sm font-semibold text-slate-900">Live Logs</p>
+                    <div className="mt-3 max-h-72 overflow-y-auto rounded-2xl bg-slate-50 p-3">
+                      {taskLogs.length > 0 ? (
+                        <ul className="space-y-2 text-sm text-slate-700">
+                          {taskLogs.map((log, index) => (
+                            <li key={`${log}-${index}`} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                              {log}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-sm text-slate-500">No logs yet.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-3xl border border-slate-200 p-4">
+                    <p className="text-sm font-semibold text-slate-900">Errors</p>
+                    <div className="mt-3 rounded-2xl bg-slate-50 p-3">
+                      {taskErrors.length > 0 ? (
+                        <ul className="space-y-2 text-sm text-red-700">
+                          {taskErrors.map((error, index) => (
+                            <li key={`${error}-${index}`} className="rounded-xl border border-red-200 bg-red-50 px-3 py-2">
+                              {error}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-sm text-slate-500">No errors reported for this task.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-3xl border border-slate-200 p-4">
+                  <p className="text-sm font-semibold text-slate-900">Final Summary</p>
+                  {currentTask.summary ? (
+                    <div className="mt-3 space-y-4 text-sm text-slate-700">
+                      <div className="rounded-2xl bg-slate-50 p-4">
+                        <p className="font-semibold text-slate-900">{currentTask.summary.message ?? "Summary ready."}</p>
+                        <p className="mt-2 text-xs text-slate-500">
+                          Updated: {formatTimestamp(currentTask.summary.updated_at)}
+                        </p>
+                      </div>
+
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <div className="rounded-2xl bg-slate-50 p-4">
+                          <p className="font-semibold text-slate-900">What completed</p>
+                          <ul className="mt-3 space-y-2">
+                            {(currentTask.summary.what_completed ?? []).map((item, index) => (
+                              <li key={`${item}-${index}`} className="rounded-xl bg-white px-3 py-2">
+                                {item}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+
+                        <div className="rounded-2xl bg-slate-50 p-4">
+                          <p className="font-semibold text-slate-900">Manual setup still needed</p>
+                          <ul className="mt-3 space-y-2">
+                            {(currentTask.summary.what_still_needs_manual_setup ?? []).map((item, index) => (
+                              <li key={`${item}-${index}`} className="rounded-xl bg-white px-3 py-2">
+                                {item}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl bg-slate-50 p-4">
+                        <p className="font-semibold text-slate-900">Next recommended step</p>
+                        <p className="mt-2">{currentTask.summary.next_recommended_step ?? "No next step recorded yet."}</p>
+                      </div>
+
+                      <div className="rounded-2xl bg-slate-50 p-4">
+                        <p className="font-semibold text-slate-900">Folder used</p>
+                        <p className="mt-2 break-all">{currentTask.summary.folder_used ?? "Unknown"}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm text-slate-500">The backend summary will appear here when the task reaches the summary stage.</p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="mt-5 rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
+                Submit a command to create a real backend task, then Builder Core will poll its live status here.
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Install</p>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">Use Builder Core from your phone</h2>
+            <div className="mt-4 grid gap-4 lg:grid-cols-2">
+              <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-700">
+                <p className="font-semibold text-slate-900">iPhone</p>
+                <p className="mt-2">Open the app in Safari, tap Share, then choose Add to Home Screen.</p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-700">
+                <p className="font-semibold text-slate-900">Android</p>
+                <p className="mt-2">Open the app in Chrome, open the menu, then choose Install App or Add to Home Screen.</p>
               </div>
             </div>
-          </div>
-        </div>
-      )}
-
-      <div className="mx-auto flex max-w-7xl gap-6 px-4 pb-28 pt-6 sm:px-6 lg:px-8">
-        <aside className="sticky top-6 hidden h-fit w-64 shrink-0 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm lg:block">
-          <p className="mb-4 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Navigation</p>
-          <div className="space-y-2">
-            {COMMAND_CENTER_TABS.map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => scrollToSection(tab.key)}
-                className={`w-full text-left ${getTabButtonClass(activeTab === tab.key)}`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-            <p className="text-sm font-semibold text-slate-900">Quick Actions</p>
-            <div className="mt-3 flex flex-col gap-2">
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
               <button
                 type="button"
-                onClick={() => scrollToSection("download")}
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700"
+                onClick={handleOpenAppLink}
+                className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white"
               >
-                Install on Phone
+                Open App Link
               </button>
               <button
                 type="button"
                 onClick={handleCopyAppLink}
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700"
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
               >
                 Copy App Link
               </button>
             </div>
-            {installMessage && <p className="mt-3 text-xs text-slate-500">{installMessage}</p>}
+            <p className="mt-3 text-sm text-slate-500">No App Store needed.</p>
+            {installMessage && <p className="mt-2 text-sm text-slate-700">{installMessage}</p>}
+          </div>
+        </section>
+
+        <aside className="space-y-6">
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">System</p>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">Backend and bridge</h2>
+            <div className="mt-4 space-y-3 text-sm text-slate-700">
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="font-semibold text-slate-900">Backend connection</p>
+                <p className="mt-2">
+                  {backendStatus === "online"
+                    ? "Backend is online."
+                    : backendStatus === "offline"
+                      ? "Backend is offline."
+                      : "Checking backend status..."}
+                </p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="font-semibold text-slate-900">Bridge message</p>
+                <p className="mt-2">{bridgeStatus?.message ?? "Bridge status will appear here."}</p>
+                {bridgeStatus?.missing && bridgeStatus.missing.length > 0 && (
+                  <ul className="mt-3 space-y-2 text-xs text-slate-600">
+                    {bridgeStatus.missing.map((item) => (
+                      <li key={item} className="rounded-xl bg-white px-3 py-2">
+                        Missing: {item}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="font-semibold text-slate-900">Storage</p>
+                <ul className="mt-2 space-y-2 text-xs text-slate-600">
+                  <li>Tasks: {systemStatus?.task_storage_backend ?? "Unknown"}</li>
+                  <li>Memory: {systemStatus?.memory_storage_backend ?? "Unknown"}</li>
+                  <li>Files: {systemStatus?.file_storage_backend ?? "Unknown"}</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Memory</p>
+                <h2 className="mt-2 text-lg font-semibold text-slate-950">Builder memory</h2>
+              </div>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="font-semibold text-slate-900">Latest saved task summary</p>
+                {memoryData?.latest_summary ? (
+                  <div className="mt-2 text-sm text-slate-700">
+                    <p>{memoryData.latest_summary.message ?? "Summary available."}</p>
+                    <p className="mt-2 text-xs text-slate-500">
+                      Task: {memoryData.latest_summary.task_id ?? "Unknown"} · {formatTimestamp(memoryData.latest_summary.updated_at)}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm text-slate-500">No saved summary yet.</p>
+                )}
+              </div>
+
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="font-semibold text-slate-900">Add a manual project note</p>
+                <textarea
+                  value={memoryNote}
+                  onChange={(event) => setMemoryNote(event.target.value)}
+                  rows={3}
+                  placeholder="Write a short project note or reminder..."
+                  className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveMemoryNote}
+                  className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+                >
+                  Save Memory Note
+                </button>
+                {memoryMessage && <p className="mt-2 text-xs text-slate-600">{memoryMessage}</p>}
+              </div>
+
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="font-semibold text-slate-900">Recent memory entries</p>
+                <ul className="mt-3 space-y-2 text-sm text-slate-700">
+                  {(memoryData?.project_memory ?? []).slice(0, 6).map((entry) => (
+                    <li key={entry.id} className="rounded-xl bg-white px-3 py-3">
+                      <p className="font-medium text-slate-900">{entry.type ?? "memory"}</p>
+                      <p className="mt-1">{entry.note ?? entry.command ?? "Saved entry"}</p>
+                      <p className="mt-2 text-xs text-slate-500">{formatTimestamp(entry.created_at)}</p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Learning</p>
+                <h2 className="mt-2 text-lg font-semibold text-slate-950">Project knowledge</h2>
+              </div>
+              <button
+                type="button"
+                onClick={handleLearningScan}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700"
+              >
+                Scan Project
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="font-semibold text-slate-900">Known issues</p>
+                <ul className="mt-3 space-y-2 text-sm text-slate-700">
+                  {(learningData?.known_issues ?? memoryData?.known_environment_problems ?? []).slice(0, 6).map((item, index) => (
+                    <li key={`${item}-${index}`} className="rounded-xl bg-white px-3 py-2">
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="font-semibold text-slate-900">Recommended next steps</p>
+                <ul className="mt-3 space-y-2 text-sm text-slate-700">
+                  {(learningData?.recommended_next_steps ?? []).slice(0, 6).map((item, index) => (
+                    <li key={`${item}-${index}`} className="rounded-xl bg-white px-3 py-2">
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="font-semibold text-slate-900">Latest lessons</p>
+                <ul className="mt-3 space-y-3 text-sm text-slate-700">
+                  {(learningData?.lessons ?? []).slice(0, 5).map((lesson) => (
+                    <li key={lesson.id} className="rounded-xl bg-white px-3 py-3">
+                      <p className="font-medium text-slate-900">{lesson.command ?? "Task lesson"}</p>
+                      <p className="mt-1">{lesson.lesson_learned ?? "No lesson text recorded yet."}</p>
+                      {lesson.next_recommendation && (
+                        <p className="mt-2 text-xs text-slate-500">Next: {lesson.next_recommendation}</p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="font-semibold text-slate-900">Project structure summary</p>
+                {learningData?.project_structure_summary ? (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <p>Scanned: {formatTimestamp(learningData.project_structure_summary.scanned_at)}</p>
+                    <div>
+                      <p className="font-medium text-slate-900">Top folders</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {(learningData.project_structure_summary.top_level_folders ?? []).slice(0, 8).map((item) => (
+                          <span key={item} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700">
+                            {item}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="rounded-xl bg-white p-3 text-xs text-slate-600">
+                      <pre className="overflow-x-auto whitespace-pre-wrap">
+                        {(learningData.project_structure_summary.sample_tree ?? []).slice(0, 20).join("\n")}
+                      </pre>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm text-slate-500">No project scan is saved yet.</p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Recent Tasks</p>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">Saved task history</h2>
+            <ul className="mt-4 space-y-3 text-sm text-slate-700">
+              {recentTasks.slice(0, 8).map((task) => (
+                <li key={task.id} className="rounded-2xl bg-slate-50 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-semibold text-slate-900">{task.command}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {titleCaseStage(task.stage ?? task.current_stage)} · {task.progress}% · {formatTimestamp(task.updated_at)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCurrentTaskId(task.id);
+                        void loadTask(task.id);
+                      }}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                    >
+                      Open
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
           </div>
         </aside>
-
-        <div className="min-w-0 flex-1">
-          <div className="grid gap-6">
-            <section
-              ref={setSectionRef("command")}
-              data-section-key="command"
-              className="scroll-mt-32 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
-            >
-              <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                <div>
-                  <p className="text-lg font-semibold text-slate-900">Command Center</p>
-                  <p className="text-sm text-slate-600">
-                    Use one command box to chat with Builder Core, generate the plan, and start the next tracked task.
-                  </p>
-                </div>
-
-                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr),auto,auto]">
-                  <select
-                    value={selectedProject}
-                    onChange={(event) => setSelectedProject(event.target.value)}
-                    className="min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700"
-                  >
-                    {projects.length === 0 && <option value="Default Project">Default Project</option>}
-                    {projects.map((project) => (
-                      <option key={project.id} value={project.name}>
-                        {project.name}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="text"
-                    value={newProjectName}
-                    onChange={(event) => setNewProjectName(event.target.value)}
-                    placeholder="New project name"
-                    className="rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-700"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleCreateProject}
-                    className="rounded-2xl border border-black px-4 py-3 text-sm font-semibold text-black"
-                  >
-                    Create Project
-                  </button>
-                </div>
-              </div>
-
-              <div className="rounded-[28px] border border-slate-200 bg-slate-50 p-3 sm:p-4">
-                <div className="space-y-4">
-                  {chatEntries.map((entry) => {
-                    if (entry.kind === "text") {
-                      return renderTextBubble(entry);
-                    }
-
-                    return renderStructuredBubble(entry);
-                  })}
-                  <div ref={bottomRef} />
-                </div>
-              </div>
-
-              <form onSubmit={handleCommandSubmit} className="mt-5">
-                <label htmlFor="command-input" className="mb-3 block text-sm font-semibold text-slate-900">
-                  Ask Builder Core to build, fix, or upgrade anything...
-                </label>
-                <textarea
-                  id="command-input"
-                  value={commandInput}
-                  onChange={(event) => setCommandInput(event.target.value)}
-                  placeholder="Ask Builder Core to build, fix, or upgrade anything..."
-                  className="min-h-[140px] w-full rounded-[28px] border border-slate-200 px-4 py-4 text-sm text-slate-700 outline-none transition focus:border-slate-400"
-                />
-
-                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-sm text-slate-500">
-                    Builder Core will call the backend chat route, create a tracked task record, and use live deploy checks when they are available.
-                  </p>
-                  <button
-                    type="submit"
-                    className="rounded-2xl bg-black px-5 py-3 text-sm font-semibold text-white"
-                  >
-                    Run Command
-                  </button>
-                </div>
-              </form>
-            </section>
-
-            <section
-              ref={setSectionRef("progress")}
-              data-section-key="progress"
-              className="scroll-mt-32 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
-            >
-              <div className="mb-4">
-                <p className="text-lg font-semibold text-slate-900">Progress</p>
-                <p className="text-sm text-slate-600">
-                  One compact task bar controls the stage flow. Each stage now runs from 1% to 100%, while live deploy detection takes over when GitHub and Cloud Run signals are available.
-                </p>
-              </div>
-
-              <div className="mb-5 grid gap-4 lg:grid-cols-[1.4fr,1fr]">
-                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">Current Task</p>
-                      <p className="text-xs text-slate-500">{taskBarTaskName}</p>
-                      {effectiveTaskId && <p className="mt-1 text-xs text-slate-500">Task ID: {effectiveTaskId}</p>}
-                    </div>
-                    <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
-                      {getExecutionStatusLabel(executionStatus)}
-                    </span>
-                  </div>
-
-                  <div className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    <span>{currentTaskStage ? currentTaskStage.label : "No stage yet"}</span>
-                    <span>{taskProgressText}</span>
-                  </div>
-                  <div className="h-3 rounded-full bg-slate-200">
-                    <div
-                      className="h-3 rounded-full bg-slate-900 transition-all"
-                      style={{ width: `${Math.max(taskStageProgress, 0)}%` }}
-                    />
-                  </div>
-
-                  <p className="mt-3 text-sm font-medium text-slate-900">{taskStatusText}</p>
-                  <p className="mt-2 text-sm text-slate-600">{taskTrackingMessage}</p>
-                  <p className="mt-2 text-sm text-slate-600">{taskNextText}</p>
-                </div>
-
-                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-sm font-semibold text-slate-900">Permission Model</p>
-                  <p className="mt-3 text-sm text-slate-700">Automation permission granted by user.</p>
-                  <p className="mt-2 text-sm text-slate-600">
-                    Future: Codex will run automatically after approval, with cloud tracking instead of laptop-only state.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleNextStage}
-                    disabled={!canAdvanceStage}
-                    className={
-                      canAdvanceStage
-                        ? "mt-4 rounded-2xl bg-black px-4 py-3 text-sm font-semibold text-white"
-                        : "mt-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-400"
-                    }
-                  >
-                    Next
-                  </button>
-                </div>
-              </div>
-
-              <div className="mb-5 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">GitHub Tracking</p>
-                    <p className="mt-1 text-sm text-slate-600">
-                      Builder Core now reads the repo, workflow state, and deploy health so the progress bar can react to real rollout signals.
-                    </p>
-                  </div>
-                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getGithubTrackingBadgeClass(githubTrackingState)}`}>
-                    {githubTrackingState === "checking" && "Checking"}
-                    {githubTrackingState === "online" && "Connected"}
-                    {githubTrackingState === "offline" && "Unavailable"}
-                  </span>
-                </div>
-
-                <div className="grid gap-4 xl:grid-cols-[1.3fr,1fr]">
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="mb-3 flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      <span>{githubRepoLabel}</span>
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] text-slate-600">
-                        Branch {githubBranchLabel}
-                      </span>
-                    </div>
-
-                    <p className="text-sm font-medium text-slate-900">{githubStatusSummary}</p>
-                    <p className="mt-2 text-sm text-slate-600">{githubStatusNextStep}</p>
-
-                    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Latest Commit</p>
-                      <p className="mt-2 text-sm font-medium text-slate-900">
-                        {githubStatus?.latest_commit?.short_sha
-                          ? `${githubStatus.latest_commit.short_sha} - ${githubStatus.latest_commit.message ?? "No commit message"}`
-                          : "No commit details available yet."}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {githubStatus?.latest_commit?.author && githubStatus?.latest_commit?.timestamp
-                          ? `${githubStatus.latest_commit.author} - ${githubStatus.latest_commit.timestamp}`
-                          : "Builder Core will show commit details when the GitHub API responds."}
-                      </p>
-                      {githubStatus?.latest_commit?.url && (
-                        <a
-                          href={githubStatus.latest_commit.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="mt-2 inline-block text-xs font-semibold text-blue-700"
-                        >
-                          Open commit
-                        </a>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4">
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold text-slate-900">Repo Checks</p>
-                        <span className={`rounded-full px-3 py-1 text-[11px] font-semibold ${getGithubWorkflowBadgeClass(githubChecksWorkflow)}`}>
-                          {getGithubWorkflowLabel(githubChecksWorkflow)}
-                        </span>
-                      </div>
-                      <p className="text-sm text-slate-600">
-                        {githubChecksWorkflow?.updated_at
-                          ? `Updated at ${githubChecksWorkflow.updated_at}`
-                          : "Waiting for a tracked Repo Checks workflow run."}
-                      </p>
-                      {githubChecksWorkflow?.url && (
-                        <a
-                          href={githubChecksWorkflow.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="mt-2 inline-block text-xs font-semibold text-blue-700"
-                        >
-                          Open workflow run
-                        </a>
-                      )}
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold text-slate-900">Deploy Workflow</p>
-                        <span className={`rounded-full px-3 py-1 text-[11px] font-semibold ${getGithubWorkflowBadgeClass(githubDeployWorkflow)}`}>
-                          {getGithubWorkflowLabel(githubDeployWorkflow)}
-                        </span>
-                      </div>
-                      <p className="text-sm text-slate-600">
-                        {githubDeployWorkflow?.updated_at
-                          ? `Updated at ${githubDeployWorkflow.updated_at}`
-                          : "Waiting for a tracked Deploy Cloud Run workflow run."}
-                      </p>
-                      {githubDeployWorkflow?.url && (
-                        <a
-                          href={githubDeployWorkflow.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="mt-2 inline-block text-xs font-semibold text-blue-700"
-                        >
-                          Open deploy run
-                        </a>
-                      )}
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Deploy Detection</p>
-                      <div className="mt-3 space-y-2 text-sm text-slate-700">
-                        <p>
-                          <span className="font-semibold text-slate-900">Status:</span> {deployStatusSummary}
-                        </p>
-                        <p>
-                          <span className="font-semibold text-slate-900">Backend:</span>{" "}
-                          {deployStatus?.backend_healthy ? "Online" : "Waiting for healthy status"}
-                        </p>
-                        <p>
-                          <span className="font-semibold text-slate-900">Frontend:</span>{" "}
-                          {deployStatus?.frontend_reachable === true
-                            ? "Reachable"
-                            : deployStatus?.frontend_reachable === false
-                              ? "Not reachable yet"
-                              : "Not checked yet"}
-                        </p>
-                      </div>
-                      <p className="mt-3 text-xs text-slate-500">
-                        {githubCheckedAt ? `Last checked ${githubCheckedAt}` : "Builder Core will record the next deploy check here."}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Fast polling starts while a task is active. `GITHUB_TOKEN` stays on the backend only.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                {taskStages.map((stage, index) => (
-                  <div key={stage.key} className={getTaskStageCardClass(stage.status)}>
-                    <div className="mb-2 flex items-start justify-between gap-3">
-                      <div className="flex items-start gap-3">
-                        <span className={`mt-1 h-3 w-3 rounded-full ${getTaskStageDotClass(stage.status)}`} />
-                        <div>
-                          <p className={getTaskStageTitleClass(stage.status)}>
-                            {index + 1}. {stage.label}
-                          </p>
-                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                            {stage.status === "active" ? `${taskStageProgress}%` : stage.status === "done" ? "100%" : "Pending"}
-                          </p>
-                        </div>
-                      </div>
-                      <span className={`rounded-full px-3 py-1 text-[11px] font-semibold ${getTaskStageBadgeClass(stage.status)}`}>
-                        {stage.status === "active" && "Active"}
-                        {stage.status === "done" && "Done"}
-                        {stage.status === "pending" && "Pending"}
-                      </span>
-                    </div>
-                    <p className={getTaskStageDescriptionClass(stage.status)}>{stage.description}</p>
-                    {stage.status === "active" && <p className="mt-2 text-sm font-medium text-blue-700">{stage.activeText}</p>}
-                    {stage.status === "done" && index === taskStageIndex && executionStatus !== "completed" && (
-                      <p className="mt-2 text-sm font-medium text-green-700">{stage.completeText}</p>
-                    )}
-                    {stage.status === "done" && executionStatus === "completed" && index === taskStages.length - 1 && (
-                      <p className="mt-2 text-sm font-medium text-green-700">Done - ready for next task</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {executionStatus === "completed" && (
-                <div className="mt-5 rounded-3xl border border-blue-200 bg-blue-50 p-4">
-                  <p className="text-sm font-semibold text-blue-900">Next upgrade ideas</p>
-                  <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-blue-900">
-                    {NEXT_UPGRADE_SUGGESTIONS.map((item) => (
-                      <li key={item}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </section>
-
-            <section
-              ref={setSectionRef("review")}
-              data-section-key="review"
-              className="scroll-mt-32 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
-            >
-              <div className="mb-4">
-                <p className="text-lg font-semibold text-slate-900">Review</p>
-                <p className="text-sm text-slate-600">
-                  Use this section after a task completes so you can decide whether the result is safe to keep moving with.
-                </p>
-              </div>
-
-              {lastTask ? (
-                <>
-                  <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                    <p>
-                      <span className="font-semibold text-slate-900">Latest task:</span> {lastTask.instruction}
-                    </p>
-                    <p className="mt-1">
-                      <span className="font-semibold text-slate-900">Recorded:</span> {lastTask.timestamp}
-                    </p>
-                  </div>
-                  {renderReviewContent(latestReview)}
-                </>
-              ) : (
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-                  Run a command first. Review guidance will appear here after Builder Core responds.
-                </div>
-              )}
-            </section>
-
-            <section
-              ref={setSectionRef("download")}
-              data-section-key="download"
-              className="scroll-mt-32 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
-            >
-              <div className="mb-4">
-                <p className="text-lg font-semibold text-slate-900">Download</p>
-                <p className="text-sm text-slate-600">
-                  Keep the install steps close by so Builder Core is easy to open on your phone any time.
-                </p>
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-[1fr,1fr]">
-                <div className="space-y-4 text-sm text-slate-700">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="mb-2 font-semibold text-slate-900">iPhone</p>
-                    <ul className="list-disc space-y-1 pl-5">
-                      <li>Open the app in Safari.</li>
-                      <li>Tap Share.</li>
-                      <li>Add to Home Screen.</li>
-                    </ul>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="mb-2 font-semibold text-slate-900">Android</p>
-                    <ul className="list-disc space-y-1 pl-5">
-                      <li>Open the app in Chrome.</li>
-                      <li>Tap the menu icon.</li>
-                      <li>Install App.</li>
-                    </ul>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                    <p className="mb-2 font-semibold text-slate-900">App Link</p>
-                    <p>{FRONTEND_APP_URL}</p>
-                    <p className="mt-2 text-xs text-slate-500">No App Store needed.</p>
-                  </div>
-
-                  <div className="flex flex-col gap-3 sm:flex-row">
-                    <button
-                      type="button"
-                      onClick={handleOpenAppLink}
-                      className="w-full rounded-2xl bg-black px-5 py-3 text-sm font-medium text-white sm:w-auto"
-                    >
-                      Open App Link
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleCopyAppLink}
-                      className="w-full rounded-2xl border border-black px-5 py-3 text-sm font-medium text-black sm:w-auto"
-                    >
-                      Copy App Link
-                    </button>
-                  </div>
-
-                  {installMessage && <p className="text-sm text-slate-600">{installMessage}</p>}
-                </div>
-              </div>
-            </section>
-
-            <section
-              ref={setSectionRef("help")}
-              data-section-key="help"
-              className="scroll-mt-32 rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
-            >
-              <div className="mb-4">
-                <p className="text-lg font-semibold text-slate-900">Help</p>
-                <p className="text-sm text-slate-600">
-                  Builder Core now uses one compact task system: stages auto-run from 1% to 100%, deploy stages watch live backend signals when possible, and Next stays available as the fallback.
-                </p>
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="mb-3 font-semibold text-slate-900">What each tab means</p>
-                  <ul className="list-disc space-y-2 pl-5 text-sm text-slate-700">
-                    <li>
-                      <span className="font-semibold text-slate-900">Command:</span> chat with Builder Core and send the next request.
-                    </li>
-                    <li>
-                    <span className="font-semibold text-slate-900">Progress:</span> follow the stage bar, watch deploy detection, and use the single Next button only when Builder Core pauses.
-                    </li>
-                    <li>
-                      <span className="font-semibold text-slate-900">Review:</span> confirm the latest task result before trusting the rollout.
-                    </li>
-                    <li>
-                      <span className="font-semibold text-slate-900">Download:</span> install the app on your phone or copy the live link.
-                    </li>
-                    <li>
-                      <span className="font-semibold text-slate-900">Help:</span> get quick guidance when you are unsure what to do next.
-                    </li>
-                  </ul>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="mb-3 font-semibold text-slate-900">How the stage flow works</p>
-                  <ul className="list-disc space-y-2 pl-5 text-sm text-slate-700">
-                    <li>Each stage automatically progresses from 1% to 100%.</li>
-                    <li>Planning and Codex Working pause at 100% and ask you to press Next.</li>
-                    <li>GitHub Deploying and Cloud Run Live can advance automatically when backend deploy checks confirm the rollout.</li>
-                    <li>The only manual control is the Next button in the compact task bar, and it remains the fallback.</li>
-                    <li>The final stage ends with Done - ready for next task.</li>
-                  </ul>
-                </div>
-              </div>
-            </section>
-          </div>
-        </div>
       </div>
-
-      <nav className="fixed bottom-0 left-0 right-0 z-20 border-t border-slate-200 bg-white/95 px-2 py-2 shadow-[0_-10px_30px_rgba(15,23,42,0.08)] backdrop-blur lg:hidden">
-        <div className="grid grid-cols-5 gap-2">
-          {COMMAND_CENTER_TABS.map((tab) => (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => scrollToSection(tab.key)}
-              className={
-                activeTab === tab.key
-                  ? "rounded-2xl bg-black px-2 py-2 text-[11px] font-semibold text-white"
-                  : "rounded-2xl border border-slate-200 bg-slate-50 px-2 py-2 text-[11px] font-medium text-slate-600"
-              }
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      </nav>
     </main>
   );
 }

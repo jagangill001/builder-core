@@ -1,22 +1,66 @@
 # Builder Core
 
-Builder Core is a cloud-first AI command center for planning repo changes, generating Codex-ready tasks, tracking rollout progress, and reviewing the latest result from phone or desktop.
+Builder Core is a cloud-first AI command center for Builder Core repo work. The frontend sends one command, the backend creates a real tracked task, the task runs through backend-controlled stages, and the UI polls the backend for live logs, errors, and the final summary.
 
-## Live Services
-- Frontend: https://builder-core-frontend-599596796788.us-central1.run.app
-- Backend: https://builder-core-599596796788.us-central1.run.app
+## Repo Folder Used
+- `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
 
-## What Works Now
-- The Command Center sends instructions to `POST /chat` and shows the assistant reply inline.
-- The frontend creates a real automation task with `POST /automation/tasks`.
-- The app polls `GET /automation/tasks/{id}` to keep task ID, stage, progress, and workflow status in sync.
-- The compact progress bar now runs each stage from `1%` to `100%` instead of getting stuck at `1%`.
-- The Progress tab reads deploy and live health data from `GET /automation/deploy-status`.
-- The app keeps working on phone with the existing PWA install flow.
+## Files Edited In This Upgrade
+- `backend/app/main.py`
+- `backend/app/tasks.py`
+- `backend/app/storage.py`
+- `backend/app/bridge.py`
+- `backend/app/learning.py`
+- `backend/app/services/task_service.py`
+- `backend/.env.example`
+- `frontend/src/app/page.tsx`
+- `README.md`
+- `COMMAND_CENTER.md`
+- `PROJECT_PROGRESS.md`
 
-## Current Backend Endpoints
+## What Changed
+- Added a real backend task runner with background execution.
+- Added `POST /tasks`, `GET /tasks`, `GET /tasks/{task_id}`, and `PATCH /tasks/{task_id}`.
+- Added persistent local JSON task history with richer task fields such as logs, errors, summary, bridge status, and stage history.
+- Added persistent project memory and learning storage.
+- Added learning endpoints and a project structure scan.
+- Added honest GitHub/Codex bridge checks.
+- Replaced frontend fake progress with backend task polling.
 
-### Chat And Builder
+## What Is Real Now
+- Task creation is real and stored by the backend.
+- Task stage, progress, logs, errors, and final summary come from the backend.
+- The frontend polls real backend task state.
+- Project memory is saved to local JSON storage.
+- Learning lessons are saved from completed or failed task runs.
+- Backend deploy health checks are real when URLs are reachable.
+- GitHub workflow checks are real if `GITHUB_TOKEN` is configured.
+
+## What Is Still Not Real
+- No real Codex repo execution is implemented yet.
+- No real GitHub repo change is performed by the backend.
+- Firestore is not the default task or memory backend yet.
+- Cloud Storage upload flow is still local fallback by default.
+
+If bridge credentials are missing or Codex is disabled, Builder Core now says so clearly:
+
+`No real repo changes can happen until credentials are added.`
+
+## Backend Endpoints
+
+### Core task runner
+- `POST /tasks`
+- `GET /tasks`
+- `GET /tasks/{task_id}`
+- `PATCH /tasks/{task_id}`
+
+### Memory and learning
+- `GET /memory`
+- `POST /memory`
+- `GET /learning`
+- `POST /learning/scan`
+
+### Existing builder and status routes
 - `POST /chat`
 - `POST /plan`
 - `GET /projects`
@@ -25,117 +69,108 @@ Builder Core is a cloud-first AI command center for planning repo changes, gener
 - `GET /project-files`
 - `GET /run-info`
 - `GET /system/status`
-
-### Automation Tasks
-- `POST /automation/tasks`
-- `GET /automation/tasks`
-- `GET /automation/tasks/{id}`
-- `PATCH /automation/tasks/{id}`
 - `GET /automation/github-status`
 - `GET /automation/deploy-status`
-
-### File Storage
 - `POST /storage/files`
 - `GET /storage/files`
 - `GET /storage/files/{id}`
 - `DELETE /storage/files/{id}`
 
-## Cloud-First Task Tracking
-Builder Core now stores task state through a storage abstraction.
+## Storage Added
 
-### Task fields
-- `id`
-- `command`
-- `status`
-- `current_stage`
-- `progress`
-- `github_commit`
-- `workflow_status`
-- `created_at`
-- `updated_at`
+### Task history
+- Stored through `AutomationTaskService`
+- Local fallback path: `backend/runtime_data/automation_tasks.json`
+- Firestore-ready abstraction remains in place for future production use
 
-### How it works today
-- If Firestore is not enabled, tasks are stored in `backend/runtime_data/automation_tasks.json`.
-- The frontend now lets each stage progress automatically from `1%` to `100%`.
-- The manual `Next` button remains as the fallback after a stage completes.
-- GitHub workflow details are synced into the task record from the frontend-safe backend flow.
-- Deploy health now comes from `GET /automation/deploy-status`, which checks GitHub workflow state plus backend and frontend reachability.
+### Project memory and latest summary
+- Stored through `ProjectStorageService`
+- Local path: `backend/runtime_data/project_memory.json`
 
-## Cloud-First Storage Foundation
+### File storage metadata
+- Stored through `FileStorageService`
+- Local fallback files:
+  - `backend/runtime_data/storage_files.json`
+  - `backend/runtime_data/storage_files/`
 
-### Firestore
-Planned source of truth for:
-- commands
-- tasks
-- progress
-- history
+## Limits Of Local Storage On Cloud Run
+- Cloud Run local filesystem storage is temporary.
+- It is useful for development and MVP fallback, but it is not a reliable long-term production database.
+- If the service restarts or scales differently, local files may not be durable.
 
-### Cloud Storage
-Prepared for:
-- uploaded files
-- generated files
+## Future Storage Upgrade Path
+- Firestore: tasks, commands, progress, history, memory entries, lessons
+- Cloud SQL or Supabase: relational project history and richer reporting
+- Google Cloud Storage: uploaded files and generated output files
+- Secret Manager: GitHub token, API keys, future Codex credentials
 
-### Secret Manager
-Recommended home for:
-- GitHub token
-- API keys
-- future Codex credentials
+## Learning System: What It Can Do Now
+- Scan and summarize project structure
+- Save lessons from successful or failed tasks
+- Save known issues from recent errors
+- Suggest recommended next steps based on project memory and bridge problems
 
-### Cloud Run
-- backend runtime
-- frontend runtime
+## Learning System: What It Cannot Do Yet
+- It does not train a custom AI model
+- It does not automatically rewrite the repo
+- It does not understand every file semantically
+- It does not perform autonomous Codex execution
 
-### GitHub
-- code source of truth
+Learning in this phase means:
+- storing project history
+- recording outcomes
+- summarizing patterns
+- helping the next task start from better context
 
-Important note:
-- Laptop is only the control device. All long-term task and file storage should live in cloud services.
+It does **not** mean training a new AI model.
 
-## Environment Variables
-Builder Core reads environment variables only from the backend runtime.
+## Required Environment Variables
+Set these in Cloud Run backend settings when you are ready:
 
 ### Storage
 - `FIRESTORE_ENABLED=false`
 - `GCP_PROJECT_ID=`
 - `GCS_BUCKET_NAME=`
-- `BACKEND_PUBLIC_URL=https://builder-core-599596796788.us-central1.run.app`
-- `FRONTEND_PUBLIC_URL=https://builder-core-frontend-599596796788.us-central1.run.app`
 
-### GitHub
+### Bridge
 - `GITHUB_TOKEN=`
 - `GITHUB_OWNER=jagangill001`
-- `GITHUB_REPO=builder-core`
-- `GITHUB_DEFAULT_BRANCH=main`
-- `GITHUB_CHECKS_WORKFLOW_NAME=Repo Checks`
-- `GITHUB_DEPLOY_WORKFLOW_NAME=Deploy Cloud Run`
+- `GITHUB_REPO=jagangill001/builder-core`
+- `GITHUB_BRANCH=main`
+- `CODEX_API_KEY=`
+- `CODEX_MODE=disabled`
 
-See [backend/.env.example](backend/.env.example) for the starter shape.
+### Public URLs
+- `FRONTEND_URL=https://builder-core-frontend-599596796788.us-central1.run.app`
+- `BACKEND_URL=https://builder-core-599596796788.us-central1.run.app`
 
-## Local Fallback Behavior
-- If `FIRESTORE_ENABLED` is not `true`, Builder Core uses local JSON task storage.
-- If `GCS_BUCKET_NAME` is missing, Builder Core uses local file storage metadata plus local file fallback.
-- If `GITHUB_TOKEN` is missing, the backend returns `GitHub status not connected` instead of failing the UI.
-- GitHub tokens remain backend-only, and the frontend never receives them directly.
+See `backend/.env.example` for the full current template.
 
-## Future Endpoints
-These are still planned for the next automation phase:
-- `GET /automation/history`
-- `POST /storage/files` with direct signed-upload flow
-- `GET /storage/files` with richer cloud metadata
+## Local Run
 
-## Deployment Notes
-- Backend and frontend are deployed separately to Cloud Run.
-- The frontend uses `NEXT_PUBLIC_API_BASE_URL` or `NEXT_PUBLIC_API_URL` and falls back to the deployed backend URL.
-- GitHub status is requested only through the backend so secrets never reach the frontend.
+### Backend
+```powershell
+cd backend
+uvicorn app.main:app --reload
+```
 
-## Legal And Originality Note
-This project is intended to use original, repo-specific code plus licensed open-source libraries such as Next.js, React, FastAPI, and SQLAlchemy.
+### Frontend
+```powershell
+cd frontend
+npm install
+npm run dev
+```
 
-When adding features:
-- prefer fresh implementations over copied snippets
-- avoid unknown copyrighted code
-- refactor generic patterns into the repo's own structure
-- keep the result readable, safe, and suitable for commercial use
+## Deploy
+- Backend and frontend remain separate Cloud Run services.
+- Backend entrypoint remains `backend/app/main.py` exporting `app`.
+- Backend startup remains compatible with:
+  - `uvicorn app.main:app --host 0.0.0.0 --port 8080`
+- Frontend still uses the existing `API_BASE` environment logic and PWA setup.
 
-## License
-This project is released under the MIT License. See `LICENSE` for details.
+## Legal And Safety Note
+- Prefer original repo-specific code
+- Avoid copying third-party project code
+- Use licensed frameworks normally
+- Keep GitHub and Codex credentials backend-only
+- Be honest about missing automation or missing credentials

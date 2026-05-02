@@ -1,162 +1,191 @@
 # Builder Core Command Center
 
-## Purpose
-Builder Core is becoming a cloud-first AI command center that can accept one instruction, respond through backend chat, record a real task, track rollout progress, and prepare for future automation without depending on laptop storage.
+## Repo Folder Used
+- `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
+
+## What Changed In This Upgrade
+- Builder Core now creates real backend tasks with `POST /tasks`.
+- The backend runs those tasks in the background.
+- The frontend polls task status from `GET /tasks/{task_id}`.
+- Progress is now driven by backend stage updates.
+- Project memory and learning data are stored persistently in local JSON fallback files.
+- GitHub and Codex bridge checks are honest and backend-only.
+
+## Files Edited
+- `backend/app/main.py`
+- `backend/app/tasks.py`
+- `backend/app/storage.py`
+- `backend/app/bridge.py`
+- `backend/app/learning.py`
+- `backend/app/services/task_service.py`
+- `backend/.env.example`
+- `frontend/src/app/page.tsx`
+- `README.md`
+- `COMMAND_CENTER.md`
+- `PROJECT_PROGRESS.md`
 
 ## Current Workflow
-User -> Command Center -> `/chat` + `/automation/tasks` -> task polling -> deploy polling -> review
+1. User enters one command in the frontend.
+2. Frontend calls `POST /tasks`.
+3. Backend creates a persistent task record.
+4. Backend starts the task runner in the background.
+5. Frontend polls `GET /tasks/{task_id}`.
+6. Backend updates stage, progress, logs, errors, and final summary.
+7. Frontend shows real task state, memory, and learning panels.
 
-### What happens now
-1. The user enters a command in the Command tab.
-2. Builder Core calls `POST /chat` for the assistant reply, plan, Codex-ready task, and next steps.
-3. At the same time, Builder Core creates a task with `POST /automation/tasks`.
-4. The frontend stores the returned task ID and polls `GET /automation/tasks/{id}`.
-5. The compact task bar now runs each stage from `1%` to `100%` automatically.
-6. The manual `Next` button remains as the fallback after a stage completes.
-7. The Progress tab calls `GET /automation/deploy-status` for the latest GitHub workflow and live deploy state.
-8. Review guidance stays visible after the task completes.
+## Current Task Stages
+- `received`
+- `planning`
+- `bridge_check`
+- `codex_working`
+- `testing`
+- `deploy_check`
+- `summary`
+- `completed`
+- `failed`
 
-## Live Backend Endpoints
+## What The Backend Checks During A Task
 
-### Task storage
-- `POST /automation/tasks`
-- `GET /automation/tasks`
-- `GET /automation/tasks/{id}`
-- `PATCH /automation/tasks/{id}`
+### Planning
+- records the command
+- builds a simple safe plan
 
-### GitHub tracking
-- `GET /automation/github-status`
-- `GET /automation/deploy-status`
+### Bridge check
+- checks `GITHUB_TOKEN`
+- checks `GITHUB_REPO`
+- checks `GITHUB_BRANCH`
+- checks `CODEX_API_KEY`
+- checks `CODEX_MODE`
+- records missing configuration honestly
 
-### File storage
-- `POST /storage/files`
-- `GET /storage/files`
-- `GET /storage/files/{id}`
-- `DELETE /storage/files/{id}`
+### Codex working
+- does **not** fake repo changes
+- if bridge credentials are missing or Codex mode is disabled, Builder Core records that honestly
 
-## Task Storage Model
-Each automation task stores:
-- `id`
-- `command`
-- `status`
-- `current_stage`
-- `progress`
-- `github_commit`
-- `workflow_status`
-- `created_at`
-- `updated_at`
+### Testing
+- verifies important backend routes exist
+- verifies task storage works
+- verifies memory storage works
 
-### Storage behavior
-- Firestore-ready structure exists now through the backend task service.
-- Local JSON fallback is used automatically when Firestore is not enabled.
-- This keeps the API stable while the storage backend changes later.
+### Deploy check
+- checks GitHub workflow status if the token exists
+- checks backend `/system/status`
+- checks the frontend URL
 
-## File Storage Foundation
-Builder Core now includes a file storage service abstraction.
+### Summary
+- saves a final task summary
+- saves a project memory entry
+- saves a learning lesson
 
-### Local fallback today
-- metadata file
-- local runtime files
+## Honest Bridge Rule
+If the repo bridge is not ready, Builder Core must say:
 
-### Cloud-ready direction
-- Firestore for task and history records
-- Google Cloud Storage for uploaded or generated files
-- Secret Manager for GitHub tokens, API keys, and future Codex credentials
+`No real repo changes can happen until credentials are added.`
 
-## Environment Variables
-These belong on the backend only.
+That means:
+- no fake GitHub commit success
+- no fake Codex execution
+- no fake deploy success
 
-### Storage
-- `FIRESTORE_ENABLED=false`
-- `GCP_PROJECT_ID=`
-- `GCS_BUCKET_NAME=`
+## What Is Automatic Now
+- real backend task creation
+- real backend task polling
+- real backend logs
+- real backend errors
+- real final summary generation
+- real saved task history
+- real saved project memory
+- real saved learning lessons
 
-### GitHub
-- `GITHUB_TOKEN=`
-- `GITHUB_OWNER=jagangill001`
-- `GITHUB_REPO=builder-core`
-- `GITHUB_DEFAULT_BRANCH=main`
-- `GITHUB_CHECKS_WORKFLOW_NAME=Repo Checks`
-- `GITHUB_DEPLOY_WORKFLOW_NAME=Deploy Cloud Run`
-- `BACKEND_PUBLIC_URL=https://builder-core-599596796788.us-central1.run.app`
-- `FRONTEND_PUBLIC_URL=https://builder-core-frontend-599596796788.us-central1.run.app`
-
-If GitHub is not configured, Builder Core returns a safe message instead of failing:
-- `GitHub status not connected`
-- The token stays on the backend only and is never exposed to the frontend.
+## What Is Still Manual Or Missing
+- real Codex execution
+- real repo commits from the backend
+- real automatic GitHub write actions
+- Firestore as the default storage backend
+- Cloud Storage as the default upload backend
 
 ## Cloud-First Architecture
 
+### Cloud Run
+- frontend runtime
+- backend runtime
+
 ### Firestore
-- commands
+Planned long-term home for:
 - tasks
+- commands
 - progress
 - history
+- memory entries
+- lessons
 
 ### Cloud Storage
+Planned long-term home for:
 - uploaded files
 - generated files
 
 ### Secret Manager
-- GitHub token
-- API keys
-- future Codex credentials
-
-### Cloud Run
-- backend runtime
-- frontend runtime
+Recommended home for:
+- `GITHUB_TOKEN`
+- `CODEX_API_KEY`
+- future provider keys
 
 ### GitHub
-- code source of truth
+- source of truth for code
 
-Important note:
-- Laptop and phone are control devices only, not permanent storage.
+### Laptop And Phone
+- control devices only
+- not long-term storage
 
-## Future Workflow
-User -> Builder Core -> backend task -> auto Codex -> GitHub -> deploy -> status polling -> app refresh
-
-### Next automation phase
-1. User submits the command directly in Builder Core.
-2. Backend creates the persistent cloud task.
-3. After authentication and approval, Builder Core triggers Codex automatically.
-4. GitHub receives the change request.
-5. GitHub Actions deploys after checks pass.
-6. Builder Core polls task, workflow, and deploy status from the backend.
-7. The UI updates automatically and refreshes when the rollout is live.
-
-## What Is Automatic Now
-- Planning progress no longer stays stuck at `1%`.
-- Each stage advances from `1%` to `100%`.
-- Deploy tracking now polls `GET /automation/deploy-status`.
-- GitHub Deploying and Cloud Run Live can react to live backend deploy signals when they belong to the current task.
-
-## What Is Still Manual
-- The `Next` button is still the fallback when a stage completes.
-- Real Codex execution is still planned, not automatic.
-- Firestore and Cloud Storage are still optional cloud backends until runtime config enables them.
-
-## Future Endpoints
-Still planned:
+## Future Backend Endpoints
+- `POST /automation/tasks`
+- `GET /automation/tasks`
+- `GET /automation/tasks/{id}`
 - `GET /automation/history`
-- `POST /storage/files` with signed-upload support
-- `GET /storage/files` with richer cloud metadata
+- `POST /storage/files`
+- `GET /storage/files`
 
-## Navigation Meaning
-- `Command`: talk to Builder Core and submit the next request
-- `Progress`: watch the tracked stage bar and GitHub status
-- `Review`: confirm the latest task result before trusting it
-- `Download`: install the app on your phone or copy the live link
-- `Help`: quick guidance for the current operating flow
+## Local Storage Paths Today
+- Task history: `backend/runtime_data/automation_tasks.json`
+- Memory and latest summary: `backend/runtime_data/project_memory.json`
+- File storage metadata: `backend/runtime_data/storage_files.json`
 
-## Logs, Auth, And Safety
-- Authentication is required before future automation can act.
-- Approval is required before automatic repo changes happen.
-- Logs are required for every automated action.
-- Codex should explain files changed, run checks when possible, and provide testing steps.
+## Limits Of Current Storage
+- Local files on Cloud Run are temporary.
+- They are fine for development or fallback use.
+- They should be replaced later with Firestore, Cloud SQL, Supabase, or another persistent cloud database.
 
-## Legal And Originality Rules
-- Prefer original repo-specific implementations.
-- Do not paste recognizable third-party snippets.
-- Keep the code easy to read and easy to review.
-- Use licensed frameworks such as Next.js, React, FastAPI, and SQLAlchemy in a normal supported way.
-- Keep the project safe for commercial use by avoiding unknown copyrighted code.
+## Running Locally
+
+### Backend
+```powershell
+cd backend
+uvicorn app.main:app --reload
+```
+
+### Frontend
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+## Required Environment Variables
+- `FIRESTORE_ENABLED`
+- `GCP_PROJECT_ID`
+- `GCS_BUCKET_NAME`
+- `GITHUB_TOKEN`
+- `GITHUB_OWNER`
+- `GITHUB_REPO`
+- `GITHUB_BRANCH`
+- `CODEX_API_KEY`
+- `CODEX_MODE`
+- `FRONTEND_URL`
+- `BACKEND_URL`
+
+## Legal And Safety Rules
+- Write original code for this repo
+- Do not copy external project code blindly
+- Keep secrets backend-only
+- Keep logs and summary honest
+- Explain missing credentials clearly
