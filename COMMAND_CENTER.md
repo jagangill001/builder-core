@@ -3,243 +3,294 @@
 ## Repo Folder Used
 - `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
 
-## Current Product Direction
-Builder Core is now:
-- a local-first Builder Core Assistant
-- a manual Codex Prompt Command Center
-- a safe research task tracker
-- a memory and lesson system
-- a self-improvement note system
-
 ## Files Changed In This Upgrade
 - `backend/app/main.py`
-- `backend/app/chat_assistant.py`
-- `backend/app/research_tasks.py`
-- `backend/app/self_improvement.py`
 - `backend/app/storage.py`
+- `backend/app/services/task_service.py`
+- `backend/app/chat_assistant.py`
 - `backend/app/prompt_builder.py`
-- `backend/app/learning.py`
+- `backend/app/model_router.py`
+- `backend/app/safety.py`
+- `backend/app/tool_registry.py`
+- `backend/app/private_search.py`
+- `backend/app/document_ingest.py`
+- `backend/app/web_ingest.py`
+- `backend/app/crawler_plan.py`
+- `backend/app/research_engine.py`
+- `backend/app/market_analyzer.py`
+- `backend/app/app_planner.py`
+- `backend/app/command_router.py`
+- `backend/app/orchestrator.py`
 - `backend/.env.example`
 - `frontend/src/app/page.tsx`
 - `README.md`
 - `COMMAND_CENTER.md`
 - `PROJECT_PROGRESS.md`
 
+## Product Direction
+Builder Core is now a one-message internal-tools command chat.
+
+The main system does not require ChatGPT or OpenAI.
+
+Default behavior:
+- local rule-based assistant
+- private search over saved knowledge
+- internal research using saved documents and memory
+- market-analysis framework
+- app planning
+- manual Codex prompt generation
+- memory and lesson updates
+- Firestore-ready storage
+
 ## Main User Flow
-1. User opens Builder Core.
-2. User chats with Builder Core Assistant.
-3. User can:
-   - save useful info to memory
-   - generate ideas
-   - create a research task
-   - generate a Codex prompt
-4. User copies the prompt into Codex manually.
-5. Codex performs the repo work outside Builder Core.
-6. User pastes Codex's final summary back into Builder Core.
-7. Builder Core saves:
-   - task history
-   - prompt history
-   - codex summary
-   - memory
-   - lessons
-   - self-improvement notes
+1. User opens Builder Core Command Chat.
+2. User sends one message.
+3. Builder Core runs:
+   - safety firewall
+   - command router
+   - private search
+   - research engine if needed
+   - market analyzer if needed
+   - app planner if needed
+   - Codex prompt builder if needed
+   - memory saver
+   - learning updater
+4. Builder Core returns one combined response in the same conversation.
+5. If a Codex prompt is included, the user copies it into Codex manually.
+6. If the user later pastes a Codex summary, Builder Core saves that result into memory and lessons.
 
-## Builder Core Assistant
+## /command Endpoint
+`POST /command`
 
-### Endpoints
-- `POST /assistant/chat`
-- `GET /assistant/history`
-- `POST /assistant/idea`
+Input:
+```json
+{
+  "message": "Research trucking dispatch market and create an app to analyze it",
+  "mode": "auto",
+  "save_to_memory": true
+}
+```
 
-### What it does
-- understands the current project context
-- uses saved memory and lessons
-- gives natural local-first replies
-- suggests next actions
-- can save useful chats to memory
-- can propose ideas for:
-  - app features
-  - coding improvements
-  - business ideas
-  - research angles
-  - exam strategies
-  - legal-information structure
-  - market-analysis structure
-  - project improvements
+Output includes:
+- `reply`
+- `detected_intents`
+- `workflow`
+- `internal_tools_used`
+- `progress`
+- `private_search`
+- `research`
+- `market_analysis`
+- `app_plan`
+- `codex_prompt`
+- `summary`
+- `storage_used`
+- `memory_saved`
+- `next_actions`
+- `limitations`
 
-### Honest assistant statements
-The assistant should keep saying clearly:
-- `I can research this when you ask me.`
-- `I can save this to memory.`
-- `I can create a research task.`
-- `I can use previous memory and lessons.`
-- `I do not automatically know new internet information unless research is run.`
+## Supported Workflows
+- `normal_chat`
+- `research_only`
+- `market_analysis`
+- `app_builder`
+- `research_to_app_plan`
+- `codex_prompt_only`
+- `save_summary`
+- `cloud_storage_setup`
+- `private_search`
+- `document_ingest`
+- `url_ingest`
+- `crawler_plan`
 
-### Local-first mode
-If `OPENAI_API_KEY` is missing:
-- `Local assistant mode is running. Add OPENAI_API_KEY later for stronger AI replies.`
+## One-Message Market + App Workflow
+Example:
+- `Research trucking dispatch market and create an app to analyze it`
 
-## Codex Prompt Command Center
+Builder Core can return in one response:
+- clarified topic if needed
+- research summary from private search and saved sources
+- target users
+- competitor questions
+- risks and opportunities
+- MVP app concept
+- backend routes
+- frontend screens
+- storage collections
+- Codex prompt
+- next actions
+- memory saved status
+- storage used
 
-### Endpoints
-- `POST /prompts/codex`
-- `GET /prompts/latest`
-- `POST /tasks/{task_id}/codex-summary`
+If the exact market is missing, Builder Core stays honest and says it can start with a general market-analysis app template.
 
-### What happens
-- Builder Core generates the prompt
-- user copies it into Codex
-- Codex edits the repo manually outside Builder Core
-- user pastes the final Codex summary back
-- Builder Core stores that result for memory and learning
+## Private Search
+Builder Core private search is Builder Core’s own saved-knowledge index.
 
-## Research Tasks
+It can search:
+- project memory
+- assistant memory
+- learning lessons
+- research results
+- codex summaries
+- app plans
+- market analysis
+- user-ingested text
+- safe URL-ingested public pages
 
-### Endpoints
-- `POST /research/tasks`
-- `GET /research/tasks`
-- `GET /research/tasks/{research_id}`
+It is not:
+- Google scale
+- DuckDuckGo scale
+- live internet-wide search by default
 
-### What happens
-- research tasks are created and saved
-- research can use:
-  - memory
-  - user notes placeholder
-  - web placeholder
-- research results are stored honestly
+## Document Ingest
+`POST /documents/ingest-text`
 
-### Safety rule
-Web research is not connected yet in this build.
+Current scope:
+- plain text only
+- safety check first
+- save original text
+- chunk text
+- add to private search
+- save memory and lesson
 
-Builder Core must not fake live internet findings.
+Future-ready only:
+- PDF parsing
+- DOCX parsing
+- spreadsheet parsing
+- OCR
 
-When web research is requested, it says:
-- `Web research is not connected yet. This task was saved and can use provided notes/memory only.`
+## URL Ingest Safety
+`POST /search/ingest-url`
 
-## Self-Improvement Notes
+Current scope:
+- one public `http` or `https` page at a time
+- blocks `.onion`
+- blocks `localhost`
+- blocks private/internal IPs
+- blocks `file://`
+- does not bypass login or paywall
+- does not start a multi-page crawl
 
-### Endpoints
-- `GET /self-improvement`
-- `POST /self-improvement`
+If fetching is not available or fails, Builder Core returns a clear warning instead of pretending research happened.
 
-### What it stores
-- user messages
-- assistant replies
-- what worked
-- what failed
-- repeated preferences
-- better future instructions
-- project lessons
-- next recommended improvement
+## Crawler Planner
+`POST /crawler/plan`
 
-This is memory-based improvement only.
-It is not real AI model training.
+Current scope:
+- plan only
+- does not run a crawl
+- explains limits
+- stores the plan
+
+Rules:
+- public pages only
+- respect robots.txt
+- rate limit later
+- no private pages
+- no dark web
+- no copyrighted redistribution
+
+## Firestore Storage
+The user already configured live Cloud Run environment values:
+- `STORAGE_MODE=firestore`
+- `FIRESTORE_ENABLED=true`
+- `GCP_PROJECT_ID=project-b2c4a0ee-4467-42f1-88c`
+
+Expected backend service account:
+- `599596796788-compute@developer.gserviceaccount.com`
+
+Required role:
+- `Cloud Datastore User`
+
+Builder Core now supports:
+- Firestore primary storage through Google Application Default Credentials
+- safe fallback to local JSON if Firestore import or permissions fail
+
+Use:
+- `GET /storage/status`
+- `POST /storage/test`
+
+to verify whether Firestore or fallback is active.
+
+## Background Work Limits
+Builder Core does not secretly run endless background jobs.
+
+Current safe statuses:
+- `created`
+- `running`
+- `completed`
+- `blocked`
+- `failed`
+
+If live internet-wide research is not connected, Builder Core says:
+- `Live internet-wide research is not connected yet. Builder Core can only search its own private index, saved knowledge, user notes, and safely ingested public URLs.`
+
+Future safe background options only:
+- Cloud Scheduler
+- Cloud Tasks
+- Pub/Sub
+- Cloud Run Jobs
+
+These are not enabled automatically.
 
 ## What Is Real Now
-- assistant chat
-- assistant history
-- idea generation
-- research task creation
-- research task storage
-- self-improvement notes
-- prompt generation
-- summary save-back
-- memory and lesson updates
+- unified one-message command chat
+- tool registry
+- model router
+- safety firewall
+- private search engine over saved knowledge
+- document ingest
+- safe URL ingest
+- crawler planning
+- research engine
+- market analyzer
+- app planner
+- Firestore-ready storage abstraction
 
-## What Is Still Manual
-- copying the prompt into Codex
-- running Codex
-- reviewing Codex changes
-- pasting Codex's final summary back
+## What Is Still Local / Fallback Only
+- local assistant reply generation by default
+- private-search ranking
+- internal research summaries when no live URL content exists
+- local JSON fallback when Firestore is unavailable
+
+## What Still Requires API Keys
+- `OPENAI_API_KEY` only if the user later wants optional OpenAI mode
+- `GITHUB_TOKEN` for GitHub bridge status or future automation
+- `CODEX_API_KEY` for future backend-triggered Codex execution
 
 ## What Is Not Real Yet
-- real Codex execution from Builder Core
-- real GitHub automatic repo editing
-- real live web research
-- real secret background scheduling
+- real automatic Codex execution
+- real automatic GitHub repo editing
+- full internet search engine
+- uncontrolled crawler
+- AI model self-training
 
-## Why This Is Safer
-- user stays in control of repo changes
-- the app does not invent internet research
-- the app does not pretend it trained an AI model
-- storage and memory remain visible and understandable
-- future automation can be added later with approval
-
-## Local Storage And Cloud Plan
-
-### Local fallback today
-- `backend/runtime_data/automation_tasks.json`
-- `backend/runtime_data/project_memory.json`
-- `backend/runtime_data/storage_files.json`
-
-### Cloud-ready direction
-- Firestore for:
-  - assistant memory
-  - chat history
-  - research tasks
-  - project memory
-  - lessons
-  - self-improvement notes
-- Google Cloud Storage for:
-  - uploaded files
-  - generated outputs
-- Secret Manager for:
-  - GitHub token
-  - future assistant API keys
-  - future Codex credentials
-
-Cloud Run local storage is temporary, so local JSON is still only a fallback.
-
-## Future Scheduled Research
-Scheduled research can be added later only if:
-- the user explicitly approves it
-- the schedule is visible
-- the scope is limited
-- the sources are clear
-- the logs are visible
-- the app stays honest about missing web access
-
-No secret background work should be added.
-
-## How To Run Locally
-
-### Backend
+## Local Test Commands
+Backend:
 ```powershell
-cd backend
+cd "C:\Users\Jagan gill\OneDrive\Desktop\builder-core\backend"
 uvicorn app.main:app --reload
 ```
 
-### Frontend
+Frontend:
 ```powershell
-cd frontend
+cd "C:\Users\Jagan gill\OneDrive\Desktop\builder-core\frontend"
 npm install
 npm run dev
 ```
 
-### Frontend build
+Build:
 ```powershell
-cd frontend
+cd "C:\Users\Jagan gill\OneDrive\Desktop\builder-core\frontend"
 npm run build
 ```
 
-## How To Deploy
-- Push to `main`
-- Let the existing GitHub Actions / Cloud Run flow deploy backend and frontend
-- Keep frontend and backend as separate Cloud Run services
+## Deploy
+- push to `main`
+- let the existing GitHub Actions and Cloud Run setup deploy
+- verify `/system/status`, `/storage/status`, and `/storage/test` on the live backend
 
-## Required Environment Variables
-- `STORAGE_MODE=local`
-- `FIRESTORE_ENABLED=false`
-- `GCP_PROJECT_ID=`
-- `GCS_BUCKET_NAME=`
-- `OPENAI_API_KEY=`
-- `ASSISTANT_MODE=local`
-- `ASSISTANT_MODEL=`
-- `GITHUB_TOKEN=`
-- `GITHUB_OWNER=jagangill001`
-- `GITHUB_REPO=jagangill001/builder-core`
-- `GITHUB_BRANCH=main`
-- `CODEX_API_KEY=`
-- `CODEX_MODE=disabled`
-- `FRONTEND_URL=https://builder-core-frontend-599596796788.us-central1.run.app`
-- `BACKEND_URL=https://builder-core-599596796788.us-central1.run.app`
+## Next Recommended Step
+After this upgrade, the clean next step is to verify Firestore on the live backend and then decide between:
+- improving evidence display and private-search ranking
+- enabling an optional local model endpoint while keeping local rule-based fallback

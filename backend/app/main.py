@@ -14,10 +14,18 @@ from sqlalchemy import Column, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 try:
+    from app.app_planner import AppPlannerService
     from app.chat_assistant import ASSISTANT_MODES, ChatAssistantService
     from app.bridge import BridgeService
+    from app.command_router import route_user_message
+    from app.crawler_plan import CrawlerPlanService
+    from app.document_ingest import DocumentIngestService
     from app.intelligence import build_intelligence_brief, get_supported_modes
     from app.learning import LearningService
+    from app.market_analyzer import MarketAnalyzerService
+    from app.model_router import ModelRouterService
+    from app.orchestrator import UnifiedOrchestrator
+    from app.private_search import PrivateSearchService
     from app.prompt_builder import (
         build_acceptance_checks,
         build_codex_prompt as build_manual_codex_prompt,
@@ -25,16 +33,28 @@ try:
         build_summary_requirements,
         get_project_context,
     )
+    from app.research_engine import ResearchEngineService
     from app.research_tasks import RESEARCH_CATEGORIES, ResearchTaskService, SUPPORTED_SOURCES
+    from app.safety import check_request_safety
     from app.self_improvement import SelfImprovementService
     from app.services import AutomationTaskService, FileStorageService
     from app.storage import ProjectStorageService
     from app.tasks import BackendTaskRunner
+    from app.tool_registry import ToolRegistryService
+    from app.web_ingest import WebIngestService
 except ImportError:
+    from app_planner import AppPlannerService
     from chat_assistant import ASSISTANT_MODES, ChatAssistantService
     from bridge import BridgeService
+    from command_router import route_user_message
+    from crawler_plan import CrawlerPlanService
+    from document_ingest import DocumentIngestService
     from intelligence import build_intelligence_brief, get_supported_modes
     from learning import LearningService
+    from market_analyzer import MarketAnalyzerService
+    from model_router import ModelRouterService
+    from orchestrator import UnifiedOrchestrator
+    from private_search import PrivateSearchService
     from prompt_builder import (
         build_acceptance_checks,
         build_codex_prompt as build_manual_codex_prompt,
@@ -42,11 +62,15 @@ except ImportError:
         build_summary_requirements,
         get_project_context,
     )
+    from research_engine import ResearchEngineService
     from research_tasks import RESEARCH_CATEGORIES, ResearchTaskService, SUPPORTED_SOURCES
+    from safety import check_request_safety
     from self_improvement import SelfImprovementService
     from services import AutomationTaskService, FileStorageService
     from storage import ProjectStorageService
     from tasks import BackendTaskRunner
+    from tool_registry import ToolRegistryService
+    from web_ingest import WebIngestService
 
 app = FastAPI(title="Builder Core")
 
@@ -78,14 +102,35 @@ DEFAULT_GITHUB_DEPLOY_WORKFLOW = "Deploy Cloud Run"
 DEFAULT_BACKEND_PUBLIC_URL = "https://builder-core-599596796788.us-central1.run.app"
 DEFAULT_FRONTEND_PUBLIC_URL = "https://builder-core-frontend-599596796788.us-central1.run.app"
 
-automation_task_service = AutomationTaskService(BASE_DIR)
-file_storage_service = FileStorageService(BASE_DIR)
 project_storage_service = ProjectStorageService(BASE_DIR)
+automation_task_service = AutomationTaskService(BASE_DIR, project_storage_service)
+file_storage_service = FileStorageService(BASE_DIR)
 bridge_service = BridgeService()
 learning_service = LearningService(REPO_ROOT, project_storage_service)
-assistant_service = ChatAssistantService(project_storage_service, learning_service)
+model_router_service = ModelRouterService()
+private_search_service = PrivateSearchService(project_storage_service)
+research_engine_service = ResearchEngineService(project_storage_service, private_search_service)
+market_analyzer_service = MarketAnalyzerService(project_storage_service)
+app_planner_service = AppPlannerService(project_storage_service)
+assistant_service = ChatAssistantService(project_storage_service, learning_service, model_router_service, private_search_service)
 research_task_service = ResearchTaskService(project_storage_service, learning_service)
 self_improvement_service = SelfImprovementService(project_storage_service)
+web_ingest_service = WebIngestService(project_storage_service, private_search_service)
+document_ingest_service = DocumentIngestService(project_storage_service, private_search_service, learning_service)
+crawler_plan_service = CrawlerPlanService(project_storage_service, web_ingest_service)
+tool_registry_service = ToolRegistryService(project_storage_service)
+orchestrator_service = UnifiedOrchestrator(
+    storage=project_storage_service,
+    learning=learning_service,
+    task_service=automation_task_service,
+    model_router=model_router_service,
+    private_search=private_search_service,
+    research_engine=research_engine_service,
+    market_analyzer=market_analyzer_service,
+    app_planner=app_planner_service,
+    self_improvement=self_improvement_service,
+    tool_registry=tool_registry_service,
+)
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
@@ -233,6 +278,40 @@ class ResearchTaskCreateRequest(BaseModel):
 class SelfImprovementCreateRequest(BaseModel):
     note: str
     category: str = "chat"
+
+class StorageCollectionRecordRequest(BaseModel):
+    collection: str
+    record: dict[str, Any]
+
+class SearchAddRequest(BaseModel):
+    title: str
+    text: str
+    source_type: str
+    url: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
+
+class SearchQueryRequest(BaseModel):
+    query: str
+    limit: int = 10
+
+class DocumentIngestRequest(BaseModel):
+    title: str
+    text: str
+    source_type: str
+    tags: list[str] = Field(default_factory=list)
+
+class UrlIngestRequest(BaseModel):
+    url: str
+    source_note: Optional[str] = None
+
+class CrawlerPlanRequest(BaseModel):
+    seed_urls: list[str] = Field(default_factory=list)
+    max_pages: int = 5
+
+class CommandRequest(BaseModel):
+    message: str
+    mode: str = "auto"
+    save_to_memory: bool = True
 
 class StorageFileCreate(BaseModel):
     filename: str
@@ -1610,6 +1689,19 @@ def assistant_chat(payload: AssistantChatRequest):
     if mode not in ASSISTANT_MODES:
         mode = "general"
 
+    safety = check_request_safety(message, category=mode)
+    if not safety["allowed"]:
+        return {
+            "chat_id": f"chat_blocked_{utc_now_iso()}",
+            "reply": safety["reason"],
+            "suggestions": [safety["safe_alternative"]],
+            "memory_used": [],
+            "saved_to_memory": False,
+            "next_actions": [safety["safe_alternative"]],
+            "created_at": utc_now_iso(),
+            "assistant_status": model_router_service.get_active_model_status(),
+        }
+
     result = assistant_service.chat(message=message, mode=mode, save_to_memory=bool(payload.save_to_memory))
 
     if payload.save_to_memory:
@@ -1646,6 +1738,113 @@ def assistant_idea(payload: AssistantIdeaRequest):
         raise HTTPException(status_code=400, detail="Idea topic or goal is required.")
 
     return assistant_service.generate_ideas(topic=topic, goal=goal)
+
+
+@app.get("/assistant/model-status")
+def assistant_model_status():
+    return model_router_service.get_active_model_status()
+
+
+@app.get("/tools")
+def get_tools():
+    return {
+        "ok": True,
+        "items": tool_registry_service.list_tools(),
+        "status": tool_registry_service.get_tool_status(),
+    }
+
+
+@app.get("/storage/status")
+def storage_status():
+    return project_storage_service.health_check()
+
+
+@app.post("/storage/test")
+def storage_test():
+    return project_storage_service.run_storage_test()
+
+
+@app.post("/search/add")
+def search_add(payload: SearchAddRequest):
+    safety = check_request_safety(payload.text, category=payload.source_type)
+    if not safety["allowed"]:
+        return {
+            "ok": False,
+            "document_id": None,
+            "chunks_created": 0,
+            "saved_to_search": False,
+            "warnings": [safety["reason"], safety["safe_alternative"]],
+        }
+
+    result = private_search_service.add_document_to_index(
+        title=payload.title,
+        text=payload.text,
+        source_type=payload.source_type,
+        url=payload.url,
+        metadata=payload.metadata,
+    )
+    return {
+        "ok": True,
+        **result,
+    }
+
+
+@app.post("/search/query")
+def search_query(payload: SearchQueryRequest):
+    query = payload.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Search query is empty.")
+
+    return private_search_service.search_private_index(query=query, limit=max(1, min(payload.limit, 20)))
+
+
+@app.get("/search/status")
+def search_status():
+    return private_search_service.get_search_status()
+
+
+@app.post("/search/rebuild")
+def search_rebuild():
+    return private_search_service.rebuild_index_from_storage()
+
+
+@app.post("/documents/ingest-text")
+def document_ingest_text(payload: DocumentIngestRequest):
+    title = payload.title.strip()
+    text = payload.text.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Document title is empty.")
+    if not text:
+        raise HTTPException(status_code=400, detail="Document text is empty.")
+
+    return document_ingest_service.ingest_text(title=title, text=text, source_type=payload.source_type, tags=payload.tags)
+
+
+@app.post("/search/ingest-url")
+def search_ingest_url(payload: UrlIngestRequest):
+    url = payload.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is empty.")
+    return web_ingest_service.ingest_url(url=url, source_note=payload.source_note)
+
+
+@app.post("/crawler/plan")
+def crawler_plan(payload: CrawlerPlanRequest):
+    if not payload.seed_urls:
+        raise HTTPException(status_code=400, detail="At least one seed URL is required.")
+    return crawler_plan_service.create_crawl_plan(seed_urls=payload.seed_urls, max_pages=payload.max_pages)
+
+
+@app.post("/command")
+def command(payload: CommandRequest):
+    message = payload.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Command message is empty.")
+    return orchestrator_service.run_unified_workflow(
+        message=message,
+        mode=payload.mode or "auto",
+        save_to_memory=bool(payload.save_to_memory),
+    )
 
 
 @app.post("/research/tasks")
@@ -1965,6 +2164,9 @@ def get_memory():
         "research_tasks": project_storage_service.get_research_tasks(10),
         "research_results": project_storage_service.get_research_results(10),
         "self_improvement": project_storage_service.get_self_improvements(10),
+        "app_plans": project_storage_service.list_records("app_plans", 10),
+        "market_analysis": project_storage_service.list_records("market_analysis", 10),
+        "command_history": project_storage_service.list_records("command_history", 10),
         "latest_summary": project_storage_service.get_latest_summary(),
         "latest_prompt": project_storage_service.get_latest_prompt(),
         "prompt_history": project_storage_service.get_prompt_history(10),
@@ -2168,6 +2370,13 @@ def github_status():
         
 @app.get("/system/status")
 def system_status():
+    storage_status_payload = project_storage_service.health_check()
+    model_status = model_router_service.get_active_model_status()
+    bridge_status = bridge_service.build_bridge_status_payload()
+    search_status_payload = private_search_service.get_search_status()
+    tool_status = tool_registry_service.get_tool_status()
+    public_urls = bridge_service.get_public_urls()
+
     return {
         "status": "ok",
         "service": "Builder Core",
@@ -2175,17 +2384,59 @@ def system_status():
         "intelligence_center_enabled": True,
         "assistant_enabled": True,
         "assistant_status": assistant_service.build_status(),
+        "assistant_mode": model_status.get("assistant_mode"),
+        "active_brain": model_status.get("active_brain"),
+        "local_model_provider": model_status.get("local_model_provider"),
         "research_system_enabled": True,
         "supported_intelligence_modes": get_supported_modes(),
-        "bridge_status": bridge_service.build_bridge_status_payload(),
+        "bridge_status": bridge_status,
         "task_storage_backend": automation_task_service.storage_backend,
         "task_storage_message": automation_task_service.storage_message,
         "memory_storage_backend": project_storage_service.storage_backend,
         "memory_storage_message": project_storage_service.storage_message,
         "storage_mode_requested": project_storage_service.storage_mode_requested,
+        "storage_mode": storage_status_payload.get("storage_mode"),
+        "firestore_enabled": storage_status_payload.get("firestore_enabled"),
+        "using_firestore": storage_status_payload.get("using_firestore"),
+        "using_fallback": storage_status_payload.get("using_fallback"),
+        "firestore_warnings": storage_status_payload.get("warnings", []),
+        "gcp_project_id": storage_status_payload.get("gcp_project_id"),
         "cloud_ready_notes": project_storage_service.cloud_ready_notes,
         "file_storage_backend": file_storage_service.storage_backend,
         "file_storage_message": file_storage_service.storage_message,
+        "memory_count": storage_status_payload.get("project_memory_count", 0),
+        "research_task_count": storage_status_payload.get("research_task_count", 0),
+        "private_search_document_count": search_status_payload.get("document_count", 0),
+        "private_search_chunk_count": search_status_payload.get("chunk_count", 0),
+        "command_router_status": {
+            "mode": "rule_based",
+            "supported_workflows": [
+                "normal_chat",
+                "research_only",
+                "market_analysis",
+                "app_builder",
+                "research_to_app_plan",
+                "codex_prompt_only",
+                "save_summary",
+                "cloud_storage_setup",
+                "private_search",
+                "document_ingest",
+                "url_ingest",
+                "crawler_plan",
+            ],
+        },
+        "orchestrator_status": {
+            "enabled": True,
+            "engine": "internal_unified_orchestrator",
+            "uses_private_search": True,
+            "uses_market_analyzer": True,
+            "uses_app_planner": True,
+        },
+        "internal_tool_registry_status": tool_status,
+        "storage_status": storage_status_payload,
+        "search_status": search_status_payload,
+        "frontend_url": public_urls.get("frontend"),
+        "backend_url": public_urls.get("backend"),
         "latest_summary_available": project_storage_service.get_latest_summary() is not None,
         "latest_prompt_available": project_storage_service.get_latest_prompt() is not None,
         "latest_intelligence_available": project_storage_service.get_latest_intelligence_brief() is not None,

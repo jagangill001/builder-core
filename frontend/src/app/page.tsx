@@ -8,186 +8,258 @@ const API_BASE = (
   "https://builder-core-599596796788.us-central1.run.app"
 ).replace(/\/$/, "");
 
-const FRONTEND_APP_URL = "https://builder-core-frontend-599596796788.us-central1.run.app";
+const LIVE_FRONTEND_URL = "https://builder-core-frontend-599596796788.us-central1.run.app";
 
-const ASSISTANT_MODES = [
-  { value: "general", label: "General" },
+const MODE_OPTIONS = [
+  { value: "auto", label: "Auto" },
   { value: "coding", label: "Coding" },
   { value: "research", label: "Research" },
-  { value: "law", label: "Law" },
   { value: "market", label: "Market" },
+  { value: "law", label: "Law" },
   { value: "exam", label: "Exam" },
   { value: "project", label: "Project" },
   { value: "creative", label: "Creative" },
 ];
 
-const RESEARCH_CATEGORIES = [
-  { value: "general", label: "General" },
-  { value: "coding", label: "Coding" },
-  { value: "law", label: "Law" },
-  { value: "market", label: "Market" },
-  { value: "exam", label: "Exam" },
-  { value: "politics", label: "Politics" },
-  { value: "history", label: "History" },
-  { value: "language", label: "Language" },
-  { value: "project", label: "Project" },
-];
+const SOURCE_OPTIONS = ["web", "user_notes", "memory"];
 
-type ProjectItem = {
-  id: number;
-  name: string;
-};
+type StatusTone = "slate" | "green" | "amber" | "red" | "blue";
 
-type AssistantStatus = {
-  mode?: string;
-  model?: string | null;
-  api_configured?: boolean;
-  local_fallback_active?: boolean;
-  message?: string;
-};
-
-type BridgeStatus = {
-  ready_for_repo_work?: boolean;
-  github_configured?: boolean;
-  codex_mode?: string;
-  codex_configured?: boolean;
-  missing?: string[];
-  notes?: string[];
-  message?: string;
-  repo?: string;
-  branch?: string;
-};
-
-type IntelligenceFirewall = {
-  risk_level?: string;
-  blocked?: boolean;
-  message?: string;
-  do?: string[];
-  do_not?: string[];
-  manual_limits?: string[];
-};
-
-type IntelligenceBrief = {
-  id?: string;
-  command?: string;
-  project_name?: string;
-  mode?: string;
-  title?: string;
-  overview?: string;
-  status_message?: string;
-  safety_firewall?: IntelligenceFirewall;
-  research_steps?: string[];
-  evidence_checklist?: string[];
-  next_questions?: string[];
-  codex_focus?: string[];
-  output_outline?: string[];
-  memory_signals?: string[];
-  lesson_signals?: string[];
-  recent_summary_note?: string;
-  recommended_memory_note?: string;
-  created_at?: string;
-};
-
-type SystemStatusResponse = {
+type SystemStatus = {
   status?: string;
   service?: string;
-  manual_codex_mode?: boolean;
-  intelligence_center_enabled?: boolean;
-  assistant_enabled?: boolean;
-  assistant_status?: AssistantStatus;
-  research_system_enabled?: boolean;
-  bridge_status?: BridgeStatus;
-  memory_storage_backend?: string;
-  memory_storage_message?: string;
+  assistant_mode?: string;
+  active_brain?: string;
+  local_model_provider?: string;
+  storage_mode?: string;
+  firestore_enabled?: boolean;
+  using_firestore?: boolean;
+  using_fallback?: boolean;
+  firestore_warnings?: string[];
+  gcp_project_id?: string;
+  memory_count?: number;
+  research_task_count?: number;
+  private_search_document_count?: number;
+  private_search_chunk_count?: number;
+  command_router_status?: {
+    mode?: string;
+    supported_workflows?: string[];
+  };
+  orchestrator_status?: {
+    enabled?: boolean;
+    engine?: string;
+    uses_private_search?: boolean;
+    uses_market_analyzer?: boolean;
+    uses_app_planner?: boolean;
+  };
+  internal_tool_registry_status?: {
+    total_tools?: number;
+    enabled_tools?: number;
+    disabled_tools?: number;
+  };
+  frontend_url?: string;
+  backend_url?: string;
+  bridge_status?: {
+    ready_for_repo_work?: boolean;
+    missing?: string[];
+    message?: string;
+    repo?: string;
+    branch?: string;
+  };
   cloud_ready_notes?: string[];
 };
 
-type TaskSummary = {
-  task_id?: string;
-  original_command?: string;
-  final_status?: string;
-  stages_completed?: string[];
-  files_changed?: string[];
-  folder_used?: string;
-  backend_logs?: string[];
-  errors?: string[];
-  what_completed?: string[];
-  what_still_needs_manual_setup?: string[];
-  next_recommended_step?: string;
-  message?: string;
-  codex_summary?: string;
-  updated_at?: string;
+type SearchResult = {
+  id?: string;
+  document_id?: string;
+  title?: string;
+  preview?: string;
+  source_type?: string;
+  url?: string | null;
+  score?: number;
 };
 
-type TaskRecord = {
-  id: string;
-  command: string;
-  project_name?: string;
-  status: string;
-  stage?: string;
-  current_stage?: string;
-  progress: number;
-  generated_prompt?: string | null;
-  codex_summary?: string | null;
-  intelligence_mode?: string | null;
-  intelligence_brief?: IntelligenceBrief | null;
-  logs?: string[];
-  errors?: string[];
-  summary?: TaskSummary | null;
-  bridge_status?: BridgeStatus;
-  files_changed?: string[];
-  known_issues?: string[];
-  what_completed?: string[];
-  what_remains?: string[];
-  next_recommended_step?: string | null;
-  created_at?: string;
-  updated_at?: string;
+type ResearchResult = {
+  summary?: string;
+  findings?: string[];
+  sources?: Array<{ title?: string; source_type?: string; url?: string | null; score?: number }>;
+  limitations?: string[];
+  unknowns?: string[];
+  confidence?: string;
+  next_steps?: string[];
+  results_count?: number;
 };
 
-type PromptCreateResponse = {
-  task_id: string;
-  prompt: string;
-  status: string;
-  intelligence_brief?: IntelligenceBrief;
+type MarketAnalysis = {
+  topic?: string;
+  market_summary?: string;
+  target_users?: string[];
+  competitors_to_research?: string[];
+  risks?: string[];
+  opportunities?: string[];
+  missing_data?: string[];
+  confidence?: string;
+  app_ideas?: string[];
 };
 
-type LatestPromptResponse = {
-  ok?: boolean;
-  item?: {
-    task_id?: string;
-    command?: string;
-    project_name?: string;
+type AppPlan = {
+  app_name?: string;
+  app_concept?: string;
+  mvp_features?: string[];
+  backend_routes?: string[];
+  frontend_screens?: string[];
+  storage_collections?: string[];
+  storage_plan?: string[];
+  next_steps?: string[];
+  codex_prompt?: string;
+};
+
+type CommandResponse = {
+  command_id: string;
+  reply: string;
+  detected_intents?: string[];
+  workflow?: string;
+  internal_tools_used?: string[];
+  progress?: {
     status?: string;
-    prompt?: string;
-    created_at?: string;
-  } | null;
+    steps?: string[];
+  };
+  private_search?: {
+    used?: boolean;
+    results_count?: number;
+    top_sources?: string[];
+    results?: SearchResult[];
+  };
+  research?: ResearchResult;
+  market_analysis?: MarketAnalysis;
+  app_plan?: AppPlan;
+  codex_prompt?: string;
+  summary?: {
+    message?: string;
+    manual_setup?: string[];
+    [key: string]: unknown;
+  };
+  storage_used?: string;
+  memory_saved?: boolean;
+  next_actions?: string[];
+  limitations?: string[];
+  created_at?: string;
+};
+
+type ThreadItem = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+  result?: CommandResponse;
+  error?: string;
+};
+
+type ToolItem = {
+  tool_id: string;
+  name: string;
+  description: string;
+  category: string;
+  enabled: boolean;
+  input_schema?: string;
+  output_schema?: string;
+  limitations?: string[];
+  safety_notes?: string[];
+};
+
+type ToolsResponse = {
+  ok?: boolean;
+  items?: ToolItem[];
+  status?: {
+    total_tools?: number;
+    enabled_tools?: number;
+    disabled_tools?: number;
+  };
+};
+
+type StorageStatus = {
+  storage_mode?: string;
+  storage_backend?: string;
+  storage_message?: string;
+  firestore_enabled?: boolean;
+  gcp_project_id?: string;
+  gcs_bucket_name?: string;
+  using_firestore?: boolean;
+  using_fallback?: boolean;
+  warnings?: string[];
+  collections?: string[];
+  project_memory_count?: number;
+  assistant_memory_count?: number;
+  chat_history_count?: number;
+  research_task_count?: number;
+  lesson_count?: number;
+  self_improvement_count?: number;
+  search_document_count?: number;
+  search_chunk_count?: number;
+  checked_at?: string;
+};
+
+type StorageTestResult = {
+  ok?: boolean;
+  storage_used?: string;
+  record_id?: string;
+  saved?: boolean;
+  read_back?: boolean;
+  warnings?: string[];
+};
+
+type ModelStatus = {
+  assistant_mode?: string;
+  active_brain?: string;
+  local_model_provider?: string;
+  local_model_connected?: boolean;
+  openai_configured?: boolean;
+  warnings?: string[];
+};
+
+type SearchStatus = {
+  ok?: boolean;
+  document_count?: number;
+  chunk_count?: number;
+  query_count?: number;
+  knowledge_entries?: number;
+  status_message?: string;
+  checked_at?: string;
+};
+
+type SearchQueryResponse = {
+  query?: string;
+  results_count?: number;
+  top_sources?: string[];
+  results?: SearchResult[];
 };
 
 type MemoryEntry = {
-  id: string;
+  id?: string;
   type?: string;
   note?: string;
   command?: string;
   project_name?: string;
   created_at?: string;
-  mode?: string;
-  user_message?: string;
 };
 
-type ResearchTaskRecord = {
-  research_id: string;
-  topic: string;
-  goal: string;
-  category: string;
-  sources: string[];
-  status: string;
-  summary: string;
-  findings: string[];
-  limitations: string[];
-  next_steps: string[];
-  web_connected?: boolean;
+type TaskSummary = {
+  task_id?: string;
+  message?: string;
+  next_recommended_step?: string;
+  what_completed?: string[];
+  what_still_needs_manual_setup?: string[];
+  files_changed?: string[];
+  codex_summary?: string;
+};
+
+type LatestPrompt = {
+  task_id?: string;
+  command?: string;
+  prompt?: string;
+  status?: string;
+  workflow?: string;
   created_at?: string;
-  updated_at?: string;
 };
 
 type MemoryResponse = {
@@ -196,47 +268,41 @@ type MemoryResponse = {
   storage_message?: string;
   project_memory?: MemoryEntry[];
   assistant_memory?: MemoryEntry[];
-  chat_history?: AssistantHistoryItem[];
-  research_tasks?: ResearchTaskRecord[];
-  research_results?: ResearchTaskRecord[];
+  chat_history?: Array<{
+    id?: string;
+    role?: string;
+    mode?: string;
+    message?: string;
+    created_at?: string;
+  }>;
+  research_tasks?: ResearchTask[];
+  research_results?: ResearchTask[];
   self_improvement?: SelfImprovementItem[];
+  app_plans?: AppPlan[];
+  market_analysis?: MarketAnalysis[];
+  command_history?: Array<{ command_id?: string; message?: string; workflow?: string; created_at?: string }>;
   latest_summary?: TaskSummary | null;
-  latest_prompt?: {
-    task_id?: string;
-    command?: string;
-    prompt?: string;
-    status?: string;
-    created_at?: string;
-  } | null;
-  prompt_history?: {
-    task_id?: string;
-    command?: string;
-    prompt?: string;
-    status?: string;
-    created_at?: string;
-  }[];
-  latest_intelligence_brief?: IntelligenceBrief | null;
-  intelligence_history?: IntelligenceBrief[];
-  latest_bridge_status?: BridgeStatus | null;
+  latest_prompt?: LatestPrompt | null;
+  prompt_history?: LatestPrompt[];
+  latest_intelligence_brief?: { title?: string; overview?: string; mode?: string } | null;
+  intelligence_history?: Array<{ id?: string; title?: string; mode?: string; created_at?: string }>;
   known_environment_problems?: string[];
   cloud_ready_notes?: string[];
 };
 
-type Lesson = {
-  id: string;
-  task_id?: string;
+type LearningLesson = {
+  id?: string;
   command?: string;
   lesson_learned?: string;
   next_recommendation?: string;
   files_changed?: string[];
   error?: string | null;
-  intelligence_mode?: string;
   created_at?: string;
 };
 
 type LearningResponse = {
   ok?: boolean;
-  lessons?: Lesson[];
+  lessons?: LearningLesson[];
   known_issues?: string[];
   recommended_next_steps?: string[];
   recent_intelligence_modes?: string[];
@@ -249,47 +315,8 @@ type LearningResponse = {
   notes?: string[];
 };
 
-type AssistantHistoryItem = {
-  id: string;
-  chat_id?: string;
-  role?: string;
-  mode?: string;
-  message?: string;
-  suggestions?: string[];
-  next_actions?: string[];
-  memory_used?: string[];
-  created_at?: string;
-};
-
-type AssistantChatResponse = {
-  chat_id: string;
-  reply: string;
-  suggestions: string[];
-  memory_used: string[];
-  saved_to_memory: boolean;
-  next_actions: string[];
-  created_at: string;
-  assistant_status?: AssistantStatus;
-};
-
-type AssistantIdea = {
-  idea_title: string;
-  why_it_is_useful: string;
-  difficulty: string;
-  possible_next_step: string;
-  risk_or_limitation: string;
-};
-
-type AssistantIdeaResponse = {
-  ideas: AssistantIdea[];
-  best_idea: string;
-  why: string;
-  next_steps: string[];
-  created_at: string;
-};
-
 type SelfImprovementItem = {
-  id: string;
+  id?: string;
   category?: string;
   user_message?: string;
   assistant_reply?: string;
@@ -297,7 +324,6 @@ type SelfImprovementItem = {
   what_failed?: string;
   better_future_instruction?: string;
   repeated_user_preferences?: string[];
-  project_mistake?: string;
   project_lesson?: string;
   next_recommended_improvement?: string;
   created_at?: string;
@@ -308,20 +334,67 @@ type SelfImprovementResponse = {
   items?: SelfImprovementItem[];
   next_recommended_upgrade?: string;
   notes?: string[];
-  storage_backend?: string;
-  storage_message?: string;
 };
 
-function formatTimestamp(value?: string | null) {
+type ResearchTask = {
+  research_id?: string;
+  topic?: string;
+  goal?: string;
+  category?: string;
+  sources?: string[];
+  status?: string;
+  summary?: string;
+  findings?: string[];
+  limitations?: string[];
+  next_steps?: string[];
+  created_at?: string;
+  updated_at?: string;
+};
+
+type ResearchCreateResponse = ResearchTask & {
+  research_id: string;
+};
+
+type UrlIngestResponse = {
+  ok?: boolean;
+  document_id?: string | null;
+  title?: string;
+  text_chars?: number;
+  chunks_created?: number;
+  warnings?: string[];
+};
+
+type CrawlPlanResponse = {
+  ok?: boolean;
+  plan_id?: string;
+  seed_urls?: string[];
+  max_pages?: number;
+  warnings?: string[];
+  limits?: string[];
+  plan_steps?: string[];
+};
+
+function createId(prefix: string) {
+  return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function titleCase(value?: string | null) {
   if (!value) {
     return "Unknown";
   }
+  return value
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
 
+function formatTime(value?: string | null) {
+  if (!value) {
+    return "Unknown";
+  }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-
   return date.toLocaleString(undefined, {
     month: "short",
     day: "numeric",
@@ -330,17 +403,7 @@ function formatTimestamp(value?: string | null) {
   });
 }
 
-function titleCase(value?: string | null) {
-  if (!value) {
-    return "Unknown";
-  }
-
-  return value
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (character) => character.toUpperCase());
-}
-
-async function parseJsonSafe<T>(response: Response): Promise<T | null> {
+async function parseResponse<T>(response: Response): Promise<T | null> {
   try {
     return (await response.json()) as T;
   } catch {
@@ -348,72 +411,79 @@ async function parseJsonSafe<T>(response: Response): Promise<T | null> {
   }
 }
 
-function SectionCard({
-  eyebrow,
-  title,
-  description,
-  children,
-}: {
-  eyebrow: string;
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
+async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+  });
+  const data = await parseResponse<T & { detail?: string; message?: string }>(response);
+
+  if (!response.ok) {
+    const detail =
+      (data && typeof data === "object" && "detail" in data && typeof data.detail === "string" && data.detail) ||
+      (data && typeof data === "object" && "message" in data && typeof data.message === "string" && data.message) ||
+      `Request failed with status ${response.status}`;
+    throw new Error(detail);
+  }
+
+  return (data ?? ({} as T)) as T;
+}
+
+function StatusPill({ tone, children }: { tone: StatusTone; children: ReactNode }) {
+  const tones: Record<StatusTone, string> = {
+    slate: "border-slate-200 bg-slate-100 text-slate-700",
+    green: "border-green-200 bg-green-50 text-green-700",
+    amber: "border-amber-200 bg-amber-50 text-amber-700",
+    red: "border-red-200 bg-red-50 text-red-700",
+    blue: "border-blue-200 bg-blue-50 text-blue-700",
+  };
+
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">{eyebrow}</p>
-      <h2 className="mt-2 text-lg font-semibold text-slate-950">{title}</h2>
-      <p className="mt-2 text-sm text-slate-600">{description}</p>
-      <div className="mt-5">{children}</div>
-    </section>
+    <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${tones[tone]}`}>
+      {children}
+    </span>
   );
 }
 
-function ListPanel({ title, items }: { title: string; items: string[] | undefined }) {
-  const safeItems = items?.filter(Boolean) ?? [];
-
+function Panel({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <p className="font-semibold text-slate-900">{title}</p>
-      {safeItems.length > 0 ? (
-        <ul className="mt-3 space-y-2 text-sm text-slate-700">
-          {safeItems.map((item, index) => (
-            <li key={`${title}-${index}`} className="rounded-xl bg-white px-3 py-2">
-              {item}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="mt-3 text-sm text-slate-500">Nothing saved yet.</p>
-      )}
-    </div>
+    <details className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+      <summary className="cursor-pointer list-none">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-base font-semibold text-slate-900">{title}</p>
+            {subtitle ? <p className="mt-1 text-sm text-slate-500">{subtitle}</p> : null}
+          </div>
+          <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-500">
+            Expand
+          </span>
+        </div>
+      </summary>
+      <div className="mt-5 space-y-4">{children}</div>
+    </details>
   );
 }
 
-function MemoryList({
+function ListBlock({
   title,
   items,
   emptyText,
 }: {
   title: string;
-  items: MemoryEntry[] | undefined;
+  items?: Array<string | undefined | null>;
   emptyText: string;
 }) {
-  const safeItems = items ?? [];
-
+  const filtered = (items ?? []).filter((item): item is string => typeof item === "string" && item.trim().length > 0);
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <p className="font-semibold text-slate-900">{title}</p>
-      {safeItems.length > 0 ? (
-        <ul className="mt-3 space-y-3 text-sm text-slate-700">
-          {safeItems.map((item) => (
-            <li key={item.id} className="rounded-xl bg-white px-3 py-3">
-              <p className="font-medium text-slate-900">{item.note ?? item.command ?? item.user_message ?? "Saved entry"}</p>
-              <p className="mt-1 text-xs text-slate-500">
-                {item.type ? `${titleCase(item.type)} · ` : ""}
-                {formatTimestamp(item.created_at)}
-              </p>
-            </li>
+      <p className="text-sm font-semibold text-slate-900">{title}</p>
+      {filtered.length > 0 ? (
+        <ul className="mt-3 space-y-2 text-sm text-slate-700">
+          {filtered.map((item, index) => (
+            <li key={`${title}_${index}`}>• {item}</li>
           ))}
         </ul>
       ) : (
@@ -423,1089 +493,1214 @@ function MemoryList({
   );
 }
 
-function TaskSummaryPanel({ summary }: { summary: TaskSummary | null | undefined }) {
-  if (!summary) {
+function KeyValue({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
+      <div className="mt-1 text-sm text-slate-800">{value}</div>
+    </div>
+  );
+}
+
+function CodePromptBox({
+  prompt,
+  onCopy,
+  copyLabel,
+}: {
+  prompt?: string;
+  onCopy: () => void;
+  copyLabel: string;
+}) {
+  if (!prompt) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-950 p-4 text-slate-100">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm font-semibold">Codex Prompt</p>
+        <button
+          type="button"
+          onClick={onCopy}
+          className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-100"
+        >
+          {copyLabel}
+        </button>
+      </div>
+      <textarea
+        readOnly
+        value={prompt}
+        className="mt-3 h-56 w-full resize-y rounded-2xl border border-slate-800 bg-slate-900 p-3 font-mono text-xs text-slate-100 outline-none"
+      />
+    </div>
+  );
+}
+
+function ConversationCard({
+  item,
+  onCopyPrompt,
+}: {
+  item: ThreadItem;
+  onCopyPrompt: (prompt: string) => void;
+}) {
+  const result = item.result;
+
+  if (item.role === "user") {
     return (
-      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-        No latest summary saved yet.
+      <div className="ml-auto max-w-3xl rounded-[28px] rounded-br-md bg-slate-950 px-5 py-4 text-white shadow-lg">
+        <p className="text-xs uppercase tracking-[0.18em] text-slate-300">You</p>
+        <p className="mt-2 whitespace-pre-wrap text-sm leading-7">{item.content}</p>
+        <p className="mt-3 text-xs text-slate-300">{formatTime(item.createdAt)}</p>
       </div>
     );
   }
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <p className="text-sm font-semibold text-slate-900">
-        {summary.final_status ? titleCase(summary.final_status) : "Latest Summary"}
-      </p>
-      <p className="mt-2 text-sm text-slate-700">{summary.message ?? "Summary saved."}</p>
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <ListPanel title="Completed" items={summary.what_completed} />
-        <ListPanel title="Manual Setup Remaining" items={summary.what_still_needs_manual_setup} />
+    <div className="max-w-4xl rounded-[28px] rounded-bl-md border border-slate-200 bg-white px-5 py-5 shadow-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Builder Core</p>
+        {result?.workflow ? <StatusPill tone="blue">{titleCase(result.workflow)}</StatusPill> : null}
+        {result?.storage_used ? <StatusPill tone="slate">Storage: {titleCase(result.storage_used)}</StatusPill> : null}
       </div>
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <ListPanel title="Files Changed" items={summary.files_changed} />
-        <ListPanel title="Errors" items={summary.errors} />
-      </div>
-      {summary.next_recommended_step && (
-        <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-          Next recommended step: {summary.next_recommended_step}
+
+      <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-800">{item.content}</p>
+
+      {item.error ? (
+        <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {item.error}
         </div>
-      )}
+      ) : null}
+
+      {result ? (
+        <div className="mt-5 space-y-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <KeyValue label="Detected Workflow" value={titleCase(result.workflow)} />
+            <KeyValue
+              label="Private Search"
+              value={
+                result.private_search?.used
+                  ? `${result.private_search.results_count ?? 0} results`
+                  : "Not used"
+              }
+            />
+            <KeyValue label="Memory Saved" value={result.memory_saved ? "Yes" : "No"} />
+            <KeyValue label="Created" value={formatTime(result.created_at)} />
+          </div>
+
+          <ListBlock
+            title="Progress Steps"
+            items={result.progress?.steps}
+            emptyText="No progress steps were returned for this message."
+          />
+
+          <ListBlock
+            title="Internal Tools Used"
+            items={result.internal_tools_used}
+            emptyText="No internal tools were listed for this message."
+          />
+
+          <ListBlock
+            title="Top Private Search Sources"
+            items={result.private_search?.top_sources}
+            emptyText="No private-search sources were surfaced yet."
+          />
+
+          {result.research && Object.keys(result.research).length > 0 ? (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-900">Research Result</p>
+                <p className="mt-3 text-sm text-slate-700">
+                  {result.research.summary || "No research summary returned."}
+                </p>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <ListBlock
+                    title="Findings"
+                    items={result.research.findings}
+                    emptyText="No findings returned."
+                  />
+                  <ListBlock
+                    title="Unknowns"
+                    items={result.research.unknowns}
+                    emptyText="No unknowns were listed."
+                  />
+                </div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-900">Research Limits</p>
+                <ListBlock
+                  title="Limitations"
+                  items={result.research.limitations}
+                  emptyText="No research limitations were returned."
+                />
+                <ListBlock
+                  title="Next Research Steps"
+                  items={result.research.next_steps}
+                  emptyText="No research next steps were returned."
+                />
+              </div>
+            </div>
+          ) : null}
+
+          {result.market_analysis && Object.keys(result.market_analysis).length > 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-semibold text-slate-900">Market Analysis</p>
+              <p className="mt-3 text-sm text-slate-700">
+                {result.market_analysis.market_summary || "No market summary returned."}
+              </p>
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <ListBlock
+                  title="Target Users"
+                  items={result.market_analysis.target_users}
+                  emptyText="No target users were returned."
+                />
+                <ListBlock
+                  title="Competitors To Research"
+                  items={result.market_analysis.competitors_to_research}
+                  emptyText="No competitor questions were returned."
+                />
+                <ListBlock
+                  title="Opportunities"
+                  items={result.market_analysis.opportunities}
+                  emptyText="No opportunities were returned."
+                />
+                <ListBlock
+                  title="Risks"
+                  items={result.market_analysis.risks}
+                  emptyText="No risks were returned."
+                />
+              </div>
+            </div>
+          ) : null}
+
+          {result.app_plan && Object.keys(result.app_plan).length > 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-semibold text-slate-900">App Plan</p>
+              <p className="mt-3 text-sm text-slate-700">
+                {result.app_plan.app_concept || "No app concept returned."}
+              </p>
+              <div className="mt-4 grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
+                <ListBlock
+                  title="MVP Features"
+                  items={result.app_plan.mvp_features}
+                  emptyText="No MVP features were returned."
+                />
+                <ListBlock
+                  title="Backend Routes"
+                  items={result.app_plan.backend_routes}
+                  emptyText="No backend routes were returned."
+                />
+                <ListBlock
+                  title="Frontend Screens"
+                  items={result.app_plan.frontend_screens}
+                  emptyText="No frontend screens were returned."
+                />
+                <ListBlock
+                  title="Storage Collections"
+                  items={result.app_plan.storage_collections}
+                  emptyText="No storage collections were returned."
+                />
+              </div>
+              <div className="mt-3">
+                <ListBlock
+                  title="Storage Plan"
+                  items={result.app_plan.storage_plan}
+                  emptyText="No storage plan was returned."
+                />
+              </div>
+            </div>
+          ) : null}
+
+          <CodePromptBox
+            prompt={result.codex_prompt}
+            onCopy={() => {
+              if (result.codex_prompt) {
+                onCopyPrompt(result.codex_prompt);
+              }
+            }}
+            copyLabel="Copy Codex Prompt"
+          />
+
+          {result.summary && Object.keys(result.summary).length > 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-semibold text-slate-900">Summary</p>
+              {typeof result.summary.message === "string" ? (
+                <p className="mt-3 text-sm text-slate-700">{result.summary.message}</p>
+              ) : null}
+              <ListBlock
+                title="Manual Setup Still Needed"
+                items={Array.isArray(result.summary.manual_setup) ? result.summary.manual_setup : []}
+                emptyText="No manual setup items were returned."
+              />
+            </div>
+          ) : null}
+
+          <ListBlock
+            title="Limitations"
+            items={result.limitations}
+            emptyText="No limitations were returned."
+          />
+
+          <ListBlock
+            title="Next Actions"
+            items={result.next_actions}
+            emptyText="No next actions were returned."
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
 
 export default function Home() {
   const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">("checking");
-  const [systemStatus, setSystemStatus] = useState<SystemStatusResponse | null>(null);
-  const [projects, setProjects] = useState<ProjectItem[]>([]);
-  const [projectName, setProjectName] = useState("Builder Core");
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [systemMessage, setSystemMessage] = useState("");
 
-  const [assistantMessage, setAssistantMessage] = useState("");
-  const [assistantMode, setAssistantMode] = useState("general");
-  const [assistantSaveToMemory, setAssistantSaveToMemory] = useState(true);
-  const [assistantSubmitting, setAssistantSubmitting] = useState(false);
-  const [assistantResponse, setAssistantResponse] = useState<AssistantChatResponse | null>(null);
-  const [assistantHistory, setAssistantHistory] = useState<AssistantHistoryItem[]>([]);
-  const [assistantMessageStatus, setAssistantMessageStatus] = useState("");
-
-  const [ideaTopic, setIdeaTopic] = useState("");
-  const [ideaGoal, setIdeaGoal] = useState("");
-  const [ideaSubmitting, setIdeaSubmitting] = useState(false);
-  const [ideaResult, setIdeaResult] = useState<AssistantIdeaResponse | null>(null);
-  const [ideaMessage, setIdeaMessage] = useState("");
-
-  const [commandInput, setCommandInput] = useState("");
-  const [generatedPrompt, setGeneratedPrompt] = useState("");
-  const [currentTaskId, setCurrentTaskId] = useState("");
-  const [currentTask, setCurrentTask] = useState<TaskRecord | null>(null);
-  const [codexSummaryInput, setCodexSummaryInput] = useState("");
-  const [promptSubmitting, setPromptSubmitting] = useState(false);
-  const [promptMessage, setPromptMessage] = useState("");
-  const [copyMessage, setCopyMessage] = useState("");
-  const [savingSummary, setSavingSummary] = useState(false);
-
-  const [researchTopic, setResearchTopic] = useState("");
-  const [researchGoal, setResearchGoal] = useState("");
-  const [researchCategory, setResearchCategory] = useState("general");
-  const [researchSources, setResearchSources] = useState<string[]>(["memory"]);
-  const [researchSubmitting, setResearchSubmitting] = useState(false);
-  const [researchMessage, setResearchMessage] = useState("");
-  const [researchTasks, setResearchTasks] = useState<ResearchTaskRecord[]>([]);
-  const [selectedResearchTask, setSelectedResearchTask] = useState<ResearchTaskRecord | null>(null);
+  const [thread, setThread] = useState<ThreadItem[]>([
+    {
+      id: "welcome",
+      role: "assistant",
+      content:
+        "Builder Core Command Chat is ready. Send one message and Builder Core will route it through its own internal tools, private search, memory, research engine, market analyzer, app planner, and manual Codex prompt builder when needed.",
+      createdAt: new Date().toISOString(),
+    },
+  ]);
+  const [message, setMessage] = useState("");
+  const [mode, setMode] = useState("auto");
+  const [saveToMemory, setSaveToMemory] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [composerMessage, setComposerMessage] = useState("");
 
   const [memoryData, setMemoryData] = useState<MemoryResponse | null>(null);
   const [learningData, setLearningData] = useState<LearningResponse | null>(null);
   const [selfImprovementData, setSelfImprovementData] = useState<SelfImprovementResponse | null>(null);
-  const [manualImprovementNote, setManualImprovementNote] = useState("");
-  const [savingImprovement, setSavingImprovement] = useState(false);
-  const [improvementMessage, setImprovementMessage] = useState("");
-  const [installMessage, setInstallMessage] = useState("");
+  const [toolsData, setToolsData] = useState<ToolsResponse | null>(null);
+  const [storageStatus, setStorageStatus] = useState<StorageStatus | null>(null);
+  const [storageTestResult, setStorageTestResult] = useState<StorageTestResult | null>(null);
+  const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
+  const [searchStatus, setSearchStatus] = useState<SearchStatus | null>(null);
+  const [searchResults, setSearchResults] = useState<SearchQueryResponse | null>(null);
+  const [latestPrompt, setLatestPrompt] = useState<LatestPrompt | null>(null);
+  const [researchTasks, setResearchTasks] = useState<ResearchTask[]>([]);
+  const [selectedResearchTask, setSelectedResearchTask] = useState<ResearchTask | null>(null);
+  const [memoryError, setMemoryError] = useState("");
+  const [learningError, setLearningError] = useState("");
+  const [searchMessage, setSearchMessage] = useState("");
+  const [storageMessage, setStorageMessage] = useState("");
 
-  const latestIntelligenceBrief =
-    currentTask?.intelligence_brief ?? memoryData?.latest_intelligence_brief ?? null;
-  const activeBridgeStatus = currentTask?.bridge_status ?? memoryData?.latest_bridge_status ?? systemStatus?.bridge_status ?? null;
+  const [searchQuery, setSearchQuery] = useState("");
+  const [quickDocTitle, setQuickDocTitle] = useState("");
+  const [quickDocText, setQuickDocText] = useState("");
+  const [quickDocSourceType, setQuickDocSourceType] = useState("manual");
 
-  async function loadSystemStatus() {
+  const [ingestTitle, setIngestTitle] = useState("");
+  const [ingestText, setIngestText] = useState("");
+  const [ingestSourceType, setIngestSourceType] = useState("project");
+  const [ingestTags, setIngestTags] = useState("");
+  const [ingestMessage, setIngestMessage] = useState("");
+
+  const [urlInput, setUrlInput] = useState("");
+  const [urlNote, setUrlNote] = useState("");
+  const [urlMessage, setUrlMessage] = useState("");
+  const [urlResult, setUrlResult] = useState<UrlIngestResponse | null>(null);
+
+  const [crawlSeeds, setCrawlSeeds] = useState("");
+  const [crawlMaxPages, setCrawlMaxPages] = useState(5);
+  const [crawlResult, setCrawlResult] = useState<CrawlPlanResponse | null>(null);
+  const [crawlMessage, setCrawlMessage] = useState("");
+
+  const [researchTopic, setResearchTopic] = useState("");
+  const [researchGoal, setResearchGoal] = useState("");
+  const [researchCategory, setResearchCategory] = useState("market");
+  const [researchSources, setResearchSources] = useState<string[]>(["memory"]);
+  const [researchMessage, setResearchMessage] = useState("");
+
+  async function copyText(value: string, successLabel: string) {
     try {
-      const response = await fetch(`${API_BASE}/system/status`);
-      const data = await parseJsonSafe<SystemStatusResponse>(response);
-      if (!response.ok || !data) {
-        throw new Error("System status request failed.");
-      }
-      setSystemStatus(data);
-      setBackendStatus("online");
+      await navigator.clipboard.writeText(value);
+      setComposerMessage(successLabel);
     } catch {
-      setSystemStatus(null);
-      setBackendStatus("offline");
+      setComposerMessage("Clipboard access failed. Copy the text manually.");
     }
   }
 
-  async function loadProjects() {
+  async function loadSystemStatus() {
     try {
-      const response = await fetch(`${API_BASE}/projects`);
-      const data = (await parseJsonSafe<{ items?: ProjectItem[] }>(response)) ?? {};
-      const items = Array.isArray(data.items) ? data.items : [];
-      setProjects(items);
-      if (items.length > 0 && !items.some((item) => item.name === projectName)) {
-        setProjectName(items[0].name);
-      }
-    } catch {
-      setProjects([]);
+      const data = await requestJson<SystemStatus>("/system/status");
+      setSystemStatus(data);
+      setBackendStatus(data.status === "ok" ? "online" : "offline");
+      setSystemMessage("");
+    } catch (error) {
+      setBackendStatus("offline");
+      setSystemMessage(error instanceof Error ? error.message : "Backend status check failed.");
     }
   }
 
   async function loadMemory() {
     try {
-      const response = await fetch(`${API_BASE}/memory`);
-      const data = await parseJsonSafe<MemoryResponse>(response);
-      if (!response.ok || !data) {
-        throw new Error("Memory request failed.");
-      }
+      const data = await requestJson<MemoryResponse>("/memory");
       setMemoryData(data);
-    } catch {
+      setMemoryError("");
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : "Memory endpoint is unavailable.");
       setMemoryData(null);
     }
   }
 
   async function loadLearning() {
     try {
-      const response = await fetch(`${API_BASE}/learning`);
-      const data = await parseJsonSafe<LearningResponse>(response);
-      if (!response.ok || !data) {
-        throw new Error("Learning request failed.");
-      }
+      const data = await requestJson<LearningResponse>("/learning");
       setLearningData(data);
-    } catch {
+      setLearningError("");
+    } catch (error) {
+      setLearningError(error instanceof Error ? error.message : "Learning endpoint is unavailable.");
       setLearningData(null);
     }
   }
 
   async function loadSelfImprovement() {
     try {
-      const response = await fetch(`${API_BASE}/self-improvement`);
-      const data = await parseJsonSafe<SelfImprovementResponse>(response);
-      if (!response.ok || !data) {
-        throw new Error("Self-improvement request failed.");
-      }
+      const data = await requestJson<SelfImprovementResponse>("/self-improvement");
       setSelfImprovementData(data);
     } catch {
       setSelfImprovementData(null);
     }
   }
 
-  async function loadAssistantHistory() {
+  async function loadTools() {
     try {
-      const response = await fetch(`${API_BASE}/assistant/history`);
-      const data = (await parseJsonSafe<{ items?: AssistantHistoryItem[] }>(response)) ?? {};
-      setAssistantHistory(Array.isArray(data.items) ? data.items : []);
+      const data = await requestJson<ToolsResponse>("/tools");
+      setToolsData(data);
     } catch {
-      setAssistantHistory([]);
+      setToolsData(null);
     }
   }
 
-  async function loadResearchTasks() {
+  async function loadStorageStatus() {
     try {
-      const response = await fetch(`${API_BASE}/research/tasks`);
-      const data = (await parseJsonSafe<{ items?: ResearchTaskRecord[] }>(response)) ?? {};
-      const items = Array.isArray(data.items) ? data.items : [];
-      setResearchTasks(items);
-      if (!selectedResearchTask && items.length > 0) {
-        setSelectedResearchTask(items[0]);
-      }
+      const data = await requestJson<StorageStatus>("/storage/status");
+      setStorageStatus(data);
+      setStorageMessage("");
+    } catch (error) {
+      setStorageStatus(null);
+      setStorageMessage(error instanceof Error ? error.message : "Storage status endpoint failed.");
+    }
+  }
+
+  async function loadModelStatus() {
+    try {
+      const data = await requestJson<ModelStatus>("/assistant/model-status");
+      setModelStatus(data);
     } catch {
-      setResearchTasks([]);
+      setModelStatus(null);
+    }
+  }
+
+  async function loadSearchStatus() {
+    try {
+      const data = await requestJson<SearchStatus>("/search/status");
+      setSearchStatus(data);
+    } catch {
+      setSearchStatus(null);
     }
   }
 
   async function loadLatestPrompt() {
     try {
-      const response = await fetch(`${API_BASE}/prompts/latest`);
-      const data = await parseJsonSafe<LatestPromptResponse>(response);
-      if (!response.ok || !data?.ok || !data.item) {
-        return;
-      }
-      setGeneratedPrompt(data.item.prompt ?? "");
-      if (data.item.task_id) {
-        setCurrentTaskId(data.item.task_id);
-      }
-      if (data.item.command) {
-        setCommandInput(data.item.command);
-      }
+      const data = await requestJson<{ ok?: boolean; item?: LatestPrompt | null }>("/prompts/latest");
+      setLatestPrompt(data.item ?? null);
     } catch {
-      return;
+      setLatestPrompt(null);
     }
   }
 
-  async function loadTask(taskId: string) {
+  async function loadResearchTasks() {
     try {
-      const response = await fetch(`${API_BASE}/tasks/${taskId}`);
-      const data = await parseJsonSafe<TaskRecord>(response);
-      if (!response.ok || !data) {
-        throw new Error("Task request failed.");
-      }
-      setCurrentTask(data);
-      if (data.generated_prompt) {
-        setGeneratedPrompt(data.generated_prompt);
-      }
+      const data = await requestJson<{ items?: ResearchTask[] }>("/research/tasks");
+      const items = Array.isArray(data.items) ? data.items : [];
+      setResearchTasks(items);
+      setSelectedResearchTask((current) => current ?? items[0] ?? null);
     } catch {
-      setCurrentTask(null);
+      setResearchTasks([]);
+      setSelectedResearchTask(null);
     }
   }
 
-  async function refreshSharedPanels() {
-    await Promise.all([
+  async function refreshSupportData() {
+    await Promise.allSettled([
       loadSystemStatus(),
       loadMemory(),
       loadLearning(),
       loadSelfImprovement(),
-      loadAssistantHistory(),
+      loadTools(),
+      loadStorageStatus(),
+      loadModelStatus(),
+      loadSearchStatus(),
+      loadLatestPrompt(),
       loadResearchTasks(),
     ]);
   }
 
   useEffect(() => {
-    void Promise.all([
-      loadSystemStatus(),
-      loadProjects(),
-      loadMemory(),
-      loadLearning(),
-      loadSelfImprovement(),
-      loadAssistantHistory(),
-      loadResearchTasks(),
-      loadLatestPrompt(),
-    ]);
+    void refreshSupportData();
   }, []);
 
-  useEffect(() => {
-    if (!currentTaskId) {
-      return;
-    }
-
-    void loadTask(currentTaskId);
-    const interval = window.setInterval(() => {
-      void loadTask(currentTaskId);
-    }, 5000);
-
-    return () => window.clearInterval(interval);
-  }, [currentTaskId]);
-
-  async function handleAssistantSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSend(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-
-    const message = assistantMessage.trim();
-    if (!message) {
-      setAssistantMessageStatus("Enter a message first.");
+    const trimmed = message.trim();
+    if (!trimmed) {
+      setComposerMessage("Type a command before sending.");
       return;
     }
 
-    setAssistantSubmitting(true);
-    setAssistantMessageStatus("");
+    const timestamp = new Date().toISOString();
+    setThread((current) => [
+      ...current,
+      {
+        id: createId("user"),
+        role: "user",
+        content: trimmed,
+        createdAt: timestamp,
+      },
+    ]);
+    setMessage("");
+    setComposerMessage("");
+    setSending(true);
 
     try {
-      const response = await fetch(`${API_BASE}/assistant/chat`, {
+      const data = await requestJson<CommandResponse>("/command", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify({
-          message,
-          mode: assistantMode,
-          save_to_memory: assistantSaveToMemory,
+          message: trimmed,
+          mode,
+          save_to_memory: saveToMemory,
         }),
       });
-      const data = await parseJsonSafe<AssistantChatResponse>(response);
-      if (!response.ok || !data?.chat_id) {
-        const errorMessage =
-          typeof (data as Record<string, unknown> | null)?.["detail"] === "string"
-            ? String((data as Record<string, unknown>)["detail"])
-            : "Assistant chat failed.";
-        throw new Error(errorMessage);
+
+      setThread((current) => [
+        ...current,
+        {
+          id: createId("assistant"),
+          role: "assistant",
+          content: data.reply,
+          createdAt: data.created_at ?? new Date().toISOString(),
+          result: data,
+        },
+      ]);
+
+      if (data.codex_prompt) {
+        setLatestPrompt({
+          task_id: data.command_id,
+          command: trimmed,
+          prompt: data.codex_prompt,
+          status: "prompt_ready",
+          workflow: data.workflow,
+          created_at: data.created_at,
+        });
       }
 
-      setAssistantResponse(data);
-      setAssistantMessageStatus(
-        assistantSaveToMemory
-          ? "Assistant reply saved to memory."
-          : "Assistant reply ready. You can save important details later.",
-      );
-      await refreshSharedPanels();
+      setComposerMessage("Builder Core finished the workflow and refreshed saved context.");
+      await refreshSupportData();
     } catch (error) {
-      setAssistantMessageStatus(error instanceof Error ? error.message : "Assistant chat failed.");
+      const messageText =
+        error instanceof Error ? error.message : "Builder Core could not complete this command right now.";
+      setThread((current) => [
+        ...current,
+        {
+          id: createId("assistant"),
+          role: "assistant",
+          content: "Builder Core hit a problem while handling that message.",
+          createdAt: new Date().toISOString(),
+          error: messageText,
+        },
+      ]);
+      setComposerMessage(messageText);
     } finally {
-      setAssistantSubmitting(false);
+      setSending(false);
     }
   }
 
-  async function handleIdeaGeneration() {
-    const topic = ideaTopic.trim() || assistantMessage.trim() || commandInput.trim();
-    const goal = ideaGoal.trim() || "Find the next safe and useful improvement.";
+  async function handleStorageTest() {
+    try {
+      const data = await requestJson<StorageTestResult>("/storage/test", { method: "POST" });
+      setStorageTestResult(data);
+      setStorageMessage(data.ok ? `Storage test used ${data.storage_used}.` : "Storage test failed.");
+      await loadStorageStatus();
+    } catch (error) {
+      setStorageMessage(error instanceof Error ? error.message : "Storage test failed.");
+      setStorageTestResult(null);
+    }
+  }
 
-    if (!topic) {
-      setIdeaMessage("Enter a topic or reuse the assistant message first.");
+  async function handlePrivateSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const query = searchQuery.trim();
+    if (!query) {
+      setSearchMessage("Enter a search query first.");
       return;
     }
 
-    setIdeaSubmitting(true);
-    setIdeaMessage("");
     try {
-      const response = await fetch(`${API_BASE}/assistant/idea`, {
+      const data = await requestJson<SearchQueryResponse>("/search/query", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          topic,
-          goal,
-        }),
+        body: JSON.stringify({ query, limit: 10 }),
       });
-      const data = await parseJsonSafe<AssistantIdeaResponse>(response);
-      if (!response.ok || !data?.ideas) {
-        const errorMessage =
-          typeof (data as Record<string, unknown> | null)?.["detail"] === "string"
-            ? String((data as Record<string, unknown>)["detail"])
-            : "Idea generation failed.";
-        throw new Error(errorMessage);
-      }
-      setIdeaResult(data);
-      setIdeaMessage("Ideas generated.");
+      setSearchResults(data);
+      setSearchMessage(`Private search returned ${data.results_count ?? 0} results.`);
+      await loadSearchStatus();
     } catch (error) {
-      setIdeaMessage(error instanceof Error ? error.message : "Idea generation failed.");
-    } finally {
-      setIdeaSubmitting(false);
+      setSearchMessage(error instanceof Error ? error.message : "Private search failed.");
+      setSearchResults(null);
     }
   }
 
-  function toggleResearchSource(source: string) {
-    setResearchSources((previous) => {
-      if (previous.includes(source)) {
-        const next = previous.filter((item) => item !== source);
-        return next.length > 0 ? next : ["memory"];
-      }
-      return [...previous, source];
-    });
-  }
+  async function handleQuickAddDocument(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const title = quickDocTitle.trim();
+    const text = quickDocText.trim();
+    if (!title || !text) {
+      setSearchMessage("Add both a title and text before saving to the private index.");
+      return;
+    }
 
-  async function createResearchTask(payload: {
-    topic: string;
-    goal: string;
-    category: string;
-    sources: string[];
-  }) {
-    setResearchSubmitting(true);
-    setResearchMessage("");
     try {
-      const response = await fetch(`${API_BASE}/research/tasks`, {
+      await requestJson("/search/add", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify({
-          topic: payload.topic,
-          goal: payload.goal,
-          category: payload.category,
-          sources: payload.sources,
-          run_now: true,
+          title,
+          text,
+          source_type: quickDocSourceType,
+          metadata: { added_from: "frontend_private_search_panel" },
         }),
       });
-      const data = await parseJsonSafe<ResearchTaskRecord>(response);
-      if (!response.ok || !data?.research_id) {
-        const errorMessage =
-          typeof (data as Record<string, unknown> | null)?.["detail"] === "string"
-            ? String((data as Record<string, unknown>)["detail"])
-            : "Research task creation failed.";
-        throw new Error(errorMessage);
-      }
-      setSelectedResearchTask(data);
-      setResearchMessage(
-        "Research task saved. Web research is not connected yet. This research task is saved and can use memory/user notes only.",
+      setQuickDocTitle("");
+      setQuickDocText("");
+      setSearchMessage("Saved directly to the private search index.");
+      await Promise.allSettled([loadSearchStatus(), loadMemory()]);
+    } catch (error) {
+      setSearchMessage(error instanceof Error ? error.message : "Saving to private search failed.");
+    }
+  }
+
+  async function handleRebuildIndex() {
+    try {
+      const data = await requestJson<{ documents_added?: number }>("/search/rebuild", { method: "POST" });
+      setSearchMessage(`Private search rebuild finished. Documents added: ${data.documents_added ?? 0}.`);
+      await loadSearchStatus();
+    } catch (error) {
+      setSearchMessage(error instanceof Error ? error.message : "Search rebuild failed.");
+    }
+  }
+
+  async function handleDocumentIngest(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const title = ingestTitle.trim();
+    const text = ingestText.trim();
+    if (!title || !text) {
+      setIngestMessage("Add both a document title and text before ingesting.");
+      return;
+    }
+
+    try {
+      const data = await requestJson<{ document_id?: string; chunks_created?: number; warnings?: string[] }>(
+        "/documents/ingest-text",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            title,
+            text,
+            source_type: ingestSourceType,
+            tags: ingestTags
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean),
+          }),
+        },
       );
-      await refreshSharedPanels();
+      setIngestMessage(
+        `Document saved with id ${data.document_id ?? "unknown"} and ${data.chunks_created ?? 0} chunks.`,
+      );
+      setIngestTitle("");
+      setIngestText("");
+      setIngestTags("");
+      await Promise.allSettled([loadSearchStatus(), loadMemory(), loadLearning()]);
     } catch (error) {
-      setResearchMessage(error instanceof Error ? error.message : "Research task creation failed.");
-    } finally {
-      setResearchSubmitting(false);
+      setIngestMessage(error instanceof Error ? error.message : "Document ingest failed.");
     }
   }
 
-  async function handleResearchTaskSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleUrlIngest(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const url = urlInput.trim();
+    if (!url) {
+      setUrlMessage("Paste a public http or https URL first.");
+      return;
+    }
+
+    try {
+      const data = await requestJson<UrlIngestResponse>("/search/ingest-url", {
+        method: "POST",
+        body: JSON.stringify({
+          url,
+          source_note: urlNote.trim() || undefined,
+        }),
+      });
+      setUrlResult(data);
+      setUrlMessage(data.ok ? "URL ingest finished safely." : "URL ingest returned a warning.");
+      if (data.ok) {
+        setUrlInput("");
+        setUrlNote("");
+      }
+      await Promise.allSettled([loadSearchStatus(), loadMemory()]);
+    } catch (error) {
+      setUrlMessage(error instanceof Error ? error.message : "URL ingest failed.");
+      setUrlResult(null);
+    }
+  }
+
+  async function handleCrawlerPlan(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const seedUrls = crawlSeeds
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (seedUrls.length === 0) {
+      setCrawlMessage("Add at least one public seed URL.");
+      return;
+    }
+
+    try {
+      const data = await requestJson<CrawlPlanResponse>("/crawler/plan", {
+        method: "POST",
+        body: JSON.stringify({
+          seed_urls: seedUrls,
+          max_pages: Math.max(1, Math.min(crawlMaxPages, 25)),
+        }),
+      });
+      setCrawlResult(data);
+      setCrawlMessage("Crawler plan created. It does not start a live crawl.");
+      await loadMemory();
+    } catch (error) {
+      setCrawlMessage(error instanceof Error ? error.message : "Crawler plan failed.");
+      setCrawlResult(null);
+    }
+  }
+
+  async function handleCreateResearchTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const topic = researchTopic.trim();
     const goal = researchGoal.trim();
 
     if (!topic || !goal) {
-      setResearchMessage("Enter both a topic and a goal.");
+      setResearchMessage("Add both a research topic and goal first.");
       return;
     }
-
-    await createResearchTask({
-      topic,
-      goal,
-      category: researchCategory,
-      sources: researchSources,
-    });
-  }
-
-  async function handleQuickResearchFromAssistant() {
-    const topic = assistantMessage.trim();
-    if (!topic) {
-      setAssistantMessageStatus("Enter or reuse an assistant message before creating a research task.");
-      return;
-    }
-
-    const categoryMap: Record<string, string> = {
-      general: "general",
-      coding: "coding",
-      research: "general",
-      law: "law",
-      market: "market",
-      exam: "exam",
-      project: "project",
-      creative: "project",
-    };
-
-    setResearchTopic(topic);
-    setResearchGoal(`Research this topic safely and summarize what Builder Core can save for later: ${topic}`);
-    setResearchCategory(categoryMap[assistantMode] ?? "general");
-
-    await createResearchTask({
-      topic,
-      goal: `Research this topic safely and summarize what Builder Core can save for later: ${topic}`,
-      category: categoryMap[assistantMode] ?? "general",
-      sources: ["memory", "user_notes"],
-    });
-  }
-
-  async function handleGeneratePrompt(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    const command = commandInput.trim();
-    if (!command) {
-      setPromptMessage("Enter a command first.");
-      return;
-    }
-
-    setPromptSubmitting(true);
-    setPromptMessage("");
-    setCopyMessage("");
 
     try {
-      const response = await fetch(`${API_BASE}/prompts/codex`, {
+      const data = await requestJson<ResearchCreateResponse>("/research/tasks", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify({
-          command,
-          project_name: projectName || "Builder Core",
+          topic,
+          goal,
+          category: researchCategory,
+          sources: researchSources,
+          run_now: true,
         }),
       });
-      const data = await parseJsonSafe<PromptCreateResponse>(response);
-      if (!response.ok || !data?.task_id || !data.prompt) {
-        const errorMessage =
-          typeof (data as Record<string, unknown> | null)?.["detail"] === "string"
-            ? String((data as Record<string, unknown>)["detail"])
-            : "Prompt generation failed.";
-        throw new Error(errorMessage);
-      }
-
-      setCurrentTaskId(data.task_id);
-      setGeneratedPrompt(data.prompt);
-      setCodexSummaryInput("");
-      setPromptMessage(
-        "Codex prompt generated. Copy it into Codex, let Codex make the repo changes, then paste Codex's final summary back here.",
-      );
-      await refreshSharedPanels();
-      await loadTask(data.task_id);
+      setResearchMessage(`Research task ${data.research_id} saved with status ${data.status}.`);
+      setResearchTopic("");
+      setResearchGoal("");
+      await Promise.allSettled([loadResearchTasks(), loadMemory(), loadLearning()]);
     } catch (error) {
-      setPromptMessage(error instanceof Error ? error.message : "Prompt generation failed.");
-    } finally {
-      setPromptSubmitting(false);
+      setResearchMessage(error instanceof Error ? error.message : "Research task creation failed.");
     }
   }
 
-  async function handleCopyPrompt() {
-    if (!generatedPrompt) {
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(generatedPrompt);
-      setCopyMessage("Prompt copied.");
-    } catch {
-      setCopyMessage("Copy failed. Select the prompt manually.");
-    }
-  }
-
-  async function handleSaveCodexSummary() {
-    if (!currentTaskId) {
-      setPromptMessage("Generate a prompt first so Builder Core has a task ID.");
-      return;
-    }
-
-    const codexSummary = codexSummaryInput.trim();
-    if (!codexSummary) {
-      setPromptMessage("Paste Codex's final summary before saving.");
-      return;
-    }
-
-    setSavingSummary(true);
-    setPromptMessage("");
-
-    try {
-      const response = await fetch(`${API_BASE}/tasks/${currentTaskId}/codex-summary`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          codex_summary: codexSummary,
-        }),
-      });
-      const data = await parseJsonSafe<{ ok?: boolean; message?: string }>(response);
-      if (!response.ok || !data?.ok) {
-        const errorMessage =
-          typeof (data as Record<string, unknown> | null)?.["detail"] === "string"
-            ? String((data as Record<string, unknown>)["detail"])
-            : data?.message ?? "Saving Codex summary failed.";
-        throw new Error(errorMessage);
-      }
-
-      setPromptMessage("Codex summary saved. Builder Core updated project memory, latest summary, and lessons.");
-      await refreshSharedPanels();
-      await loadTask(currentTaskId);
-    } catch (error) {
-      setPromptMessage(error instanceof Error ? error.message : "Saving Codex summary failed.");
-    } finally {
-      setSavingSummary(false);
-    }
-  }
-
-  async function handleSaveImprovementNote(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const note = manualImprovementNote.trim();
-    if (!note) {
-      setImprovementMessage("Enter a note first.");
-      return;
-    }
-
-    setSavingImprovement(true);
-    setImprovementMessage("");
-    try {
-      const response = await fetch(`${API_BASE}/self-improvement`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          note,
-          category: "preference",
-        }),
-      });
-      const data = await parseJsonSafe<{ ok?: boolean }>(response);
-      if (!response.ok || !data?.ok) {
-        const errorMessage =
-          typeof (data as Record<string, unknown> | null)?.["detail"] === "string"
-            ? String((data as Record<string, unknown>)["detail"])
-            : "Saving self-improvement note failed.";
-        throw new Error(errorMessage);
-      }
-      setManualImprovementNote("");
-      setImprovementMessage("Self-improvement note saved.");
-      await refreshSharedPanels();
-    } catch (error) {
-      setImprovementMessage(error instanceof Error ? error.message : "Saving self-improvement note failed.");
-    } finally {
-      setSavingImprovement(false);
-    }
-  }
-
-  function handleOpenAppLink() {
-    window.open(FRONTEND_APP_URL, "_blank", "noopener,noreferrer");
-  }
-
-  async function handleCopyAppLink() {
-    try {
-      await navigator.clipboard.writeText(FRONTEND_APP_URL);
-      setInstallMessage("App link copied.");
-    } catch {
-      setInstallMessage(`Copy this link manually: ${FRONTEND_APP_URL}`);
-    }
+  function toggleResearchSource(source: string) {
+    setResearchSources((current) =>
+      current.includes(source) ? current.filter((item) => item !== source) : [...current, source],
+    );
   }
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-[#f6f7fb] text-slate-900">
-      <div className="border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
-          <div>
-            <h1 className="text-xl font-semibold text-slate-950 sm:text-2xl">Builder Core</h1>
-            <p className="text-sm text-slate-500">
-              Builder Core Assistant plus a safe manual Codex Prompt Command Center.
-            </p>
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(226,232,240,0.9),_rgba(248,250,252,1)_55%)] text-slate-900">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-5 md:px-6 lg:px-8">
+        <header className="rounded-[32px] border border-slate-200 bg-white/95 p-5 shadow-sm backdrop-blur">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Builder Core</p>
+              <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950 md:text-4xl">
+                Builder Core Command Chat
+              </h1>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">
+                One message can route through Builder Core&rsquo;s own internal tools: safety firewall, command router,
+                private search, internal research engine, market analyzer, app planner, Codex prompt builder, memory,
+                learning, and Firestore-ready storage.
+              </p>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2 lg:min-w-[420px]">
+              <StatusPill tone={backendStatus === "online" ? "green" : backendStatus === "offline" ? "red" : "amber"}>
+                Backend: {backendStatus === "checking" ? "Checking..." : backendStatus === "online" ? "Online" : "Offline"}
+              </StatusPill>
+              <StatusPill tone={systemStatus?.using_firestore ? "green" : "amber"}>
+                Storage: {systemStatus?.using_firestore ? "Firestore" : systemStatus?.storage_mode ?? "Local"}
+              </StatusPill>
+              <StatusPill tone="blue">
+                Brain: {titleCase(systemStatus?.active_brain ?? systemStatus?.assistant_mode ?? "local_rule_based")}
+              </StatusPill>
+              <StatusPill tone={systemStatus?.bridge_status?.ready_for_repo_work ? "green" : "amber"}>
+                Codex Bridge: {systemStatus?.bridge_status?.ready_for_repo_work ? "Configured" : "Manual Prompt Mode"}
+              </StatusPill>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={
-                backendStatus === "online"
-                  ? "rounded-full border border-green-200 bg-green-50 px-3 py-1 text-xs font-semibold text-green-700"
-                  : backendStatus === "offline"
-                    ? "rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700"
-                    : "rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600"
-              }
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <KeyValue label="GCP Project" value={systemStatus?.gcp_project_id ?? "missing"} />
+            <KeyValue label="Memory Count" value={systemStatus?.memory_count ?? 0} />
+            <KeyValue label="Research Tasks" value={systemStatus?.research_task_count ?? 0} />
+            <KeyValue label="Private Search Docs" value={systemStatus?.private_search_document_count ?? 0} />
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-600">
+            <a href={LIVE_FRONTEND_URL} target="_blank" rel="noreferrer" className="font-medium text-slate-900 underline">
+              Open live frontend
+            </a>
+            <button
+              type="button"
+              onClick={() => void copyText(LIVE_FRONTEND_URL, "Live frontend link copied.")}
+              className="font-medium text-slate-900 underline"
             >
-              {backendStatus === "checking" && "Backend: Checking..."}
-              {backendStatus === "online" && "Backend: Online"}
-              {backendStatus === "offline" && "Backend: Offline"}
-            </span>
-            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
-              Assistant: {systemStatus?.assistant_status?.mode ? titleCase(systemStatus.assistant_status.mode) : "Loading"}
-            </span>
-            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
-              Codex Flow: Manual
-            </span>
+              Copy app link
+            </button>
+            <span>OpenAI is optional only. Builder Core works in local rule-based mode by default.</span>
           </div>
-        </div>
-      </div>
 
-      <div className="mx-auto grid max-w-6xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[minmax(0,1.7fr)_minmax(320px,1fr)] lg:px-8">
-        <div className="space-y-6">
-          <SectionCard
-            eyebrow="Builder Core Assistant"
-            title="Chat naturally with project-aware help"
-            description="Builder Core can chat, plan, suggest ideas, create research tasks, save useful memory, and use lessons from previous work. It does not automatically know new internet information unless research is run."
-          >
-            <form className="space-y-4" onSubmit={handleAssistantSubmit}>
-              <div className="grid gap-4 sm:grid-cols-[180px_minmax(0,1fr)]">
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="assistant-mode">
-                    Mode
-                  </label>
-                  <select
-                    id="assistant-mode"
-                    value={assistantMode}
-                    onChange={(event) => setAssistantMode(event.target.value)}
-                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
-                  >
-                    {ASSISTANT_MODES.map((mode) => (
-                      <option key={mode.value} value={mode.value}>
-                        {mode.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+          {systemMessage ? (
+            <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {systemMessage}
+            </div>
+          ) : null}
+        </header>
 
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="assistant-message">
-                    Message
-                  </label>
-                  <textarea
-                    id="assistant-message"
-                    value={assistantMessage}
-                    onChange={(event) => setAssistantMessage(event.target.value)}
-                    rows={5}
-                    placeholder="Ask Builder Core for planning, coding ideas, research direction, market angles, legal-information structure, exam strategy, or creative ideas..."
-                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
-                  />
-                </div>
-              </div>
+        <section className="rounded-[32px] border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Unified command input</p>
+              <p className="mt-1 text-sm text-slate-500">
+                Builder Core does not automatically edit GitHub yet. It can research from its own saved knowledge,
+                build an app plan, and produce a manual Codex prompt inside the same reply.
+              </p>
+            </div>
+            <div className="text-sm text-slate-500">
+              Paste a Codex final summary here too. Builder Core can save it to memory and learning when the router detects
+              a summary workflow.
+            </div>
+          </div>
 
-              <label className="flex items-center gap-3 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={assistantSaveToMemory}
-                  onChange={(event) => setAssistantSaveToMemory(event.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-slate-900"
-                />
-                Save useful info to memory
-              </label>
+          <form className="mt-4 space-y-4" onSubmit={handleSend}>
+            <textarea
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              placeholder="Example: Research trucking dispatch market and create an app to analyze it"
+              className="h-36 w-full resize-y rounded-[28px] border border-slate-200 bg-slate-50 px-5 py-4 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+            />
 
-              <div className="flex flex-wrap gap-3">
-                <button
-                  type="submit"
-                  disabled={assistantSubmitting || backendStatus !== "online"}
-                  className={
-                    assistantSubmitting || backendStatus !== "online"
-                      ? "rounded-2xl border border-slate-200 bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-400"
-                      : "rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white"
-                  }
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <select
+                  value={mode}
+                  onChange={(event) => setMode(event.target.value)}
+                  className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-900 outline-none"
                 >
-                  {assistantSubmitting ? "Sending..." : "Send to Assistant"}
-                </button>
+                  {MODE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
 
-                <button
-                  type="button"
-                  onClick={handleIdeaGeneration}
-                  disabled={ideaSubmitting || backendStatus !== "online"}
-                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800"
-                >
-                  {ideaSubmitting ? "Generating ideas..." : "Generate Ideas"}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleQuickResearchFromAssistant}
-                  disabled={researchSubmitting || backendStatus !== "online"}
-                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800"
-                >
-                  Create Research Task
-                </button>
-              </div>
-
-              {assistantMessageStatus && (
-                <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
-                  {assistantMessageStatus}
-                </div>
-              )}
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Assistant reply</p>
-                {assistantResponse ? (
-                  <div className="mt-3 space-y-4">
-                    <div className="whitespace-pre-wrap rounded-2xl bg-white px-4 py-4 text-sm leading-6 text-slate-800">
-                      {assistantResponse.reply}
-                    </div>
-                    <div className="grid gap-4 lg:grid-cols-3">
-                      <ListPanel title="Suggestions" items={assistantResponse.suggestions} />
-                      <ListPanel title="Next actions" items={assistantResponse.next_actions} />
-                      <ListPanel title="Memory used" items={assistantResponse.memory_used} />
-                    </div>
-                  </div>
-                ) : (
-                  <p className="mt-3 text-sm text-slate-500">
-                    Start a chat and Builder Core will answer here. It can research this when you ask, save this to memory, create a research task, use previous memory and lessons, and stay honest about missing internet information.
-                  </p>
-                )}
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.85fr)]">
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="idea-topic">
-                    Idea topic
-                  </label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700">
                   <input
-                    id="idea-topic"
-                    value={ideaTopic}
-                    onChange={(event) => setIdeaTopic(event.target.value)}
-                    placeholder="Builder Core assistant upgrades, business ideas, coding features..."
-                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+                    type="checkbox"
+                    checked={saveToMemory}
+                    onChange={(event) => setSaveToMemory(event.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300"
                   />
-                </div>
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="idea-goal">
-                    Idea goal
-                  </label>
-                  <input
-                    id="idea-goal"
-                    value={ideaGoal}
-                    onChange={(event) => setIdeaGoal(event.target.value)}
-                    placeholder="Find the next safe and useful improvement"
-                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
-                  />
-                </div>
-              </div>
-
-              {ideaMessage && (
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                  {ideaMessage}
-                </div>
-              )}
-
-              {ideaResult && (
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="font-semibold text-slate-900">Idea generator</p>
-                  <p className="mt-2 text-sm text-slate-700">
-                    Best idea: <span className="font-medium">{ideaResult.best_idea}</span>
-                  </p>
-                  <p className="mt-1 text-sm text-slate-600">{ideaResult.why}</p>
-                  <div className="mt-4 space-y-3">
-                    {ideaResult.ideas.map((idea, index) => (
-                      <div key={`${idea.idea_title}-${index}`} className="rounded-2xl bg-white px-4 py-4">
-                        <p className="font-medium text-slate-900">{idea.idea_title}</p>
-                        <p className="mt-1 text-sm text-slate-600">{idea.why_it_is_useful}</p>
-                        <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                          Difficulty: {idea.difficulty}
-                        </p>
-                        <p className="mt-2 text-sm text-slate-700">Next step: {idea.possible_next_step}</p>
-                        <p className="mt-1 text-sm text-amber-700">Risk / limitation: {idea.risk_or_limitation}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Recent assistant history</p>
-                {assistantHistory.length > 0 ? (
-                  <div className="mt-3 space-y-3">
-                    {assistantHistory.slice(-8).map((item) => (
-                      <div key={item.id} className="rounded-2xl bg-white px-4 py-4">
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                          <span className="rounded-full border border-slate-200 px-2 py-1">
-                            {titleCase(item.role)}
-                          </span>
-                          {item.mode && (
-                            <span className="rounded-full border border-slate-200 px-2 py-1">
-                              {titleCase(item.mode)}
-                            </span>
-                          )}
-                          <span>{formatTimestamp(item.created_at)}</span>
-                        </div>
-                        <p className="mt-3 whitespace-pre-wrap text-sm text-slate-800">{item.message}</p>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="mt-3 text-sm text-slate-500">No assistant chat history saved yet.</p>
-                )}
-              </div>
-            </form>
-          </SectionCard>
-
-          <SectionCard
-            eyebrow="Codex Prompt Command Center"
-            title="Generate a strong prompt, then save Codex's result back"
-            description="Builder Core does not automatically edit GitHub yet. Copy this prompt into Codex, let Codex make the changes, then paste Codex's final summary back here."
-          >
-            <form className="space-y-4" onSubmit={handleGeneratePrompt}>
-              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="command">
-                    Command
-                  </label>
-                  <textarea
-                    id="command"
-                    value={commandInput}
-                    onChange={(event) => setCommandInput(event.target.value)}
-                    rows={6}
-                    placeholder="Tell Builder Core what to build, fix, upgrade, research, or plan..."
-                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
-                  />
-                </div>
-
-                <div className="space-y-4">
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="project-name">
-                      Project
-                    </label>
-                    <input
-                      id="project-name"
-                      list="project-options"
-                      value={projectName}
-                      onChange={(event) => setProjectName(event.target.value)}
-                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
-                    />
-                    <datalist id="project-options">
-                      {projects.map((project) => (
-                        <option key={project.id} value={project.name} />
-                      ))}
-                    </datalist>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={promptSubmitting || backendStatus !== "online"}
-                    className={
-                      promptSubmitting || backendStatus !== "online"
-                        ? "w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-400"
-                        : "w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white"
-                    }
-                  >
-                    {promptSubmitting ? "Generating..." : "Generate Codex Prompt"}
-                  </button>
-
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                    <p className="font-semibold text-slate-900">Current task</p>
-                    <p className="mt-2">Task ID: {currentTaskId || "Not generated yet"}</p>
-                    <p className="mt-1">
-                      Status: {currentTask?.status ? titleCase(currentTask.status) : "Waiting"}
-                    </p>
-                    <p className="mt-1">
-                      Stage: {currentTask?.stage ? titleCase(currentTask.stage) : "Waiting"}
-                    </p>
-                    <p className="mt-1">Progress: {currentTask?.progress ?? 0}%</p>
-                  </div>
-                </div>
-              </div>
-
-              {promptMessage && (
-                <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
-                  {promptMessage}
-                </div>
-              )}
-
-              {latestIntelligenceBrief && (
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="font-semibold text-slate-900">
-                    Intelligence mode: {latestIntelligenceBrief.title ?? titleCase(latestIntelligenceBrief.mode)}
-                  </p>
-                  <p className="mt-2 text-sm text-slate-700">
-                    {latestIntelligenceBrief.status_message ?? latestIntelligenceBrief.overview}
-                  </p>
-                  <div className="mt-4 grid gap-4 lg:grid-cols-3">
-                    <ListPanel title="Research steps" items={latestIntelligenceBrief.research_steps} />
-                    <ListPanel title="Evidence checklist" items={latestIntelligenceBrief.evidence_checklist} />
-                    <ListPanel title="Next questions" items={latestIntelligenceBrief.next_questions} />
-                  </div>
-                </div>
-              )}
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="font-semibold text-slate-900">Generated Codex prompt</p>
-                    <p className="mt-1 text-sm text-slate-600">
-                      Copy this prompt into Codex manually. Builder Core will save the result when you paste the final summary back.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleCopyPrompt}
-                    className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800"
-                  >
-                    Copy Prompt
-                  </button>
-                </div>
-                {copyMessage && <p className="mt-3 text-sm text-slate-600">{copyMessage}</p>}
-                <textarea
-                  value={generatedPrompt}
-                  readOnly
-                  rows={18}
-                  className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 font-mono text-xs leading-6 text-slate-800 outline-none"
-                />
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Paste Codex final summary</p>
-                <p className="mt-1 text-sm text-slate-600">
-                  After Codex finishes, paste the summary here so Builder Core can save memory and create a lesson.
-                </p>
-                <textarea
-                  value={codexSummaryInput}
-                  onChange={(event) => setCodexSummaryInput(event.target.value)}
-                  rows={8}
-                  placeholder="Paste Codex's final summary here..."
-                  className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-                />
-                <div className="mt-4 flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={handleSaveCodexSummary}
-                    disabled={savingSummary || !currentTaskId}
-                    className={
-                      savingSummary || !currentTaskId
-                        ? "rounded-2xl border border-slate-200 bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-400"
-                        : "rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white"
-                    }
-                  >
-                    {savingSummary ? "Saving..." : "Save Codex Summary"}
-                  </button>
-                </div>
-              </div>
-
-              {currentTask && (
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <ListPanel title="Task logs" items={currentTask.logs} />
-                  <ListPanel title="Task errors" items={currentTask.errors} />
-                </div>
-              )}
-            </form>
-          </SectionCard>
-
-          <SectionCard
-            eyebrow="Research Tasks"
-            title="Create saved research work without faking web access"
-            description="Research tasks are safe, manual, and scheduled-ready. They do not secretly run forever in the background. If web research is not connected, Builder Core will say so clearly."
-          >
-            <form className="space-y-4" onSubmit={handleResearchTaskSubmit}>
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="research-topic">
-                    Topic
-                  </label>
-                  <input
-                    id="research-topic"
-                    value={researchTopic}
-                    onChange={(event) => setResearchTopic(event.target.value)}
-                    placeholder="Example: compare safe market analysis prompts"
-                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="research-goal">
-                    Goal
-                  </label>
-                  <input
-                    id="research-goal"
-                    value={researchGoal}
-                    onChange={(event) => setResearchGoal(event.target.value)}
-                    placeholder="Example: save a safe research plan and limitations"
-                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
-                  />
-                </div>
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="research-category">
-                    Category
-                  </label>
-                  <select
-                    id="research-category"
-                    value={researchCategory}
-                    onChange={(event) => setResearchCategory(event.target.value)}
-                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
-                  >
-                    {RESEARCH_CATEGORIES.map((category) => (
-                      <option key={category.value} value={category.value}>
-                        {category.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <p className="mb-2 text-sm font-medium text-slate-700">Sources</p>
-                  <div className="flex flex-wrap gap-3">
-                    {["web", "user_notes", "memory"].map((source) => (
-                      <label
-                        key={source}
-                        className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={researchSources.includes(source)}
-                          onChange={() => toggleResearchSource(source)}
-                          className="h-4 w-4 rounded border-slate-300 text-slate-900"
-                        />
-                        {titleCase(source)}
-                      </label>
-                    ))}
-                  </div>
-                </div>
+                  Save useful info to memory
+                </label>
               </div>
 
               <button
                 type="submit"
-                disabled={researchSubmitting || backendStatus !== "online"}
+                disabled={sending || backendStatus !== "online"}
                 className={
-                  researchSubmitting || backendStatus !== "online"
-                    ? "rounded-2xl border border-slate-200 bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-400"
-                    : "rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white"
+                  sending || backendStatus !== "online"
+                    ? "rounded-full border border-slate-200 bg-slate-100 px-5 py-3 text-sm font-semibold text-slate-400"
+                    : "rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white"
                 }
               >
-                {researchSubmitting ? "Creating task..." : "Create / Run Research Task"}
+                {sending ? "Working..." : "Send"}
               </button>
+            </div>
+          </form>
 
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                Web research is not connected yet. This research task is saved and can use memory/user notes only.
-              </div>
+          {composerMessage ? (
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              {composerMessage}
+            </div>
+          ) : null}
+        </section>
 
-              {researchMessage && (
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                  {researchMessage}
+        <section className="space-y-4">
+          {thread.map((item) => (
+            <ConversationCard
+              key={item.id}
+              item={item}
+              onCopyPrompt={(prompt) => {
+                void copyText(prompt, "Codex prompt copied.");
+              }}
+            />
+          ))}
+        </section>
+
+        <section className="space-y-4">
+          <Panel
+            title="Internal Tools"
+            subtitle="See the built-in modules that power Builder Core without requiring outside AI or search APIs."
+          >
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {(toolsData?.items ?? []).map((tool) => (
+                <div key={tool.tool_id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold text-slate-900">{tool.name}</p>
+                    <StatusPill tone={tool.enabled ? "green" : "amber"}>{tool.enabled ? "Enabled" : "Disabled"}</StatusPill>
+                  </div>
+                  <p className="mt-2 text-sm text-slate-600">{tool.description}</p>
+                  <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-500">{titleCase(tool.category)}</p>
+                  <ListBlock
+                    title="Limitations"
+                    items={tool.limitations}
+                    emptyText="No limitations listed."
+                  />
+                  <ListBlock
+                    title="Safety Notes"
+                    items={tool.safety_notes}
+                    emptyText="No safety notes listed."
+                  />
                 </div>
-              )}
+              ))}
+            </div>
+          </Panel>
+
+          <Panel
+            title="Private Search Engine"
+            subtitle="Search Builder Core's own saved knowledge base and rebuild the internal index when you add new notes."
+          >
+            <div className="grid gap-4 xl:grid-cols-2">
+              <form className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4" onSubmit={handlePrivateSearch}>
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">Search query</label>
+                  <input
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    placeholder="Search saved knowledge, notes, or summaries"
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <button type="submit" className="rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-white">
+                    Search private index
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleRebuildIndex()}
+                    className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900"
+                  >
+                    Rebuild index
+                  </button>
+                </div>
+                {searchMessage ? <p className="text-sm text-slate-600">{searchMessage}</p> : null}
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <KeyValue label="Documents" value={searchStatus?.document_count ?? 0} />
+                  <KeyValue label="Chunks" value={searchStatus?.chunk_count ?? 0} />
+                </div>
+              </form>
+
+              <form className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4" onSubmit={handleQuickAddDocument}>
+                <p className="text-sm font-semibold text-slate-900">Quick add to private index</p>
+                <input
+                  value={quickDocTitle}
+                  onChange={(event) => setQuickDocTitle(event.target.value)}
+                  placeholder="Document title"
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                />
+                <select
+                  value={quickDocSourceType}
+                  onChange={(event) => setQuickDocSourceType(event.target.value)}
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                >
+                  {["manual", "project", "research", "market", "code", "note"].map((item) => (
+                    <option key={item} value={item}>
+                      {titleCase(item)}
+                    </option>
+                  ))}
+                </select>
+                <textarea
+                  value={quickDocText}
+                  onChange={(event) => setQuickDocText(event.target.value)}
+                  placeholder="Paste text that should be searchable."
+                  className="h-32 w-full resize-y rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                />
+                <button type="submit" className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900">
+                  Save to private search
+                </button>
+              </form>
+            </div>
+
+            {searchResults ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-900">
+                  Search results ({searchResults.results_count ?? 0})
+                </p>
+                <div className="mt-3 space-y-3">
+                  {(searchResults.results ?? []).map((result, index) => (
+                    <div key={`${result.document_id ?? "result"}_${index}`} className="rounded-2xl bg-white p-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-medium text-slate-900">{result.title || "Saved source"}</p>
+                        <StatusPill tone="slate">{titleCase(result.source_type ?? "saved")}</StatusPill>
+                        <StatusPill tone="blue">Score {result.score ?? 0}</StatusPill>
+                      </div>
+                      <p className="mt-2 text-sm text-slate-700">{result.preview || "No preview available."}</p>
+                      {result.url ? (
+                        <a className="mt-2 inline-block text-sm text-slate-900 underline" href={result.url} target="_blank" rel="noreferrer">
+                          Open source URL
+                        </a>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </Panel>
+
+          <Panel
+            title="Document Ingest"
+            subtitle="Save plain text into Builder Core memory, learning, and private search without needing outside AI."
+          >
+            <form className="space-y-4" onSubmit={handleDocumentIngest}>
+              <input
+                value={ingestTitle}
+                onChange={(event) => setIngestTitle(event.target.value)}
+                placeholder="Document title"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none"
+              />
+              <select
+                value={ingestSourceType}
+                onChange={(event) => setIngestSourceType(event.target.value)}
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none"
+              >
+                {["note", "law", "market", "exam", "code", "research", "project", "manual"].map((item) => (
+                  <option key={item} value={item}>
+                    {titleCase(item)}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={ingestTags}
+                onChange={(event) => setIngestTags(event.target.value)}
+                placeholder="Tags, separated by commas"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none"
+              />
+              <textarea
+                value={ingestText}
+                onChange={(event) => setIngestText(event.target.value)}
+                placeholder="Paste plain text here."
+                className="h-40 w-full resize-y rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none"
+              />
+              <button type="submit" className="rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-white">
+                Ingest document
+              </button>
+            </form>
+            {ingestMessage ? <p className="text-sm text-slate-600">{ingestMessage}</p> : null}
+          </Panel>
+
+          <Panel
+            title="URL Ingest"
+            subtitle="Safely fetch one public URL and add readable text to Builder Core private search."
+          >
+            <form className="space-y-4" onSubmit={handleUrlIngest}>
+              <input
+                value={urlInput}
+                onChange={(event) => setUrlInput(event.target.value)}
+                placeholder="https://example.com/article"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none"
+              />
+              <input
+                value={urlNote}
+                onChange={(event) => setUrlNote(event.target.value)}
+                placeholder="Optional note about why this page matters"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none"
+              />
+              <button type="submit" className="rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-white">
+                Ingest safe public URL
+              </button>
+            </form>
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              URL ingest allows one public page only. It blocks localhost, private/internal IPs, .onion links, file URLs,
+              login bypass, and paywall bypass.
+            </div>
+            {urlMessage ? <p className="text-sm text-slate-600">{urlMessage}</p> : null}
+            {urlResult ? (
+              <div className="grid gap-3 md:grid-cols-2">
+                <KeyValue label="Document ID" value={urlResult.document_id ?? "Not created"} />
+                <KeyValue label="Chunks Created" value={urlResult.chunks_created ?? 0} />
+                <KeyValue label="Text Characters" value={urlResult.text_chars ?? 0} />
+                <KeyValue label="Status" value={urlResult.ok ? "Saved" : "Warning"} />
+              </div>
+            ) : null}
+            <ListBlock title="Warnings" items={urlResult?.warnings} emptyText="No URL warnings returned." />
+          </Panel>
+
+          <Panel
+            title="Crawler Plan"
+            subtitle="Plan a safe crawl only. Builder Core does not start uncontrolled crawling from this panel."
+          >
+            <form className="space-y-4" onSubmit={handleCrawlerPlan}>
+              <textarea
+                value={crawlSeeds}
+                onChange={(event) => setCrawlSeeds(event.target.value)}
+                placeholder={"One public seed URL per line\nhttps://example.com"}
+                className="h-28 w-full resize-y rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none"
+              />
+              <input
+                type="number"
+                min={1}
+                max={25}
+                value={crawlMaxPages}
+                onChange={(event) => setCrawlMaxPages(Number(event.target.value))}
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none"
+              />
+              <button type="submit" className="rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-white">
+                Create crawl plan
+              </button>
+            </form>
+            {crawlMessage ? <p className="text-sm text-slate-600">{crawlMessage}</p> : null}
+            <ListBlock title="Plan Steps" items={crawlResult?.plan_steps} emptyText="No crawl plan created yet." />
+            <ListBlock title="Limits" items={crawlResult?.limits} emptyText="No crawl limits returned yet." />
+            <ListBlock title="Warnings" items={crawlResult?.warnings} emptyText="No crawl warnings returned." />
+          </Panel>
+
+          <Panel
+            title="Cloud Storage Status"
+            subtitle="See whether Builder Core is using Firestore or local fallback and run a safe storage test."
+          >
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <KeyValue label="Mode" value={titleCase(storageStatus?.storage_mode ?? "local")} />
+              <KeyValue label="Backend" value={storageStatus?.storage_backend ?? "local_json"} />
+              <KeyValue label="Using Firestore" value={storageStatus?.using_firestore ? "Yes" : "No"} />
+              <KeyValue label="Fallback Active" value={storageStatus?.using_fallback ? "Yes" : "No"} />
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <KeyValue label="GCP Project" value={storageStatus?.gcp_project_id ?? "missing"} />
+              <KeyValue label="GCS Bucket" value={storageStatus?.gcs_bucket_name ?? "missing"} />
+              <KeyValue label="Memory Records" value={storageStatus?.project_memory_count ?? 0} />
+              <KeyValue label="Search Chunks" value={storageStatus?.search_chunk_count ?? 0} />
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleStorageTest()}
+              className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900"
+            >
+              Run storage test
+            </button>
+            {storageMessage ? <p className="text-sm text-slate-600">{storageMessage}</p> : null}
+            {storageTestResult ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                <p>Storage used: {titleCase(storageTestResult.storage_used ?? "unknown")}</p>
+                <p>Saved: {storageTestResult.saved ? "Yes" : "No"}</p>
+                <p>Read back: {storageTestResult.read_back ? "Yes" : "No"}</p>
+                <p>Record ID: {storageTestResult.record_id ?? "unknown"}</p>
+              </div>
+            ) : null}
+            <ListBlock title="Warnings" items={storageStatus?.warnings} emptyText="No storage warnings returned." />
+          </Panel>
+
+          <Panel
+            title="Model Status"
+            subtitle="Builder Core defaults to local rule-based logic. Optional local/OpenAI paths stay secondary."
+          >
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <KeyValue label="Assistant Mode" value={titleCase(modelStatus?.assistant_mode ?? "local")} />
+              <KeyValue label="Active Brain" value={titleCase(modelStatus?.active_brain ?? "local_rule_based")} />
+              <KeyValue label="Local Provider" value={titleCase(modelStatus?.local_model_provider ?? "disabled")} />
+              <KeyValue label="OpenAI Configured" value={modelStatus?.openai_configured ? "Yes" : "No"} />
+            </div>
+            <ListBlock title="Warnings" items={modelStatus?.warnings} emptyText="No model warnings returned." />
+          </Panel>
+
+          <Panel
+            title="Research History"
+            subtitle="Create a safe research task or review saved research results. Live internet-wide research is not connected yet."
+          >
+            <form className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4" onSubmit={handleCreateResearchTask}>
+              <input
+                value={researchTopic}
+                onChange={(event) => setResearchTopic(event.target.value)}
+                placeholder="Research topic"
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+              />
+              <input
+                value={researchGoal}
+                onChange={(event) => setResearchGoal(event.target.value)}
+                placeholder="Research goal"
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+              />
+              <div className="grid gap-4 md:grid-cols-2">
+                <select
+                  value={researchCategory}
+                  onChange={(event) => setResearchCategory(event.target.value)}
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                >
+                  {["general", "coding", "law", "market", "exam", "politics", "history", "language", "project"].map(
+                    (item) => (
+                      <option key={item} value={item}>
+                        {titleCase(item)}
+                      </option>
+                    ),
+                  )}
+                </select>
+                <div className="flex flex-wrap gap-3">
+                  {SOURCE_OPTIONS.map((source) => (
+                    <label key={source} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={researchSources.includes(source)}
+                        onChange={() => toggleResearchSource(source)}
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                      {titleCase(source)}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <button type="submit" className="rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-white">
+                Create research task
+              </button>
+              {researchMessage ? <p className="text-sm text-slate-600">{researchMessage}</p> : null}
             </form>
 
-            <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(280px,0.9fr)]">
+            <div className="grid gap-4 xl:grid-cols-[1.2fr,0.8fr]">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Latest research result</p>
+                <p className="text-sm font-semibold text-slate-900">Selected research task</p>
                 {selectedResearchTask ? (
-                  <div className="mt-3 space-y-4">
-                    <div className="rounded-2xl bg-white px-4 py-4">
-                      <p className="font-medium text-slate-900">{selectedResearchTask.topic}</p>
-                      <p className="mt-1 text-sm text-slate-600">{selectedResearchTask.goal}</p>
-                      <p className="mt-2 text-xs text-slate-500">
-                        {titleCase(selectedResearchTask.category)} · {titleCase(selectedResearchTask.status)} ·{" "}
-                        {formatTimestamp(selectedResearchTask.updated_at)}
-                      </p>
-                      <p className="mt-3 text-sm text-slate-700">{selectedResearchTask.summary}</p>
-                    </div>
-                    <div className="grid gap-4 lg:grid-cols-3">
-                      <ListPanel title="Findings" items={selectedResearchTask.findings} />
-                      <ListPanel title="Limitations" items={selectedResearchTask.limitations} />
-                      <ListPanel title="Next steps" items={selectedResearchTask.next_steps} />
-                    </div>
+                  <div className="mt-3 space-y-3">
+                    <p className="font-medium text-slate-900">{selectedResearchTask.topic}</p>
+                    <p className="text-sm text-slate-600">{selectedResearchTask.summary}</p>
+                    <ListBlock title="Findings" items={selectedResearchTask.findings} emptyText="No findings saved." />
+                    <ListBlock title="Limitations" items={selectedResearchTask.limitations} emptyText="No limitations saved." />
+                    <ListBlock title="Next Steps" items={selectedResearchTask.next_steps} emptyText="No next steps saved." />
                   </div>
                 ) : (
                   <p className="mt-3 text-sm text-slate-500">No research task selected yet.</p>
@@ -1513,200 +1708,173 @@ export default function Home() {
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Recent research tasks</p>
-                {researchTasks.length > 0 ? (
-                  <div className="mt-3 space-y-3">
-                    {researchTasks.map((task) => (
+                <p className="text-sm font-semibold text-slate-900">Recent tasks</p>
+                <div className="mt-3 space-y-3">
+                  {researchTasks.length > 0 ? (
+                    researchTasks.map((task) => (
                       <button
-                        key={task.research_id}
+                        key={task.research_id ?? createId("research")}
                         type="button"
                         onClick={() => setSelectedResearchTask(task)}
                         className="w-full rounded-2xl bg-white px-4 py-4 text-left"
                       >
-                        <p className="font-medium text-slate-900">{task.topic}</p>
-                        <p className="mt-1 text-sm text-slate-600">{task.summary}</p>
+                        <p className="font-medium text-slate-900">{task.topic ?? "Saved research task"}</p>
+                        <p className="mt-1 text-sm text-slate-600">{task.summary ?? "No summary saved."}</p>
                         <p className="mt-2 text-xs text-slate-500">
-                          {titleCase(task.category)} · {titleCase(task.status)} · {formatTimestamp(task.updated_at)}
+                          {titleCase(task.category)} · {titleCase(task.status)} · {formatTime(task.updated_at)}
                         </p>
                       </button>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="mt-3 text-sm text-slate-500">No research tasks saved yet.</p>
-                )}
+                    ))
+                  ) : (
+                    <p className="text-sm text-slate-500">No research tasks saved yet.</p>
+                  )}
+                </div>
               </div>
             </div>
-          </SectionCard>
-        </div>
+          </Panel>
 
-        <aside className="space-y-6">
-          <SectionCard
-            eyebrow="Builder Memory"
-            title="Saved context Builder Core can reuse"
-            description="This is where saved memory, latest summaries, and storage notes stay visible so the assistant and prompt builder can improve over time."
+          <Panel
+            title="Builder Memory"
+            subtitle="Project memory, assistant memory, latest summary, and command history."
           >
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                <p className="font-semibold text-slate-900">Storage status</p>
-                <p className="mt-2">
-                  {memoryData?.storage_message ?? systemStatus?.memory_storage_message ?? "Storage status unavailable."}
+            {memoryError ? (
+              <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {memoryError}
+              </div>
+            ) : null}
+            <div className="grid gap-4 xl:grid-cols-2">
+              <ListBlock
+                title="Project Memory"
+                items={(memoryData?.project_memory ?? []).map((item) => item.note || item.command)}
+                emptyText="No project memory saved yet."
+              />
+              <ListBlock
+                title="Assistant Memory"
+                items={(memoryData?.assistant_memory ?? []).map((item) => item.note || item.command)}
+                emptyText="No assistant memory saved yet."
+              />
+              <ListBlock
+                title="Chat History"
+                items={(memoryData?.chat_history ?? []).map((item) => `${titleCase(item.role)}: ${item.message}`)}
+                emptyText="No chat history saved yet."
+              />
+              <ListBlock
+                title="Cloud Ready Notes"
+                items={memoryData?.cloud_ready_notes}
+                emptyText="No cloud-ready notes saved yet."
+              />
+            </div>
+            {memoryData?.latest_summary ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-900">Latest Saved Summary</p>
+                <p className="mt-3 text-sm text-slate-700">
+                  {memoryData.latest_summary.message || "No summary message saved."}
                 </p>
+                <ListBlock
+                  title="Completed"
+                  items={memoryData.latest_summary.what_completed}
+                  emptyText="No completed items saved."
+                />
+                <ListBlock
+                  title="Still Needs Manual Setup"
+                  items={memoryData.latest_summary.what_still_needs_manual_setup}
+                  emptyText="No manual setup items saved."
+                />
               </div>
+            ) : null}
+          </Panel>
 
-              <TaskSummaryPanel summary={memoryData?.latest_summary} />
-              <MemoryList
-                title="Project memory"
-                items={memoryData?.project_memory}
-                emptyText="No project memory entries were saved yet."
-              />
-              <MemoryList
-                title="Assistant memory"
-                items={memoryData?.assistant_memory}
-                emptyText="No assistant memory was saved yet."
-              />
-              <ListPanel title="Cloud-ready notes" items={memoryData?.cloud_ready_notes ?? systemStatus?.cloud_ready_notes} />
-              <ListPanel title="Known environment problems" items={memoryData?.known_environment_problems} />
-            </div>
-          </SectionCard>
-
-          <SectionCard
-            eyebrow="Project Learning"
-            title="Lessons, issues, and structure summary"
-            description="Builder Core learns from saved history and summaries. It does not train a real AI model."
+          <Panel
+            title="Project Learning"
+            subtitle="Lessons, known issues, structure summary, and recommended next steps. This is not AI model training."
           >
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Recent lessons</p>
-                {learningData?.lessons && learningData.lessons.length > 0 ? (
-                  <div className="mt-3 space-y-3">
-                    {learningData.lessons.map((lesson) => (
-                      <div key={lesson.id} className="rounded-2xl bg-white px-4 py-4">
-                        <p className="font-medium text-slate-900">{lesson.command ?? "Saved lesson"}</p>
-                        <p className="mt-1 text-sm text-slate-700">{lesson.lesson_learned}</p>
-                        {lesson.next_recommendation && (
-                          <p className="mt-2 text-sm text-emerald-700">Next: {lesson.next_recommendation}</p>
-                        )}
-                        <p className="mt-2 text-xs text-slate-500">{formatTimestamp(lesson.created_at)}</p>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="mt-3 text-sm text-slate-500">No lessons saved yet.</p>
+            {learningError ? (
+              <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {learningError}
+              </div>
+            ) : null}
+            <div className="grid gap-4 xl:grid-cols-2">
+              <ListBlock
+                title="Lessons"
+                items={(learningData?.lessons ?? []).map(
+                  (lesson) => `${lesson.command ?? "Saved task"}: ${lesson.lesson_learned ?? "No lesson text"}`,
                 )}
-              </div>
-
-              <ListPanel title="Known issues" items={learningData?.known_issues} />
-              <ListPanel title="Recommended next steps" items={learningData?.recommended_next_steps} />
-              <ListPanel
-                title="Project structure sample"
-                items={learningData?.project_structure_summary?.sample_tree}
+                emptyText="No lessons saved yet."
+              />
+              <ListBlock
+                title="Known Issues"
+                items={learningData?.known_issues}
+                emptyText="No known issues saved yet."
+              />
+              <ListBlock
+                title="Recommended Next Steps"
+                items={learningData?.recommended_next_steps}
+                emptyText="No recommended next steps returned."
+              />
+              <ListBlock
+                title="Recent Intelligence Modes"
+                items={learningData?.recent_intelligence_modes}
+                emptyText="No intelligence modes saved yet."
               />
             </div>
-          </SectionCard>
+            <ListBlock
+              title="Project Structure Sample"
+              items={learningData?.project_structure_summary?.sample_tree}
+              emptyText="Project structure summary is not available yet."
+            />
+          </Panel>
 
-          <SectionCard
-            eyebrow="Self-Improvement Notes"
-            title="Memory-based improvement, not AI training"
-            description="Builder Core can save what worked, what failed, repeated preferences, and better future instructions so the next reply or prompt can improve."
+          <Panel
+            title="Self-Improvement"
+            subtitle="Builder Core can remember what worked, what failed, and how future instructions should improve."
           >
-            <form className="space-y-4" onSubmit={handleSaveImprovementNote}>
-              <textarea
-                value={manualImprovementNote}
-                onChange={(event) => setManualImprovementNote(event.target.value)}
-                rows={4}
-                placeholder="Save a preference, a lesson, or a note about what should improve next..."
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+            <div className="grid gap-4 xl:grid-cols-2">
+              <ListBlock
+                title="Recent Notes"
+                items={(selfImprovementData?.items ?? []).map(
+                  (item) => item.next_recommended_improvement || item.project_lesson || item.what_worked,
+                )}
+                emptyText="No self-improvement notes saved yet."
               />
-              <button
-                type="submit"
-                disabled={savingImprovement || backendStatus !== "online"}
-                className={
-                  savingImprovement || backendStatus !== "online"
-                    ? "rounded-2xl border border-slate-200 bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-400"
-                    : "rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800"
-                }
-              >
-                {savingImprovement ? "Saving..." : "Save Improvement Note"}
-              </button>
-              {improvementMessage && (
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                  {improvementMessage}
-                </div>
-              )}
-            </form>
+              <ListBlock
+                title="System Notes"
+                items={selfImprovementData?.notes}
+                emptyText="No self-improvement notes returned."
+              />
+            </div>
+            <KeyValue
+              label="Next Recommended Upgrade"
+              value={selfImprovementData?.next_recommended_upgrade ?? "No recommendation returned."}
+            />
+          </Panel>
 
-            {selfImprovementData?.next_recommended_upgrade && (
-              <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-                Next recommended upgrade: {selfImprovementData.next_recommended_upgrade}
+          <Panel
+            title="Latest Codex Prompt"
+            subtitle="See the latest saved manual prompt even when the main chat has moved on."
+          >
+            {latestPrompt ? (
+              <div className="space-y-4">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <KeyValue label="Task / Command ID" value={latestPrompt.task_id ?? "unknown"} />
+                  <KeyValue label="Workflow" value={titleCase(latestPrompt.workflow ?? latestPrompt.status ?? "prompt_ready")} />
+                  <KeyValue label="Created" value={formatTime(latestPrompt.created_at)} />
+                  <KeyValue label="Command" value={latestPrompt.command ?? "No command saved."} />
+                </div>
+                <CodePromptBox
+                  prompt={latestPrompt.prompt}
+                  onCopy={() => {
+                    if (latestPrompt.prompt) {
+                      void copyText(latestPrompt.prompt, "Latest Codex prompt copied.");
+                    }
+                  }}
+                  copyLabel="Copy Latest Prompt"
+                />
               </div>
+            ) : (
+              <p className="text-sm text-slate-500">No saved Codex prompt yet.</p>
             )}
-
-            <div className="mt-4 space-y-3">
-              {selfImprovementData?.items && selfImprovementData.items.length > 0 ? (
-                selfImprovementData.items.map((item) => (
-                  <div key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="font-medium text-slate-900">{item.user_message ?? "Saved improvement note"}</p>
-                    <p className="mt-2 text-sm text-slate-700">{item.project_lesson ?? item.what_worked}</p>
-                    {item.next_recommended_improvement && (
-                      <p className="mt-2 text-sm text-emerald-700">
-                        Next: {item.next_recommended_improvement}
-                      </p>
-                    )}
-                    {item.repeated_user_preferences && item.repeated_user_preferences.length > 0 && (
-                      <ListPanel title="Repeated preferences" items={item.repeated_user_preferences} />
-                    )}
-                    <p className="mt-2 text-xs text-slate-500">{formatTimestamp(item.created_at)}</p>
-                  </div>
-                ))
-              ) : (
-                <p className="text-sm text-slate-500">No self-improvement notes saved yet.</p>
-              )}
-            </div>
-          </SectionCard>
-
-          <SectionCard
-            eyebrow="Install"
-            title="Open Builder Core on phone"
-            description="No App Store needed. Use the browser install flow and keep this link handy."
-          >
-            <div className="space-y-4 text-sm text-slate-700">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">iPhone</p>
-                <p className="mt-2">Open in Safari, tap Share, then Add to Home Screen.</p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Android</p>
-                <p className="mt-2">Open in Chrome, tap the menu, then Install app or Add to Home screen.</p>
-              </div>
-              <div className="flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  onClick={handleOpenAppLink}
-                  className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white"
-                >
-                  Open App Link
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCopyAppLink}
-                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800"
-                >
-                  Copy App Link
-                </button>
-              </div>
-              {installMessage && <p className="text-sm text-slate-600">{installMessage}</p>}
-              {activeBridgeStatus && (
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="font-semibold text-slate-900">Bridge status</p>
-                  <p className="mt-2 text-sm text-slate-700">
-                    {activeBridgeStatus.message ?? "Bridge status not available."}
-                  </p>
-                  <ListPanel title="Missing bridge configuration" items={activeBridgeStatus.missing} />
-                </div>
-              )}
-            </div>
-          </SectionCard>
-        </aside>
+          </Panel>
+        </section>
       </div>
     </main>
   );
