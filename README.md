@@ -1,12 +1,13 @@
 # Builder Core
 
-Builder Core is now a Codex Prompt Command Center. It creates a real backend task, generates a strong Codex prompt, lets the user copy that prompt into Codex manually, then stores the pasted Codex result back into project memory and lessons.
+Builder Core is a manual Codex Prompt Command Center with an Intelligence Center. It helps the user turn one command into a safer research plan, a stronger Codex prompt, saved project memory, and reusable lessons.
 
 ## Repo Folder Used
 - `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
 
 ## Files Changed In This Upgrade
 - `backend/app/main.py`
+- `backend/app/intelligence.py`
 - `backend/app/prompt_builder.py`
 - `backend/app/storage.py`
 - `backend/app/learning.py`
@@ -16,129 +17,154 @@ Builder Core is now a Codex Prompt Command Center. It creates a real backend tas
 - `COMMAND_CENTER.md`
 - `PROJECT_PROGRESS.md`
 
-## New Main Workflow
-1. User enters a command in Builder Core.
-2. Builder Core calls `POST /prompts/codex`.
-3. Backend creates a real task and generates a Codex prompt.
-4. Frontend shows the prompt in a copy box.
-5. User copies the prompt into Codex manually.
-6. Codex changes the repo outside Builder Core.
-7. User pastes Codex’s final summary back into Builder Core.
-8. Builder Core saves that summary into task history, memory, latest summary, and lessons.
+## What Changed
+- Added an Intelligence Center for:
+  - safe research
+  - law and policy planning
+  - market analysis
+  - exam planning
+  - forecasting
+  - language learning
+  - video transcript learning
+  - self-improvement memory
+- Added backend intelligence endpoints:
+  - `POST /intelligence/plan`
+  - `GET /intelligence`
+- Extended `POST /prompts/codex` so each generated prompt includes intelligence context, a safety firewall, memory signals, and learning signals.
+- Extended storage so Builder Core now saves:
+  - latest intelligence brief
+  - intelligence history
+  - prompt history
+  - latest summary
+- Extended learning so pasted Codex summaries can carry intelligence mode context into lessons.
+- Rebuilt the frontend page so the Intelligence Center is a first-class part of the manual Codex workflow.
+
+## Main Workflow
+1. User enters one command.
+2. Builder Core creates an intelligence brief and a tracked task.
+3. Builder Core generates a Codex prompt.
+4. User copies the prompt into Codex manually.
+5. Codex makes repo changes outside Builder Core.
+6. User pastes Codex's final summary back into Builder Core.
+7. Builder Core saves:
+   - task history
+   - memory entries
+   - latest summary
+   - lesson learned
+   - next recommended step
 
 ## Why This Is Safer
-- Builder Core does not pretend to change GitHub automatically.
-- The user stays in control of the repo change step.
-- Memory, learning, and task history are still real.
-- Bridge status remains honest about missing GitHub or Codex credentials.
+- Builder Core does not pretend to edit GitHub automatically.
+- The user remains in control of the actual repo-change step.
+- Legal, market, forecasting, and transcript work stays structured and honest.
+- The app keeps memory and learning without claiming it trained a real AI model.
 
 ## What Is Real Now
-- `POST /prompts/codex` creates a real task and real saved prompt.
-- `GET /prompts/latest` returns the latest generated prompt.
-- `POST /tasks/{task_id}/codex-summary` saves the pasted Codex result back into the backend.
-- `GET /memory` returns memory, latest prompt, and latest summary.
-- `GET /learning` returns lessons, known issues, recommended next steps, and project structure summary.
-- The old backend task system, bridge status, storage, and learning remain in place.
+- real intelligence brief generation
+- real prompt generation
+- real task ID creation
+- real prompt storage
+- real intelligence history storage
+- real Codex summary storage
+- real project memory updates
+- real learning lesson creation
+- real latest summary updates
 
 ## What Is Still Manual
-- Copying the generated prompt into Codex
-- Running Codex against the repo
-- Pasting Codex’s final summary back into Builder Core
+- copying the generated prompt into Codex
+- running Codex
+- reviewing what Codex changed
+- pasting Codex's summary back into Builder Core
 
-## What Still Needs Real Credentials Later
-- real GitHub write automation
+## What Is Still Disabled
+- real GitHub automatic repo editing
 - real Codex execution from the backend
-- real fully automatic deploy flow
+- real automatic deployment control
 
-No real GitHub automatic execution is part of the main workflow right now.
+No real repo changes can happen from Builder Core alone until bridge credentials and a real executor are added.
+
+## Intelligence Center Modes
+- Safe Research
+- Law and Policy Planning
+- Market Analysis
+- Exam Planning
+- Forecasting
+- Language Learning
+- Video Transcript Learning
+- Self-Improvement Memory
+
+## Safety Firewall
+The Intelligence Center adds explicit guardrails:
+- do not invent sources, legal conclusions, or market data
+- do not imply Builder Core replaced a qualified professional
+- separate verified facts from assumptions
+- keep manual verification steps visible
+- stay honest about missing context
 
 ## Backend Endpoints
 
-### Prompt workflow
+### Intelligence and prompt flow
+- `POST /intelligence/plan`
+- `GET /intelligence`
 - `POST /prompts/codex`
 - `GET /prompts/latest`
 - `POST /tasks/{task_id}/codex-summary`
 
-### Existing status, memory, and learning
+### Existing task, memory, and learning routes kept
 - `GET /system/status`
 - `GET /tasks`
 - `GET /tasks/{task_id}`
+- `POST /tasks`
 - `GET /memory`
 - `POST /memory`
 - `GET /learning`
 - `POST /learning/scan`
 
-### Existing builder routes still kept
-- `POST /chat`
-- `POST /plan`
-- `GET /projects`
-- `POST /projects`
-- `GET /history`
-- `GET /project-files`
-- `GET /run-info`
-
-## Storage Added And Used
+## Storage Used Today
 
 ### Task history
-- Local fallback: `backend/runtime_data/automation_tasks.json`
-- Stores:
-  - task ID
-  - command
-  - status
-  - stage
-  - progress
-  - generated prompt
-  - pasted Codex summary
-  - files changed
-  - known issues
-  - summary
+- `backend/runtime_data/automation_tasks.json`
 
-### Project memory and latest summary
-- Local fallback: `backend/runtime_data/project_memory.json`
-- Stores:
-  - memory entries
-  - latest prompt
-  - prompt history
-  - latest summary
-  - latest bridge status
-  - lessons
-  - project structure summary
+### Project memory, prompt history, intelligence history, and latest summary
+- `backend/runtime_data/project_memory.json`
 
-### File storage
-- Local fallback metadata: `backend/runtime_data/storage_files.json`
-- Local fallback files: `backend/runtime_data/storage_files/`
+### File metadata
+- `backend/runtime_data/storage_files.json`
 
-## Cloud Storage Foundation
-- Firestore-ready task abstraction still exists
-- GCS-ready file abstraction still exists
-- Local JSON fallback remains active until cloud configuration is enabled
+### Local file fallback
+- `backend/runtime_data/storage_files/`
 
-Important:
-- Cloud Run local storage is temporary.
-- This fallback is good for development and MVP use, but later it should move to Firestore, Cloud SQL, Supabase, or another persistent database.
+## Storage Limits On Cloud Run
+This local JSON storage works for development and fallback use, but Cloud Run local storage is temporary.
+
+Future upgrade options:
+- Firestore
+- Cloud SQL
+- Supabase
+- another persistent database or hosted store
 
 ## Learning System
 
 ### What it can do now
 - remember commands
-- remember prompt generation history
+- remember prompt history
+- remember intelligence briefs
 - remember pasted Codex summaries
 - extract likely files changed
-- extract what was completed
-- extract what still remains
-- create a lesson
-- recommend a next step
+- extract likely completed work
+- extract likely remaining setup
+- create lessons
+- recommend next steps
 
 ### What it cannot do yet
 - train a custom AI model
-- automatically understand all repo semantics
-- automatically apply Codex changes
+- execute Codex automatically
+- modify GitHub automatically
+- guarantee perfect parsing of every pasted summary
 
-Builder Core is learning from project history, not training a new AI model.
+Builder Core is learning from project history and saved summaries. It is not training a new AI model.
 
 ## Required Environment Variables
-Builder Core reads these on the backend:
-
 - `FIRESTORE_ENABLED=false`
 - `GCP_PROJECT_ID=`
 - `GCS_BUCKET_NAME=`
@@ -151,7 +177,7 @@ Builder Core reads these on the backend:
 - `FRONTEND_URL=https://builder-core-frontend-599596796788.us-central1.run.app`
 - `BACKEND_URL=https://builder-core-599596796788.us-central1.run.app`
 
-## Local Run
+## Run Locally
 
 ### Backend
 ```powershell
@@ -167,13 +193,14 @@ npm run dev
 ```
 
 ## Deploy
-- Keep backend and frontend deployed separately on Cloud Run.
+- Backend and frontend stay as separate Cloud Run services.
 - Backend entrypoint remains `backend/app/main.py` exporting `app`.
-- Frontend still uses `API_BASE` and the current PWA setup.
+- Frontend still uses the existing `API_BASE` flow.
+- No new secrets were added to the frontend.
 
 ## Legal And Safety Note
 - Write original repo-specific code
 - Do not copy external copyrighted code
 - Do not add secrets to the frontend
 - Do not fake GitHub, Codex, or deployment success
-- Keep the manual Codex workflow explicit and honest
+- Keep research and expert-style planning honest and limited

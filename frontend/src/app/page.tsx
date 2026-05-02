@@ -27,10 +27,48 @@ type BridgeStatus = {
   branch?: string;
 };
 
+type IntelligenceFirewall = {
+  risk_level?: string;
+  blocked?: boolean;
+  message?: string;
+  do?: string[];
+  do_not?: string[];
+  manual_limits?: string[];
+};
+
+type IntelligenceBrief = {
+  id?: string;
+  command?: string;
+  project_name?: string;
+  mode?: string;
+  title?: string;
+  overview?: string;
+  status_message?: string;
+  safety_firewall?: IntelligenceFirewall;
+  research_steps?: string[];
+  evidence_checklist?: string[];
+  next_questions?: string[];
+  codex_focus?: string[];
+  output_outline?: string[];
+  memory_signals?: string[];
+  lesson_signals?: string[];
+  recent_summary_note?: string;
+  recommended_memory_note?: string;
+  created_at?: string;
+};
+
+type SupportedMode = {
+  id: string;
+  title: string;
+  overview: string;
+};
+
 type SystemStatusResponse = {
   status?: string;
   service?: string;
   manual_codex_mode?: boolean;
+  intelligence_center_enabled?: boolean;
+  supported_intelligence_modes?: SupportedMode[];
   bridge_status?: BridgeStatus;
   task_storage_backend?: string;
   task_storage_message?: string;
@@ -38,6 +76,7 @@ type SystemStatusResponse = {
   memory_storage_message?: string;
   latest_summary_available?: boolean;
   latest_prompt_available?: boolean;
+  latest_intelligence_available?: boolean;
 };
 
 type TaskSummary = {
@@ -67,6 +106,8 @@ type TaskRecord = {
   progress: number;
   generated_prompt?: string | null;
   codex_summary?: string | null;
+  intelligence_mode?: string | null;
+  intelligence_brief?: IntelligenceBrief | null;
   logs?: string[];
   errors?: string[];
   summary?: TaskSummary | null;
@@ -82,7 +123,6 @@ type TaskRecord = {
 
 type LatestPromptResponse = {
   ok?: boolean;
-  message?: string;
   item?: {
     task_id?: string;
     command?: string;
@@ -97,6 +137,7 @@ type PromptCreateResponse = {
   task_id: string;
   prompt: string;
   status: string;
+  intelligence_brief?: IntelligenceBrief;
 };
 
 type MemoryEntry = {
@@ -106,6 +147,7 @@ type MemoryEntry = {
   command?: string;
   project_name?: string;
   created_at?: string;
+  mode?: string;
 };
 
 type MemoryResponse = {
@@ -128,6 +170,8 @@ type MemoryResponse = {
     status?: string;
     created_at?: string;
   }[];
+  latest_intelligence_brief?: IntelligenceBrief | null;
+  intelligence_history?: IntelligenceBrief[];
   latest_bridge_status?: BridgeStatus | null;
   known_environment_problems?: string[];
 };
@@ -140,6 +184,7 @@ type Lesson = {
   next_recommendation?: string;
   files_changed?: string[];
   error?: string | null;
+  intelligence_mode?: string;
   created_at?: string;
 };
 
@@ -148,12 +193,23 @@ type LearningResponse = {
   lessons?: Lesson[];
   known_issues?: string[];
   recommended_next_steps?: string[];
+  recent_intelligence_modes?: string[];
   project_structure_summary?: {
     root?: string;
     top_level_folders?: string[];
     important_files?: string[];
     sample_tree?: string[];
   } | null;
+  notes?: string[];
+};
+
+type IntelligenceResponse = {
+  ok?: boolean;
+  latest_brief?: IntelligenceBrief | null;
+  intelligence_history?: IntelligenceBrief[];
+  supported_modes?: SupportedMode[];
+  storage_backend?: string;
+  storage_message?: string;
   notes?: string[];
 };
 
@@ -185,12 +241,49 @@ function titleCaseStage(stage?: string | null) {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+function titleCaseMode(mode?: string | null) {
+  if (!mode) {
+    return "Unknown";
+  }
+
+  return mode
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
 async function parseJsonSafe<T>(response: Response): Promise<T | null> {
   try {
     return (await response.json()) as T;
   } catch {
     return null;
   }
+}
+
+function InfoList({
+  title,
+  items,
+}: {
+  title: string;
+  items: string[] | undefined;
+}) {
+  const safeItems = items?.filter(Boolean) ?? [];
+
+  return (
+    <div className="rounded-2xl bg-slate-50 p-4">
+      <p className="font-semibold text-slate-900">{title}</p>
+      {safeItems.length > 0 ? (
+        <ul className="mt-3 space-y-2 text-sm text-slate-700">
+          {safeItems.map((item, index) => (
+            <li key={`${title}-${index}`} className="rounded-xl bg-white px-3 py-2">
+              {item}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-3 text-sm text-slate-500">Nothing saved yet.</p>
+      )}
+    </div>
+  );
 }
 
 export default function Home() {
@@ -206,6 +299,7 @@ export default function Home() {
   const [recentTasks, setRecentTasks] = useState<TaskRecord[]>([]);
   const [memoryData, setMemoryData] = useState<MemoryResponse | null>(null);
   const [learningData, setLearningData] = useState<LearningResponse | null>(null);
+  const [intelligenceData, setIntelligenceData] = useState<IntelligenceResponse | null>(null);
   const [submitMessage, setSubmitMessage] = useState("");
   const [copyMessage, setCopyMessage] = useState("");
   const [installMessage, setInstallMessage] = useState("");
@@ -213,6 +307,13 @@ export default function Home() {
   const [savingSummary, setSavingSummary] = useState(false);
 
   const activeBridgeStatus = currentTask?.bridge_status ?? systemStatus?.bridge_status ?? null;
+  const activeIntelligenceBrief =
+    currentTask?.intelligence_brief ??
+    intelligenceData?.latest_brief ??
+    memoryData?.latest_intelligence_brief ??
+    null;
+  const supportedModes =
+    intelligenceData?.supported_modes ?? systemStatus?.supported_intelligence_modes ?? [];
 
   async function loadSystemStatus() {
     try {
@@ -280,6 +381,19 @@ export default function Home() {
     }
   }
 
+  async function loadIntelligence() {
+    try {
+      const response = await fetch(`${API_BASE}/intelligence`);
+      const data = await parseJsonSafe<IntelligenceResponse>(response);
+      if (!response.ok || !data) {
+        throw new Error("Intelligence request failed.");
+      }
+      setIntelligenceData(data);
+    } catch {
+      setIntelligenceData(null);
+    }
+  }
+
   async function loadLatestPrompt() {
     try {
       const response = await fetch(`${API_BASE}/prompts/latest`);
@@ -324,6 +438,7 @@ export default function Home() {
       loadRecentTasks(),
       loadMemory(),
       loadLearning(),
+      loadIntelligence(),
       loadLatestPrompt(),
     ]);
   }, []);
@@ -377,12 +492,30 @@ export default function Home() {
       setCurrentTaskId(data.task_id);
       setGeneratedPrompt(data.prompt);
       setCodexSummaryInput("");
-      setSubmitMessage("Codex prompt generated. Copy it into Codex, let Codex do the repo work, then paste Codex’s final summary back here.");
-      await Promise.all([loadTask(data.task_id), loadMemory(), loadLearning(), loadRecentTasks(), loadSystemStatus()]);
-    } catch (error) {
       setSubmitMessage(
-        error instanceof Error ? error.message : "Prompt generation failed.",
+        "Codex prompt generated. Copy it into Codex, let Codex do the repo work, then paste Codex's final summary back here.",
       );
+      if (data.intelligence_brief) {
+        setIntelligenceData((previous) => ({
+          ok: true,
+          latest_brief: data.intelligence_brief,
+          intelligence_history: previous?.intelligence_history ?? [],
+          supported_modes: previous?.supported_modes ?? supportedModes,
+          storage_backend: previous?.storage_backend,
+          storage_message: previous?.storage_message,
+          notes: previous?.notes,
+        }));
+      }
+      await Promise.all([
+        loadTask(data.task_id),
+        loadMemory(),
+        loadLearning(),
+        loadIntelligence(),
+        loadRecentTasks(),
+        loadSystemStatus(),
+      ]);
+    } catch (error) {
+      setSubmitMessage(error instanceof Error ? error.message : "Prompt generation failed.");
     } finally {
       setSubmitting(false);
     }
@@ -409,7 +542,7 @@ export default function Home() {
 
     const codexSummary = codexSummaryInput.trim();
     if (!codexSummary) {
-      setSubmitMessage("Paste Codex’s final summary before saving.");
+      setSubmitMessage("Paste Codex's final summary before saving.");
       return;
     }
 
@@ -436,11 +569,16 @@ export default function Home() {
       }
 
       setSubmitMessage("Codex summary saved. Builder Core updated project memory and learning.");
-      await Promise.all([loadTask(currentTaskId), loadMemory(), loadLearning(), loadRecentTasks(), loadSystemStatus()]);
+      await Promise.all([
+        loadTask(currentTaskId),
+        loadMemory(),
+        loadLearning(),
+        loadIntelligence(),
+        loadRecentTasks(),
+        loadSystemStatus(),
+      ]);
     } catch (error) {
-      setSubmitMessage(
-        error instanceof Error ? error.message : "Saving Codex summary failed.",
-      );
+      setSubmitMessage(error instanceof Error ? error.message : "Saving Codex summary failed.");
     } finally {
       setSavingSummary(false);
     }
@@ -466,7 +604,7 @@ export default function Home() {
           <div>
             <h1 className="text-xl font-semibold text-slate-950 sm:text-2xl">Builder Core</h1>
             <p className="text-sm text-slate-500">
-              Codex Prompt Command Center for manual repo changes with saved memory and lessons.
+              Codex Prompt Command Center with an Intelligence Center for safe research and memory-building.
             </p>
           </div>
 
@@ -487,6 +625,9 @@ export default function Home() {
             <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
               Mode: Manual Codex
             </span>
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+              Intelligence Center: {systemStatus?.intelligence_center_enabled ? "Ready" : "Loading"}
+            </span>
           </div>
         </div>
       </div>
@@ -494,10 +635,31 @@ export default function Home() {
       <div className="mx-auto grid max-w-6xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)] lg:px-8">
         <section className="space-y-6">
           <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Intelligence Center</p>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">
+              Safe research, law, markets, exams, forecasting, languages, transcripts, and memory
+            </h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Builder Core can structure research and planning safely, but it does not pretend to replace a lawyer,
+              analyst, teacher, or licensed expert. It helps you create a safer plan and a stronger Codex prompt.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {supportedModes.map((mode) => (
+                <span
+                  key={mode.id}
+                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700"
+                >
+                  {mode.title}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Main Workflow</p>
             <h2 className="mt-2 text-lg font-semibold text-slate-950">Generate a Codex prompt</h2>
             <p className="mt-2 text-sm text-slate-600">
-              Builder Core does not automatically edit GitHub yet. Copy this prompt into Codex, let Codex make the changes, then paste Codex’s final summary back here.
+              Builder Core does not automatically edit GitHub yet. Copy this prompt into Codex, let Codex make the changes, then paste Codex's final summary back here.
             </p>
 
             <form className="mt-5 space-y-4" onSubmit={handleGeneratePrompt}>
@@ -510,8 +672,8 @@ export default function Home() {
                     id="command"
                     value={commandInput}
                     onChange={(event) => setCommandInput(event.target.value)}
-                    placeholder="Tell Builder Core what to build, fix, or upgrade..."
-                    rows={5}
+                    placeholder="Tell Builder Core what to build, fix, upgrade, research, plan, or learn..."
+                    rows={6}
                     className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
                   />
                 </div>
@@ -557,6 +719,59 @@ export default function Home() {
             </form>
           </div>
 
+          {activeIntelligenceBrief && (
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Intelligence Brief</p>
+                  <h2 className="mt-2 text-lg font-semibold text-slate-950">{activeIntelligenceBrief.title}</h2>
+                </div>
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+                  Mode: {titleCaseMode(activeIntelligenceBrief.mode)}
+                </span>
+              </div>
+
+              <p className="mt-3 text-sm text-slate-600">{activeIntelligenceBrief.overview}</p>
+
+              <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-900">
+                <p className="font-semibold">Safety Firewall</p>
+                <p className="mt-2">{activeIntelligenceBrief.safety_firewall?.message}</p>
+                <p className="mt-2 text-xs uppercase tracking-[0.2em] text-amber-700">
+                  Risk: {activeIntelligenceBrief.safety_firewall?.risk_level ?? "unknown"}
+                </p>
+              </div>
+
+              <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                <InfoList title="Research Steps" items={activeIntelligenceBrief.research_steps} />
+                <InfoList title="Evidence Checklist" items={activeIntelligenceBrief.evidence_checklist} />
+                <InfoList title="Next Questions" items={activeIntelligenceBrief.next_questions} />
+                <InfoList title="Codex Focus" items={activeIntelligenceBrief.codex_focus} />
+                <InfoList title="Do" items={activeIntelligenceBrief.safety_firewall?.do} />
+                <InfoList title="Do Not" items={activeIntelligenceBrief.safety_firewall?.do_not} />
+              </div>
+
+              <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <p className="font-semibold text-slate-900">Memory Signals</p>
+                  <ul className="mt-3 space-y-2 text-sm text-slate-700">
+                    {(activeIntelligenceBrief.memory_signals ?? []).map((item, index) => (
+                      <li key={`memory-signal-${index}`} className="rounded-xl bg-white px-3 py-2">
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <p className="font-semibold text-slate-900">Recommended Memory Note</p>
+                  <p className="mt-3 text-sm text-slate-700">{activeIntelligenceBrief.recommended_memory_note}</p>
+                  <p className="mt-3 text-xs text-slate-500">
+                    Saved: {formatTimestamp(activeIntelligenceBrief.created_at)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
@@ -581,9 +796,9 @@ export default function Home() {
             <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                 <span>Task ID: {currentTaskId || "Not created yet"}</span>
-                <span>·</span>
+                <span>|</span>
                 <span>Status: {currentTask?.status ?? "waiting"}</span>
-                <span>·</span>
+                <span>|</span>
                 <span>Stage: {titleCaseStage(currentTask?.stage ?? currentTask?.current_stage)}</span>
               </div>
 
@@ -605,7 +820,7 @@ export default function Home() {
               value={codexSummaryInput}
               onChange={(event) => setCodexSummaryInput(event.target.value)}
               rows={10}
-              placeholder="Paste Codex’s final summary or implementation report here..."
+              placeholder="Paste Codex's final summary or implementation report here..."
               className="mt-4 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
             />
             <div className="mt-4 flex flex-col gap-3 sm:flex-row">
@@ -622,7 +837,7 @@ export default function Home() {
                 {savingSummary ? "Saving..." : "Save Codex Summary"}
               </button>
               <p className="text-sm text-slate-500">
-                Saving the summary updates task history, project memory, latest summary, and learning lessons.
+                Saving the summary updates task history, project memory, lessons, known issues, and the latest summary.
               </p>
             </div>
           </div>
@@ -640,7 +855,7 @@ export default function Home() {
                     </span>
                   </div>
                   <p className="mt-2 text-sm text-slate-600">
-                    {titleCaseStage(currentTask.stage ?? currentTask.current_stage)} · {currentTask.progress}%
+                    {titleCaseStage(currentTask.stage ?? currentTask.current_stage)} | {currentTask.progress}%
                   </p>
                   <div className="mt-3 h-3 rounded-full bg-slate-200">
                     <div
@@ -656,28 +871,9 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <div className="rounded-2xl bg-slate-50 p-4">
-                    <p className="font-semibold text-slate-900">Logs</p>
-                    <ul className="mt-3 space-y-2 text-sm text-slate-700">
-                      {(currentTask.logs ?? []).map((log, index) => (
-                        <li key={`${log}-${index}`} className="rounded-xl bg-white px-3 py-2">
-                          {log}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  <div className="rounded-2xl bg-slate-50 p-4">
-                    <p className="font-semibold text-slate-900">Errors / Known Issues</p>
-                    <ul className="mt-3 space-y-2 text-sm text-slate-700">
-                      {[...(currentTask.errors ?? []), ...(currentTask.known_issues ?? [])].map((item, index) => (
-                        <li key={`${item}-${index}`} className="rounded-xl bg-white px-3 py-2">
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <InfoList title="Logs" items={currentTask.logs} />
+                  <InfoList title="Errors and Known Issues" items={[...(currentTask.errors ?? []), ...(currentTask.known_issues ?? [])]} />
                 </div>
 
                 <div className="rounded-2xl bg-slate-50 p-4">
@@ -685,23 +881,12 @@ export default function Home() {
                   {currentTask.summary ? (
                     <div className="mt-3 space-y-3 text-sm text-slate-700">
                       <p>{currentTask.summary.message}</p>
-                      <div className="grid gap-4 lg:grid-cols-2">
-                        <div className="rounded-xl bg-white p-3">
-                          <p className="font-medium text-slate-900">What completed</p>
-                          <ul className="mt-2 space-y-2">
-                            {(currentTask.summary.what_completed ?? []).map((item, index) => (
-                              <li key={`${item}-${index}`}>{item}</li>
-                            ))}
-                          </ul>
-                        </div>
-                        <div className="rounded-xl bg-white p-3">
-                          <p className="font-medium text-slate-900">Still needs manual setup</p>
-                          <ul className="mt-2 space-y-2">
-                            {(currentTask.summary.what_still_needs_manual_setup ?? []).map((item, index) => (
-                              <li key={`${item}-${index}`}>{item}</li>
-                            ))}
-                          </ul>
-                        </div>
+                      <div className="grid gap-4 xl:grid-cols-2">
+                        <InfoList title="What completed" items={currentTask.summary.what_completed} />
+                        <InfoList
+                          title="Still needs manual setup"
+                          items={currentTask.summary.what_still_needs_manual_setup}
+                        />
                       </div>
                       <p className="text-xs text-slate-500">
                         Updated: {formatTimestamp(currentTask.summary.updated_at)}
@@ -759,20 +944,28 @@ export default function Home() {
                 <p className="font-semibold text-slate-900">Backend message</p>
                 <p className="mt-2">{activeBridgeStatus?.message ?? "Bridge status not loaded yet."}</p>
               </div>
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Why this mode is safer</p>
-                <ul className="mt-2 space-y-2">
-                  <li>Builder Core tracks the task and context.</li>
-                  <li>You review and paste the prompt into Codex manually.</li>
-                  <li>No fake GitHub or Codex automation is claimed.</li>
-                  <li>Project memory and lessons still improve after each task.</li>
-                </ul>
-              </div>
+              <InfoList title="Bridge notes" items={activeBridgeStatus?.notes} />
               <div className="rounded-2xl bg-slate-50 p-4">
                 <p className="font-semibold text-slate-900">Still disabled</p>
                 <p className="mt-2">Real GitHub automatic execution remains disabled in the main workflow.</p>
               </div>
             </div>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Latest Intelligence</p>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">Current mode snapshot</h2>
+            {activeIntelligenceBrief ? (
+              <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-700">
+                <p className="font-semibold text-slate-900">{activeIntelligenceBrief.title}</p>
+                <p className="mt-2">{activeIntelligenceBrief.status_message}</p>
+                <p className="mt-2 text-xs text-slate-500">
+                  Saved: {formatTimestamp(activeIntelligenceBrief.created_at)}
+                </p>
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-slate-500">No intelligence brief has been generated yet.</p>
+            )}
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -799,6 +992,7 @@ export default function Home() {
                 <li key={entry.id} className="rounded-2xl bg-slate-50 p-4">
                   <p className="font-medium text-slate-900">{entry.type ?? "memory"}</p>
                   <p className="mt-1">{entry.note ?? entry.command ?? "Saved memory entry"}</p>
+                  {entry.mode && <p className="mt-2 text-xs text-slate-500">Mode: {titleCaseMode(entry.mode)}</p>}
                   <p className="mt-2 text-xs text-slate-500">{formatTimestamp(entry.created_at)}</p>
                 </li>
               ))}
@@ -809,31 +1003,15 @@ export default function Home() {
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Learning</p>
             <h2 className="mt-2 text-lg font-semibold text-slate-950">Lessons and next steps</h2>
             <div className="mt-4 space-y-4">
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Known issues</p>
-                <ul className="mt-2 space-y-2 text-sm text-slate-700">
-                  {(learningData?.known_issues ?? []).slice(0, 6).map((issue, index) => (
-                    <li key={`${issue}-${index}`} className="rounded-xl bg-white px-3 py-2">
-                      {issue}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Recommended next steps</p>
-                <ul className="mt-2 space-y-2 text-sm text-slate-700">
-                  {(learningData?.recommended_next_steps ?? []).slice(0, 6).map((item, index) => (
-                    <li key={`${item}-${index}`} className="rounded-xl bg-white px-3 py-2">
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
+              <InfoList title="Known issues" items={learningData?.known_issues} />
+              <InfoList title="Recommended next steps" items={learningData?.recommended_next_steps} />
+              <InfoList
+                title="Recent intelligence modes"
+                items={(learningData?.recent_intelligence_modes ?? []).map((mode) => titleCaseMode(mode))}
+              />
               <div className="rounded-2xl bg-slate-50 p-4">
                 <p className="font-semibold text-slate-900">Latest lessons</p>
-                <ul className="mt-2 space-y-3 text-sm text-slate-700">
+                <ul className="mt-3 space-y-3 text-sm text-slate-700">
                   {(learningData?.lessons ?? []).slice(0, 5).map((lesson) => (
                     <li key={lesson.id} className="rounded-xl bg-white px-3 py-3">
                       <p className="font-medium text-slate-900">{lesson.command ?? "Task lesson"}</p>
@@ -858,7 +1036,7 @@ export default function Home() {
                     <div className="min-w-0">
                       <p className="truncate font-semibold text-slate-900">{task.command}</p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {task.id} · {task.status} · {formatTimestamp(task.updated_at)}
+                        {task.id} | {task.status} | {formatTimestamp(task.updated_at)}
                       </p>
                     </div>
                     <button

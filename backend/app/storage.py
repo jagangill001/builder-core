@@ -38,6 +38,8 @@ class ProjectStorageService:
                     "latest_summary": None,
                     "latest_prompt": None,
                     "prompt_history": [],
+                    "latest_intelligence_brief": None,
+                    "intelligence_history": [],
                     "latest_bridge_status": None,
                     "known_environment_problems": [],
                     "lessons": [],
@@ -52,6 +54,8 @@ class ProjectStorageService:
                 "latest_summary": None,
                 "latest_prompt": None,
                 "prompt_history": [],
+                "latest_intelligence_brief": None,
+                "intelligence_history": [],
                 "latest_bridge_status": None,
                 "known_environment_problems": [],
                 "lessons": [],
@@ -66,6 +70,8 @@ class ProjectStorageService:
                 "latest_summary": None,
                 "latest_prompt": None,
                 "prompt_history": [],
+                "latest_intelligence_brief": None,
+                "intelligence_history": [],
                 "latest_bridge_status": None,
                 "known_environment_problems": [],
                 "lessons": [],
@@ -76,6 +82,8 @@ class ProjectStorageService:
         payload.setdefault("latest_summary", None)
         payload.setdefault("latest_prompt", None)
         payload.setdefault("prompt_history", [])
+        payload.setdefault("latest_intelligence_brief", None)
+        payload.setdefault("intelligence_history", [])
         payload.setdefault("latest_bridge_status", None)
         payload.setdefault("known_environment_problems", [])
         payload.setdefault("lessons", [])
@@ -96,6 +104,7 @@ class ProjectStorageService:
             "lesson_count": len(payload.get("lessons", [])),
             "has_latest_summary": payload.get("latest_summary") is not None,
             "has_latest_prompt": payload.get("latest_prompt") is not None,
+            "has_latest_intelligence_brief": payload.get("latest_intelligence_brief") is not None,
         }
 
     def save_project_memory(self, entry: dict[str, Any]) -> dict[str, Any]:
@@ -153,6 +162,29 @@ class ProjectStorageService:
         with self.lock:
             payload = self._read_payload()
         return payload.get("prompt_history", [])[:limit]
+
+    def save_latest_intelligence_brief(self, brief_record: dict[str, Any]) -> dict[str, Any]:
+        with self.lock:
+            payload = self._read_payload()
+            saved_record = {
+                **brief_record,
+                "saved_at": utc_now_iso(),
+            }
+            payload["latest_intelligence_brief"] = saved_record
+            payload["intelligence_history"].insert(0, saved_record)
+            payload["intelligence_history"] = payload["intelligence_history"][:100]
+            self._write_payload(payload)
+        return saved_record
+
+    def get_latest_intelligence_brief(self) -> Optional[dict[str, Any]]:
+        with self.lock:
+            payload = self._read_payload()
+        return payload.get("latest_intelligence_brief")
+
+    def get_intelligence_history(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self.lock:
+            payload = self._read_payload()
+        return payload.get("intelligence_history", [])[:limit]
 
     def save_latest_bridge_status(self, bridge_status: dict[str, Any]) -> dict[str, Any]:
         with self.lock:

@@ -15,6 +15,7 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 try:
     from app.bridge import BridgeService
+    from app.intelligence import build_intelligence_brief, get_supported_modes
     from app.learning import LearningService
     from app.prompt_builder import (
         build_acceptance_checks,
@@ -28,6 +29,7 @@ try:
     from app.tasks import BackendTaskRunner
 except ImportError:
     from bridge import BridgeService
+    from intelligence import build_intelligence_brief, get_supported_modes
     from learning import LearningService
     from prompt_builder import (
         build_acceptance_checks,
@@ -196,6 +198,10 @@ class CodexPromptRequest(BaseModel):
     command: str
     project_name: Optional[str] = "Builder Core"
 
+class IntelligencePlanRequest(BaseModel):
+    command: str
+    project_name: Optional[str] = "Builder Core"
+
 class CodexSummaryRequest(BaseModel):
     codex_summary: str
 
@@ -226,6 +232,14 @@ def get_prompt_generation_context() -> dict[str, Any]:
         "memory": memory,
         "lessons": lessons,
         "known_issues": known_issues,
+    }
+
+
+def get_intelligence_generation_context() -> dict[str, Any]:
+    return {
+        "project_memory": project_storage_service.get_project_memory(12),
+        "lessons": learning_service.get_lessons(12),
+        "latest_summary": project_storage_service.get_latest_summary(),
     }
 
 
@@ -284,6 +298,35 @@ def build_manual_codex_summary(task: dict[str, Any], codex_summary: str, extract
         "known_issues": known_issues,
         "updated_at": utc_now_iso(),
     }
+
+
+def create_saved_intelligence_brief(command: str, project_name: str) -> dict[str, Any]:
+    intelligence_context = get_intelligence_generation_context()
+    brief = build_intelligence_brief(
+        command=command,
+        project_memory=intelligence_context["project_memory"],
+        lessons=intelligence_context["lessons"],
+        latest_summary=intelligence_context["latest_summary"],
+    )
+
+    saved_brief = project_storage_service.save_latest_intelligence_brief(
+        {
+            **brief,
+            "project_name": project_name,
+        }
+    )
+    project_storage_service.save_project_memory(
+        {
+            "type": "intelligence_brief",
+            "project_name": project_name,
+            "command": command,
+            "note": brief["recommended_memory_note"],
+            "mode": brief["mode"],
+            "brief_id": brief["id"],
+            "risk_level": brief["safety_firewall"].get("risk_level"),
+        }
+    )
+    return saved_brief
 
 def safe_name(value: str) -> str:
     return value.strip().replace(" ", "_").replace("-", "_").lower()
@@ -1413,12 +1456,14 @@ def create_codex_prompt(payload: CodexPromptRequest):
         raise HTTPException(status_code=400, detail="Command is empty.")
 
     prompt_context = get_prompt_generation_context()
+    intelligence_brief = create_saved_intelligence_brief(command, project_name)
     prompt = build_manual_codex_prompt(
         command=command,
         project_context=prompt_context["project_context"],
         memory=prompt_context["memory"],
         lessons=prompt_context["lessons"],
         known_issues=prompt_context["known_issues"],
+        intelligence_brief=intelligence_brief,
     )
 
     bridge_status = bridge_service.build_bridge_status_payload()
@@ -1437,6 +1482,8 @@ def create_codex_prompt(payload: CodexPromptRequest):
         bridge_status=bridge_status,
         files_changed=[],
         generated_prompt=prompt,
+        intelligence_mode=intelligence_brief.get("mode"),
+        intelligence_brief=intelligence_brief,
     )
 
     prompt_record = {
@@ -1463,6 +1510,7 @@ def create_codex_prompt(payload: CodexPromptRequest):
         "task_id": task["id"],
         "prompt": prompt,
         "status": "prompt_ready",
+        "intelligence_brief": intelligence_brief,
     }
 
 @app.get("/prompts/latest")
@@ -1478,6 +1526,40 @@ def get_latest_prompt():
     return {
         "ok": True,
         "item": latest_prompt,
+    }
+
+
+@app.post("/intelligence/plan")
+def create_intelligence_plan(payload: IntelligencePlanRequest):
+    command = payload.command.strip()
+    project_name = normalize_project_name(payload.project_name)
+
+    if not command:
+        raise HTTPException(status_code=400, detail="Command is empty.")
+
+    brief = create_saved_intelligence_brief(command, project_name)
+    return {
+        "ok": True,
+        "brief": brief,
+        "supported_modes": get_supported_modes(),
+        "storage_backend": project_storage_service.storage_backend,
+        "storage_message": project_storage_service.storage_message,
+    }
+
+
+@app.get("/intelligence")
+def get_intelligence():
+    return {
+        "ok": True,
+        "latest_brief": project_storage_service.get_latest_intelligence_brief(),
+        "intelligence_history": project_storage_service.get_intelligence_history(12),
+        "supported_modes": get_supported_modes(),
+        "storage_backend": project_storage_service.storage_backend,
+        "storage_message": project_storage_service.storage_message,
+        "notes": [
+            "Builder Core structures research and planning safely.",
+            "It does not claim to replace a lawyer, analyst, teacher, or other licensed expert.",
+        ],
     }
 
 @app.post("/tasks")
@@ -1583,6 +1665,7 @@ def save_codex_summary(task_id: str, payload: CodexSummaryRequest):
             "command": task.get("command"),
             "project_name": task.get("project_name", "Builder Core"),
             "note": "Saved a manual Codex summary for this Builder Core task.",
+            "mode": task.get("intelligence_mode"),
             "codex_summary": codex_summary,
             "files_changed": extracted.get("files_changed", []),
             "known_issues": extracted.get("known_issues", []),
@@ -1686,6 +1769,8 @@ def get_memory():
         "latest_summary": project_storage_service.get_latest_summary(),
         "latest_prompt": project_storage_service.get_latest_prompt(),
         "prompt_history": project_storage_service.get_prompt_history(10),
+        "latest_intelligence_brief": project_storage_service.get_latest_intelligence_brief(),
+        "intelligence_history": project_storage_service.get_intelligence_history(10),
         "latest_bridge_status": project_storage_service.get_latest_bridge_status(),
         "known_environment_problems": project_storage_service.get_known_environment_problems(),
     }
@@ -1887,6 +1972,8 @@ def system_status():
         "status": "ok",
         "service": "Builder Core",
         "manual_codex_mode": True,
+        "intelligence_center_enabled": True,
+        "supported_intelligence_modes": get_supported_modes(),
         "bridge_status": bridge_service.build_bridge_status_payload(),
         "task_storage_backend": automation_task_service.storage_backend,
         "task_storage_message": automation_task_service.storage_message,
@@ -1896,6 +1983,7 @@ def system_status():
         "file_storage_message": file_storage_service.storage_message,
         "latest_summary_available": project_storage_service.get_latest_summary() is not None,
         "latest_prompt_available": project_storage_service.get_latest_prompt() is not None,
+        "latest_intelligence_available": project_storage_service.get_latest_intelligence_brief() is not None,
         "project_structure_scanned": project_storage_service.get_project_structure_summary() is not None,
         "legal_safe_prompting": {
             "summary_requirements": build_summary_requirements(),

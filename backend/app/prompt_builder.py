@@ -63,6 +63,8 @@ def build_summary_requirements() -> list[str]:
 def build_acceptance_checks() -> list[str]:
     return [
         "Backend: GET /system/status",
+        "Backend: POST /intelligence/plan",
+        "Backend: GET /intelligence",
         "Backend: POST /prompts/codex",
         "Backend: GET /prompts/latest",
         "Backend: POST /tasks/{task_id}/codex-summary",
@@ -81,6 +83,7 @@ def build_codex_prompt(
     memory: list[dict[str, Any]],
     lessons: list[dict[str, Any]],
     known_issues: list[str] | None = None,
+    intelligence_brief: dict[str, Any] | None = None,
 ) -> str:
     memory_lines = _format_memory(memory)
     lesson_lines = _format_lessons(lessons)
@@ -121,6 +124,42 @@ def build_codex_prompt(
                 "",
                 "RECENT PROJECT STRUCTURE SAMPLE:",
                 *[f"- {item}" for item in project_structure.get("sample_tree", [])[:15]],
+            ]
+        )
+
+    if intelligence_brief:
+        firewall = intelligence_brief.get("safety_firewall", {})
+        prompt_lines.extend(
+            [
+                "",
+                "INTELLIGENCE CENTER MODE:",
+                f"- {intelligence_brief.get('title', 'Safe Research')}",
+                f"- Overview: {intelligence_brief.get('overview', 'No overview provided.')}",
+                f"- Status: {intelligence_brief.get('status_message', 'No status message provided.')}",
+                "",
+                "SAFETY FIREWALL:",
+                f"- Risk level: {firewall.get('risk_level', 'moderate')}",
+                *[f"- Do: {item}" for item in firewall.get("do", [])[:6]],
+                *[f"- Do not: {item}" for item in firewall.get("do_not", [])[:6]],
+                *[f"- Manual limit: {item}" for item in firewall.get("manual_limits", [])[:6]],
+                "",
+                "INTELLIGENCE RESEARCH STEPS:",
+                *[f"- {item}" for item in intelligence_brief.get("research_steps", [])[:8]],
+                "",
+                "INTELLIGENCE EVIDENCE CHECKLIST:",
+                *[f"- {item}" for item in intelligence_brief.get("evidence_checklist", [])[:8]],
+                "",
+                "INTELLIGENCE NEXT QUESTIONS:",
+                *[f"- {item}" for item in intelligence_brief.get("next_questions", [])[:8]],
+                "",
+                "INTELLIGENCE OUTPUT OUTLINE:",
+                *[f"- {item}" for item in intelligence_brief.get("output_outline", [])[:8]],
+                "",
+                "INTELLIGENCE MEMORY SIGNALS:",
+                *[f"- {item}" for item in intelligence_brief.get("memory_signals", [])[:6]],
+                "",
+                "INTELLIGENCE LESSON SIGNALS:",
+                *[f"- {item}" for item in intelligence_brief.get("lesson_signals", [])[:6]],
             ]
         )
 

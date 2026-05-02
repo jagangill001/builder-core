@@ -186,6 +186,7 @@ class LearningService:
 
     def record_codex_summary_lesson(self, task: dict[str, Any], codex_summary: str) -> dict[str, Any]:
         extracted = self.extract_codex_summary_details(codex_summary)
+        intelligence_mode = str(task.get("intelligence_mode") or "manual_codex")
         lesson = {
             "task_id": task.get("id"),
             "command": task.get("command"),
@@ -193,10 +194,11 @@ class LearningService:
             "files_changed": extracted["files_changed"],
             "error": extracted["known_issues"][0] if extracted["known_issues"] else None,
             "lesson_learned": (
-                "Builder Core saved a manual Codex summary and turned it into project memory and a reusable lesson."
+                f"Builder Core saved a manual Codex summary from {intelligence_mode} mode and turned it into project memory and a reusable lesson."
             ),
             "next_recommendation": extracted["next_recommendation"],
             "status": task.get("status", "completed_manual_codex"),
+            "intelligence_mode": intelligence_mode,
             "created_at": utc_now_iso(),
         }
         return self.storage.save_lesson(lesson)
@@ -245,6 +247,13 @@ class LearningService:
         if project_structure is None:
             project_structure = self.scan_project_structure()
 
+        intelligence_history = self.storage.get_intelligence_history(12)
+        recent_modes: list[str] = []
+        for item in intelligence_history:
+            mode = str(item.get("mode") or "").strip()
+            if mode and mode not in recent_modes:
+                recent_modes.append(mode)
+
         return {
             "storage_backend": self.storage.storage_backend,
             "storage_message": self.storage.storage_message,
@@ -252,6 +261,7 @@ class LearningService:
             "lessons": self.get_lessons(12),
             "known_issues": self.get_known_issues(),
             "recommended_next_steps": self.get_recommended_next_steps(),
+            "recent_intelligence_modes": recent_modes,
             "notes": [
                 "Builder Core is learning from project history, stored summaries, and file scans.",
                 "It is not training a new AI model in this phase.",

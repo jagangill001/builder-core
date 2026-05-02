@@ -202,6 +202,8 @@ class AutomationTaskService:
             "what_completed",
             "what_remains",
             "next_recommended_step",
+            "intelligence_mode",
+            "intelligence_brief",
         )
 
         for key in text_fields:
@@ -243,6 +245,8 @@ class AutomationTaskService:
         files_changed: Optional[list[str]] = None,
         generated_prompt: Optional[str] = None,
         codex_summary: Optional[str] = None,
+        intelligence_mode: Optional[str] = None,
+        intelligence_brief: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         timestamp = utc_now_iso()
         return {
@@ -267,6 +271,8 @@ class AutomationTaskService:
             "what_completed": [],
             "what_remains": [],
             "next_recommended_step": None,
+            "intelligence_mode": intelligence_mode,
+            "intelligence_brief": intelligence_brief,
             "stage_history": [
                 {
                     "stage": stage,
@@ -300,6 +306,8 @@ class AutomationTaskService:
         files_changed: Optional[list[str]] = None,
         generated_prompt: Optional[str] = None,
         codex_summary: Optional[str] = None,
+        intelligence_mode: Optional[str] = None,
+        intelligence_brief: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         task = self._build_task_record(
             command=command,
@@ -316,6 +324,8 @@ class AutomationTaskService:
             files_changed=files_changed,
             generated_prompt=generated_prompt,
             codex_summary=codex_summary,
+            intelligence_mode=intelligence_mode,
+            intelligence_brief=intelligence_brief,
         )
         created = self.store.create_task(task)
         return self._with_storage_details(created)
