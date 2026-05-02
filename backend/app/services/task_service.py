@@ -195,6 +195,13 @@ class AutomationTaskService:
             "manual_setup",
             "testing_result",
             "deploy_result",
+            "generated_prompt",
+            "codex_summary",
+            "prompt_metadata",
+            "known_issues",
+            "what_completed",
+            "what_remains",
+            "next_recommended_step",
         )
 
         for key in text_fields:
@@ -234,6 +241,8 @@ class AutomationTaskService:
         summary: Optional[dict[str, Any]] = None,
         bridge_status: Optional[dict[str, Any]] = None,
         files_changed: Optional[list[str]] = None,
+        generated_prompt: Optional[str] = None,
+        codex_summary: Optional[str] = None,
     ) -> dict[str, Any]:
         timestamp = utc_now_iso()
         return {
@@ -251,6 +260,13 @@ class AutomationTaskService:
             "summary": summary,
             "bridge_status": bridge_status or {},
             "files_changed": list(files_changed or []),
+            "generated_prompt": generated_prompt,
+            "codex_summary": codex_summary,
+            "prompt_metadata": None,
+            "known_issues": [],
+            "what_completed": [],
+            "what_remains": [],
+            "next_recommended_step": None,
             "stage_history": [
                 {
                     "stage": stage,
@@ -282,6 +298,8 @@ class AutomationTaskService:
         summary: Optional[dict[str, Any]] = None,
         bridge_status: Optional[dict[str, Any]] = None,
         files_changed: Optional[list[str]] = None,
+        generated_prompt: Optional[str] = None,
+        codex_summary: Optional[str] = None,
     ) -> dict[str, Any]:
         task = self._build_task_record(
             command=command,
@@ -296,6 +314,8 @@ class AutomationTaskService:
             summary=summary,
             bridge_status=bridge_status,
             files_changed=files_changed,
+            generated_prompt=generated_prompt,
+            codex_summary=codex_summary,
         )
         created = self.store.create_task(task)
         return self._with_storage_details(created)

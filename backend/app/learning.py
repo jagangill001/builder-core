@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -85,7 +86,7 @@ class LearningService:
         final_status = str(task.get("status", "unknown"))
         bridge_status = task.get("bridge_status") if isinstance(task.get("bridge_status"), dict) else {}
 
-        if final_status == "completed":
+        if final_status.startswith("completed"):
             lesson_learned = "This task completed through the backend task runner and produced a saved summary."
             next_recommendation = summary.get(
                 "next_recommended_step",
@@ -110,6 +111,92 @@ class LearningService:
             "lesson_learned": lesson_learned,
             "next_recommendation": next_recommendation,
             "status": final_status,
+            "created_at": utc_now_iso(),
+        }
+        return self.storage.save_lesson(lesson)
+
+    def extract_codex_summary_details(self, codex_summary: str) -> dict[str, Any]:
+        lines = [line.strip() for line in codex_summary.splitlines() if line.strip()]
+        files_changed: list[str] = []
+        what_completed: list[str] = []
+        what_remains: list[str] = []
+        known_issues: list[str] = []
+
+        section = "completed"
+        file_pattern = re.compile(
+            r"(?:backend|frontend|app|src|docs|tests|[A-Za-z0-9_.-]+)/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:py|tsx|ts|js|json|md|txt|css|mjs)"
+        )
+
+        for raw_line in lines:
+            line = raw_line.lstrip("-*0123456789. ").strip()
+            lowered = line.lower()
+
+            if "file" in lowered and "changed" in lowered:
+                section = "files"
+            elif lowered.startswith("completed") or lowered.startswith("what was completed"):
+                section = "completed"
+                continue
+            elif "remain" in lowered or "manual setup" in lowered or "still needs" in lowered:
+                section = "remaining"
+                continue
+            elif "issue" in lowered or "error" in lowered or "warning" in lowered:
+                section = "issues"
+                continue
+
+            for match in file_pattern.findall(raw_line.replace("\\", "/")):
+                if match not in files_changed:
+                    files_changed.append(match)
+
+            if any(keyword in lowered for keyword in ("error", "failed", "warning", "blocked", "missing")):
+                if line not in known_issues:
+                    known_issues.append(line)
+
+            if section == "files":
+                continue
+
+            if section == "remaining":
+                if line and line not in what_remains:
+                    what_remains.append(line)
+                continue
+
+            if section == "issues":
+                if line and line not in known_issues:
+                    known_issues.append(line)
+                continue
+
+            if line and line not in what_completed:
+                what_completed.append(line)
+
+        if not what_completed:
+            what_completed = lines[:3]
+
+        next_recommendation = (
+            what_remains[0]
+            if what_remains
+            else "Review the saved Codex summary, verify the changed files, and decide the next safe Builder Core task."
+        )
+
+        return {
+            "files_changed": files_changed[:20],
+            "what_completed": what_completed[:12],
+            "what_remains": what_remains[:10],
+            "known_issues": known_issues[:10],
+            "next_recommendation": next_recommendation,
+        }
+
+    def record_codex_summary_lesson(self, task: dict[str, Any], codex_summary: str) -> dict[str, Any]:
+        extracted = self.extract_codex_summary_details(codex_summary)
+        lesson = {
+            "task_id": task.get("id"),
+            "command": task.get("command"),
+            "what_happened": extracted["what_completed"],
+            "files_changed": extracted["files_changed"],
+            "error": extracted["known_issues"][0] if extracted["known_issues"] else None,
+            "lesson_learned": (
+                "Builder Core saved a manual Codex summary and turned it into project memory and a reusable lesson."
+            ),
+            "next_recommendation": extracted["next_recommendation"],
+            "status": task.get("status", "completed_manual_codex"),
             "created_at": utc_now_iso(),
         }
         return self.storage.save_lesson(lesson)

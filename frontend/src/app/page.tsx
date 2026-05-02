@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 const API_BASE = (
   process.env.NEXT_PUBLIC_API_BASE_URL ??
@@ -25,23 +25,19 @@ type BridgeStatus = {
   message?: string;
   repo?: string;
   branch?: string;
-  frontend_url?: string;
-  backend_url?: string;
-  checked_at?: string;
 };
 
 type SystemStatusResponse = {
   status?: string;
   service?: string;
+  manual_codex_mode?: boolean;
   bridge_status?: BridgeStatus;
   task_storage_backend?: string;
   task_storage_message?: string;
   memory_storage_backend?: string;
   memory_storage_message?: string;
-  file_storage_backend?: string;
-  file_storage_message?: string;
   latest_summary_available?: boolean;
-  project_structure_scanned?: boolean;
+  latest_prompt_available?: boolean;
 };
 
 type TaskSummary = {
@@ -57,6 +53,7 @@ type TaskSummary = {
   what_still_needs_manual_setup?: string[];
   next_recommended_step?: string;
   message?: string;
+  codex_summary?: string;
   updated_at?: string;
 };
 
@@ -68,65 +65,46 @@ type TaskRecord = {
   stage?: string;
   current_stage?: string;
   progress: number;
-  github_commit?: string | null;
-  workflow_status?: string | null;
+  generated_prompt?: string | null;
+  codex_summary?: string | null;
   logs?: string[];
   errors?: string[];
   summary?: TaskSummary | null;
   bridge_status?: BridgeStatus;
   files_changed?: string[];
-  stage_history?: {
-    stage: string;
-    status: string;
-    progress: number;
-    timestamp: string;
-    message?: string;
-  }[];
-  config_problems?: string[];
-  manual_setup?: string[];
-  testing_result?: {
-    ok?: boolean;
-    checks?: string[];
-    missing_routes?: string[];
-  } | null;
-  deploy_result?: {
-    summary?: string;
-    next_step?: string;
-    connected?: boolean;
-    deploy_running?: boolean;
-    deploy_succeeded?: boolean;
-    backend_healthy?: boolean;
-    frontend_reachable?: boolean;
-  } | null;
+  known_issues?: string[];
+  what_completed?: string[];
+  what_remains?: string[];
+  next_recommended_step?: string | null;
   created_at?: string;
   updated_at?: string;
-  storage_backend?: string;
-  storage_message?: string;
 };
 
-type TasksListResponse = {
-  items?: TaskRecord[];
-  storage_backend?: string;
-  storage_message?: string;
+type LatestPromptResponse = {
+  ok?: boolean;
+  message?: string;
+  item?: {
+    task_id?: string;
+    command?: string;
+    project_name?: string;
+    status?: string;
+    prompt?: string;
+    created_at?: string;
+  } | null;
 };
 
-type TaskCreateResponse = {
+type PromptCreateResponse = {
   task_id: string;
+  prompt: string;
   status: string;
-  stage?: string;
-  storage_backend?: string;
-  storage_message?: string;
 };
 
 type MemoryEntry = {
   id: string;
   type?: string;
-  project_name?: string;
   note?: string;
-  summary?: unknown;
-  task_id?: string;
   command?: string;
-  status?: string;
+  project_name?: string;
   created_at?: string;
 };
 
@@ -136,6 +114,20 @@ type MemoryResponse = {
   storage_message?: string;
   project_memory?: MemoryEntry[];
   latest_summary?: TaskSummary | null;
+  latest_prompt?: {
+    task_id?: string;
+    command?: string;
+    prompt?: string;
+    status?: string;
+    created_at?: string;
+  } | null;
+  prompt_history?: {
+    task_id?: string;
+    command?: string;
+    prompt?: string;
+    status?: string;
+    created_at?: string;
+  }[];
   latest_bridge_status?: BridgeStatus | null;
   known_environment_problems?: string[];
 };
@@ -144,30 +136,24 @@ type Lesson = {
   id: string;
   task_id?: string;
   command?: string;
-  what_happened?: string[] | string;
-  files_changed?: string[];
-  error?: string | null;
   lesson_learned?: string;
   next_recommendation?: string;
-  status?: string;
+  files_changed?: string[];
+  error?: string | null;
   created_at?: string;
 };
 
 type LearningResponse = {
   ok?: boolean;
-  storage_backend?: string;
-  storage_message?: string;
+  lessons?: Lesson[];
+  known_issues?: string[];
+  recommended_next_steps?: string[];
   project_structure_summary?: {
-    scanned_at?: string;
     root?: string;
     top_level_folders?: string[];
     important_files?: string[];
     sample_tree?: string[];
-    notes?: string[];
   } | null;
-  lessons?: Lesson[];
-  known_issues?: string[];
-  recommended_next_steps?: string[];
   notes?: string[];
 };
 
@@ -199,46 +185,6 @@ function titleCaseStage(stage?: string | null) {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
-function getProgressBarClass(status: string) {
-  if (status === "failed") {
-    return "bg-red-500";
-  }
-
-  if (status === "completed") {
-    return "bg-green-600";
-  }
-
-  return "bg-blue-600";
-}
-
-function getStatusBadgeClass(status: string) {
-  if (status === "completed") {
-    return "border border-green-200 bg-green-50 text-green-700";
-  }
-
-  if (status === "failed") {
-    return "border border-red-200 bg-red-50 text-red-700";
-  }
-
-  if (status === "received") {
-    return "border border-slate-200 bg-slate-50 text-slate-700";
-  }
-
-  return "border border-blue-200 bg-blue-50 text-blue-700";
-}
-
-function getBackendBadgeClass(status: "checking" | "online" | "offline") {
-  if (status === "online") {
-    return "border border-green-200 bg-green-50 text-green-700";
-  }
-
-  if (status === "offline") {
-    return "border border-red-200 bg-red-50 text-red-700";
-  }
-
-  return "border border-slate-200 bg-slate-50 text-slate-600";
-}
-
 async function parseJsonSafe<T>(response: Response): Promise<T | null> {
   try {
     return (await response.json()) as T;
@@ -251,35 +197,24 @@ export default function Home() {
   const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">("checking");
   const [systemStatus, setSystemStatus] = useState<SystemStatusResponse | null>(null);
   const [projects, setProjects] = useState<ProjectItem[]>([]);
-  const [projectName, setProjectName] = useState("Default Project");
+  const [projectName, setProjectName] = useState("Builder Core");
   const [commandInput, setCommandInput] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState("");
-  const [pollError, setPollError] = useState("");
+  const [generatedPrompt, setGeneratedPrompt] = useState("");
   const [currentTaskId, setCurrentTaskId] = useState("");
   const [currentTask, setCurrentTask] = useState<TaskRecord | null>(null);
+  const [codexSummaryInput, setCodexSummaryInput] = useState("");
   const [recentTasks, setRecentTasks] = useState<TaskRecord[]>([]);
   const [memoryData, setMemoryData] = useState<MemoryResponse | null>(null);
   const [learningData, setLearningData] = useState<LearningResponse | null>(null);
-  const [memoryNote, setMemoryNote] = useState("");
-  const [memoryMessage, setMemoryMessage] = useState("");
+  const [submitMessage, setSubmitMessage] = useState("");
+  const [copyMessage, setCopyMessage] = useState("");
   const [installMessage, setInstallMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [savingSummary, setSavingSummary] = useState(false);
 
-  const activeStage = currentTask?.stage ?? currentTask?.current_stage ?? "received";
-  const activeProgress = currentTask?.progress ?? 0;
-  const taskLogs = currentTask?.logs ?? [];
-  const taskErrors = currentTask?.errors ?? [];
-  const bridgeStatus = currentTask?.bridge_status ?? systemStatus?.bridge_status ?? null;
+  const activeBridgeStatus = currentTask?.bridge_status ?? systemStatus?.bridge_status ?? null;
 
-  const isTaskActive = useMemo(() => {
-    if (!currentTask) {
-      return false;
-    }
-
-    return !["completed", "failed"].includes(currentTask.status);
-  }, [currentTask]);
-
-  async function loadSystemStatus(silent = false) {
+  async function loadSystemStatus() {
     try {
       const response = await fetch(`${API_BASE}/system/status`);
       const data = await parseJsonSafe<SystemStatusResponse>(response);
@@ -289,18 +224,9 @@ export default function Home() {
 
       setSystemStatus(data);
       setBackendStatus("online");
-      if (!silent) {
-        setSubmitError("");
-      }
-    } catch (error) {
+    } catch {
       setBackendStatus("offline");
-      if (!silent) {
-        setSubmitError(
-          error instanceof Error
-            ? error.message
-            : "Backend is offline right now.",
-        );
-      }
+      setSystemStatus(null);
     }
   }
 
@@ -310,7 +236,6 @@ export default function Home() {
       const data = (await parseJsonSafe<{ items?: ProjectItem[] }>(response)) ?? {};
       const items = Array.isArray(data.items) ? data.items : [];
       setProjects(items);
-
       if (items.length > 0 && !items.some((item) => item.name === projectName)) {
         setProjectName(items[0].name);
       }
@@ -322,7 +247,7 @@ export default function Home() {
   async function loadRecentTasks() {
     try {
       const response = await fetch(`${API_BASE}/tasks`);
-      const data = (await parseJsonSafe<TasksListResponse>(response)) ?? {};
+      const data = (await parseJsonSafe<{ items?: TaskRecord[] }>(response)) ?? {};
       setRecentTasks(Array.isArray(data.items) ? data.items : []);
     } catch {
       setRecentTasks([]);
@@ -336,7 +261,6 @@ export default function Home() {
       if (!response.ok || !data) {
         throw new Error("Memory request failed.");
       }
-
       setMemoryData(data);
     } catch {
       setMemoryData(null);
@@ -350,48 +274,58 @@ export default function Home() {
       if (!response.ok || !data) {
         throw new Error("Learning request failed.");
       }
-
       setLearningData(data);
     } catch {
       setLearningData(null);
     }
   }
 
-  async function loadTask(taskId: string, silent = false) {
+  async function loadLatestPrompt() {
+    try {
+      const response = await fetch(`${API_BASE}/prompts/latest`);
+      const data = await parseJsonSafe<LatestPromptResponse>(response);
+      if (!response.ok || !data?.ok || !data.item) {
+        return;
+      }
+
+      setGeneratedPrompt(data.item.prompt ?? "");
+      if (data.item.task_id) {
+        setCurrentTaskId(data.item.task_id);
+      }
+      if (data.item.command) {
+        setCommandInput(data.item.command);
+      }
+    } catch {
+      return;
+    }
+  }
+
+  async function loadTask(taskId: string) {
     try {
       const response = await fetch(`${API_BASE}/tasks/${taskId}`);
       const data = await parseJsonSafe<TaskRecord>(response);
       if (!response.ok || !data) {
-        throw new Error("Task polling failed.");
+        throw new Error("Task request failed.");
       }
 
       setCurrentTask(data);
-      setPollError("");
-
-      if (["completed", "failed"].includes(data.status)) {
-        await Promise.all([loadRecentTasks(), loadMemory(), loadLearning(), loadSystemStatus(true)]);
+      if (data.generated_prompt) {
+        setGeneratedPrompt(data.generated_prompt);
       }
-    } catch (error) {
-      if (!silent) {
-        setPollError(
-          error instanceof Error
-            ? error.message
-            : "Task polling failed.",
-        );
-      }
+    } catch {
+      setCurrentTask(null);
     }
   }
 
   useEffect(() => {
-    void Promise.all([loadSystemStatus(), loadProjects(), loadRecentTasks(), loadMemory(), loadLearning()]);
-  }, []);
-
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      void loadSystemStatus(true);
-    }, 15000);
-
-    return () => window.clearInterval(interval);
+    void Promise.all([
+      loadSystemStatus(),
+      loadProjects(),
+      loadRecentTasks(),
+      loadMemory(),
+      loadLearning(),
+      loadLatestPrompt(),
+    ]);
   }, []);
 
   useEffect(() => {
@@ -400,139 +334,115 @@ export default function Home() {
     }
 
     void loadTask(currentTaskId);
-
     const interval = window.setInterval(() => {
-      void loadTask(currentTaskId, true);
-    }, 2500);
+      void loadTask(currentTaskId);
+    }, 5000);
 
     return () => window.clearInterval(interval);
   }, [currentTaskId]);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleGeneratePrompt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const command = commandInput.trim();
     if (!command) {
-      setSubmitError("Enter a command before submitting.");
+      setSubmitMessage("Enter a command first.");
       return;
     }
 
     setSubmitting(true);
-    setSubmitError("");
-    setPollError("");
-    setCurrentTask(null);
+    setSubmitMessage("");
+    setCopyMessage("");
 
     try {
-      const response = await fetch(`${API_BASE}/tasks`, {
+      const response = await fetch(`${API_BASE}/prompts/codex`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
           command,
-          project_name: projectName || "Default Project",
+          project_name: projectName || "Builder Core",
         }),
       });
-      const data = await parseJsonSafe<TaskCreateResponse>(response);
-
-      if (!response.ok || !data?.task_id) {
+      const data = await parseJsonSafe<PromptCreateResponse>(response);
+      if (!response.ok || !data?.task_id || !data.prompt) {
         const errorMessage =
           typeof (data as Record<string, unknown> | null)?.["detail"] === "string"
             ? String((data as Record<string, unknown>)["detail"])
-            : "Task creation failed.";
+            : "Prompt generation failed.";
         throw new Error(errorMessage);
       }
 
-      setCommandInput("");
       setCurrentTaskId(data.task_id);
-      await Promise.all([loadTask(data.task_id), loadRecentTasks(), loadMemory(), loadLearning(), loadSystemStatus(true)]);
+      setGeneratedPrompt(data.prompt);
+      setCodexSummaryInput("");
+      setSubmitMessage("Codex prompt generated. Copy it into Codex, let Codex do the repo work, then paste Codex’s final summary back here.");
+      await Promise.all([loadTask(data.task_id), loadMemory(), loadLearning(), loadRecentTasks(), loadSystemStatus()]);
     } catch (error) {
-      setSubmitError(
-        error instanceof Error
-          ? error.message
-          : "Backend is online, but the task request failed.",
+      setSubmitMessage(
+        error instanceof Error ? error.message : "Prompt generation failed.",
       );
     } finally {
       setSubmitting(false);
     }
   }
 
-  async function handleManualNext() {
+  async function handleCopyPrompt() {
+    if (!generatedPrompt) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(generatedPrompt);
+      setCopyMessage("Prompt copied.");
+    } catch {
+      setCopyMessage("Copy failed. Select the prompt manually.");
+    }
+  }
+
+  async function handleSaveCodexSummary() {
     if (!currentTaskId) {
+      setSubmitMessage("Generate a prompt first so Builder Core has a task ID.");
       return;
     }
 
-    try {
-      const response = await fetch(`${API_BASE}/tasks/${currentTaskId}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          manual_advance: true,
-        }),
-      });
-      const data = await parseJsonSafe<TaskRecord>(response);
-      if (!response.ok || !data) {
-        throw new Error("Manual debug advance failed.");
-      }
-
-      setCurrentTask(data);
-    } catch (error) {
-      setPollError(
-        error instanceof Error ? error.message : "Manual debug advance failed.",
-      );
-    }
-  }
-
-  async function handleSaveMemoryNote() {
-    const note = memoryNote.trim();
-    if (!note) {
+    const codexSummary = codexSummaryInput.trim();
+    if (!codexSummary) {
+      setSubmitMessage("Paste Codex’s final summary before saving.");
       return;
     }
 
+    setSavingSummary(true);
+    setSubmitMessage("");
+
     try {
-      const response = await fetch(`${API_BASE}/memory`, {
+      const response = await fetch(`${API_BASE}/tasks/${currentTaskId}/codex-summary`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          note,
-          category: "manual_note",
-          project_name: projectName || "Builder Core",
+          codex_summary: codexSummary,
         }),
       });
-
-      const data = await parseJsonSafe<{ ok?: boolean }>(response);
+      const data = await parseJsonSafe<{ ok?: boolean; message?: string }>(response);
       if (!response.ok || !data?.ok) {
-        throw new Error("Could not save the memory note.");
+        const errorMessage =
+          typeof (data as Record<string, unknown> | null)?.["detail"] === "string"
+            ? String((data as Record<string, unknown>)["detail"])
+            : data?.message ?? "Saving Codex summary failed.";
+        throw new Error(errorMessage);
       }
 
-      setMemoryNote("");
-      setMemoryMessage("Memory note saved.");
-      await loadMemory();
+      setSubmitMessage("Codex summary saved. Builder Core updated project memory and learning.");
+      await Promise.all([loadTask(currentTaskId), loadMemory(), loadLearning(), loadRecentTasks(), loadSystemStatus()]);
     } catch (error) {
-      setMemoryMessage(
-        error instanceof Error ? error.message : "Could not save the memory note.",
+      setSubmitMessage(
+        error instanceof Error ? error.message : "Saving Codex summary failed.",
       );
-    }
-  }
-
-  async function handleLearningScan() {
-    try {
-      const response = await fetch(`${API_BASE}/learning/scan`, {
-        method: "POST",
-      });
-      if (!response.ok) {
-        throw new Error("Learning scan failed.");
-      }
-
-      await loadLearning();
-    } catch (error) {
-      setMemoryMessage(
-        error instanceof Error ? error.message : "Learning scan failed.",
-      );
+    } finally {
+      setSavingSummary(false);
     }
   }
 
@@ -556,21 +466,26 @@ export default function Home() {
           <div>
             <h1 className="text-xl font-semibold text-slate-950 sm:text-2xl">Builder Core</h1>
             <p className="text-sm text-slate-500">
-              Real backend task tracking, honest bridge checks, project memory, and learning in one place.
+              Codex Prompt Command Center for manual repo changes with saved memory and lessons.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getBackendBadgeClass(backendStatus)}`}>
+            <span
+              className={
+                backendStatus === "online"
+                  ? "rounded-full border border-green-200 bg-green-50 px-3 py-1 text-xs font-semibold text-green-700"
+                  : backendStatus === "offline"
+                    ? "rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700"
+                    : "rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600"
+              }
+            >
               {backendStatus === "checking" && "Backend: Checking..."}
               {backendStatus === "online" && "Backend: Online"}
               {backendStatus === "offline" && "Backend: Offline"}
             </span>
             <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
-              Task Storage: {systemStatus?.task_storage_backend ?? "loading"}
-            </span>
-            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
-              Memory: {systemStatus?.memory_storage_backend ?? "loading"}
+              Mode: Manual Codex
             </span>
           </div>
         </div>
@@ -579,24 +494,13 @@ export default function Home() {
       <div className="mx-auto grid max-w-6xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)] lg:px-8">
         <section className="space-y-6">
           <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Command Center</p>
-                <h2 className="mt-2 text-lg font-semibold text-slate-950">Send one real backend task</h2>
-                <p className="mt-1 text-sm text-slate-600">
-                  Builder Core now creates a real backend task, stores it, runs stage updates in the backend, and returns an honest final summary.
-                </p>
-              </div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Main Workflow</p>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">Generate a Codex prompt</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Builder Core does not automatically edit GitHub yet. Copy this prompt into Codex, let Codex make the changes, then paste Codex’s final summary back here.
+            </p>
 
-              {bridgeStatus && (
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                  <p className="font-semibold text-slate-900">Bridge status</p>
-                  <p className="mt-1">{bridgeStatus.message ?? "Bridge status unavailable."}</p>
-                </div>
-              )}
-            </div>
-
-            <form className="mt-5 space-y-4" onSubmit={handleSubmit}>
+            <form className="mt-5 space-y-4" onSubmit={handleGeneratePrompt}>
               <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_220px]">
                 <div>
                   <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="command">
@@ -606,7 +510,7 @@ export default function Home() {
                     id="command"
                     value={commandInput}
                     onChange={(event) => setCommandInput(event.target.value)}
-                    placeholder="Ask Builder Core to build, fix, inspect, or upgrade something..."
+                    placeholder="Tell Builder Core what to build, fix, or upgrade..."
                     rows={5}
                     className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
                   />
@@ -640,189 +544,176 @@ export default function Home() {
                         : "w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white"
                     }
                   >
-                    {submitting ? "Creating task..." : "Submit Task"}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleManualNext}
-                    disabled={!currentTaskId}
-                    className={
-                      currentTaskId
-                        ? "w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
-                        : "w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-400"
-                    }
-                  >
-                    Manual Next (debug fallback)
+                    {submitting ? "Generating..." : "Generate Codex Prompt"}
                   </button>
                 </div>
               </div>
 
-              {submitError && (
-                <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                  {submitError}
-                </div>
-              )}
-
-              {systemStatus?.task_storage_message && (
+              {submitMessage && (
                 <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
-                  {systemStatus.task_storage_message}
+                  {submitMessage}
                 </div>
               )}
             </form>
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Live Task</p>
-                <h2 className="mt-2 text-lg font-semibold text-slate-950">Backend-controlled progress</h2>
-                <p className="mt-1 text-sm text-slate-600">
-                  Progress comes from backend task stages, not frontend-only timers.
-                </p>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Generated Prompt</p>
+                <h2 className="mt-2 text-lg font-semibold text-slate-950">Copy this into Codex</h2>
               </div>
 
-              {currentTask && (
-                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getStatusBadgeClass(currentTask.status)}`}>
-                  {currentTask.status}
-                </span>
-              )}
+              <button
+                type="button"
+                onClick={handleCopyPrompt}
+                disabled={!generatedPrompt}
+                className={
+                  generatedPrompt
+                    ? "rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+                    : "rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-400"
+                }
+              >
+                Copy Prompt
+              </button>
             </div>
 
-            {currentTask ? (
-              <div className="mt-5 space-y-5">
-                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">{currentTask.command}</p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Task ID: {currentTask.id} · Project: {currentTask.project_name ?? "Default Project"}
-                      </p>
-                    </div>
-                    <div className="text-sm font-medium text-slate-700">
-                      {titleCaseStage(activeStage)} · {activeProgress}%
-                    </div>
-                  </div>
+            <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                <span>Task ID: {currentTaskId || "Not created yet"}</span>
+                <span>·</span>
+                <span>Status: {currentTask?.status ?? "waiting"}</span>
+                <span>·</span>
+                <span>Stage: {titleCaseStage(currentTask?.stage ?? currentTask?.current_stage)}</span>
+              </div>
 
-                  <div className="mt-4 h-3 rounded-full bg-slate-200">
+              <textarea
+                value={generatedPrompt}
+                readOnly
+                rows={18}
+                className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                placeholder="Your generated Codex prompt will appear here."
+              />
+              {copyMessage && <p className="mt-2 text-xs text-slate-600">{copyMessage}</p>}
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Codex Result</p>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">Paste Codex final summary back into Builder Core</h2>
+            <textarea
+              value={codexSummaryInput}
+              onChange={(event) => setCodexSummaryInput(event.target.value)}
+              rows={10}
+              placeholder="Paste Codex’s final summary or implementation report here..."
+              className="mt-4 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+            />
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+              <button
+                type="button"
+                onClick={handleSaveCodexSummary}
+                disabled={savingSummary || !currentTaskId}
+                className={
+                  savingSummary || !currentTaskId
+                    ? "rounded-2xl border border-slate-200 bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-400"
+                    : "rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white"
+                }
+              >
+                {savingSummary ? "Saving..." : "Save Codex Summary"}
+              </button>
+              <p className="text-sm text-slate-500">
+                Saving the summary updates task history, project memory, latest summary, and learning lessons.
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Task Status</p>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">Tracked backend task</h2>
+            {currentTask ? (
+              <div className="mt-4 space-y-4">
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-sm font-semibold text-slate-900">{currentTask.command}</p>
+                    <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
+                      {currentTask.status}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm text-slate-600">
+                    {titleCaseStage(currentTask.stage ?? currentTask.current_stage)} · {currentTask.progress}%
+                  </p>
+                  <div className="mt-3 h-3 rounded-full bg-slate-200">
                     <div
-                      className={`h-3 rounded-full transition-all ${getProgressBarClass(currentTask.status)}`}
-                      style={{ width: `${Math.max(0, Math.min(activeProgress, 100))}%` }}
+                      className={
+                        currentTask.status === "failed"
+                          ? "h-3 rounded-full bg-red-500"
+                          : currentTask.status.startsWith("completed")
+                            ? "h-3 rounded-full bg-green-600"
+                            : "h-3 rounded-full bg-blue-600"
+                      }
+                      style={{ width: `${Math.max(0, Math.min(currentTask.progress, 100))}%` }}
                     />
                   </div>
-
-                  <p className="mt-3 text-sm text-slate-600">
-                    {currentTask.status === "failed"
-                      ? `${titleCaseStage(activeStage)} stopped. Review the errors and summary below.`
-                      : currentTask.status === "completed"
-                        ? "Task complete. Review the final summary and learning notes."
-                        : `${titleCaseStage(activeStage)} in progress...`}
-                  </p>
-
-                  {currentTask.workflow_status && (
-                    <p className="mt-2 text-xs text-slate-500">Workflow: {currentTask.workflow_status}</p>
-                  )}
-                  {currentTask.github_commit && (
-                    <p className="mt-1 text-xs text-slate-500">Latest commit: {currentTask.github_commit}</p>
-                  )}
                 </div>
-
-                {pollError && (
-                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                    {pollError}
-                  </div>
-                )}
 
                 <div className="grid gap-4 lg:grid-cols-2">
-                  <div className="rounded-3xl border border-slate-200 p-4">
-                    <p className="text-sm font-semibold text-slate-900">Live Logs</p>
-                    <div className="mt-3 max-h-72 overflow-y-auto rounded-2xl bg-slate-50 p-3">
-                      {taskLogs.length > 0 ? (
-                        <ul className="space-y-2 text-sm text-slate-700">
-                          {taskLogs.map((log, index) => (
-                            <li key={`${log}-${index}`} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                              {log}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="text-sm text-slate-500">No logs yet.</p>
-                      )}
-                    </div>
+                  <div className="rounded-2xl bg-slate-50 p-4">
+                    <p className="font-semibold text-slate-900">Logs</p>
+                    <ul className="mt-3 space-y-2 text-sm text-slate-700">
+                      {(currentTask.logs ?? []).map((log, index) => (
+                        <li key={`${log}-${index}`} className="rounded-xl bg-white px-3 py-2">
+                          {log}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
 
-                  <div className="rounded-3xl border border-slate-200 p-4">
-                    <p className="text-sm font-semibold text-slate-900">Errors</p>
-                    <div className="mt-3 rounded-2xl bg-slate-50 p-3">
-                      {taskErrors.length > 0 ? (
-                        <ul className="space-y-2 text-sm text-red-700">
-                          {taskErrors.map((error, index) => (
-                            <li key={`${error}-${index}`} className="rounded-xl border border-red-200 bg-red-50 px-3 py-2">
-                              {error}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="text-sm text-slate-500">No errors reported for this task.</p>
-                      )}
-                    </div>
+                  <div className="rounded-2xl bg-slate-50 p-4">
+                    <p className="font-semibold text-slate-900">Errors / Known Issues</p>
+                    <ul className="mt-3 space-y-2 text-sm text-slate-700">
+                      {[...(currentTask.errors ?? []), ...(currentTask.known_issues ?? [])].map((item, index) => (
+                        <li key={`${item}-${index}`} className="rounded-xl bg-white px-3 py-2">
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 </div>
 
-                <div className="rounded-3xl border border-slate-200 p-4">
-                  <p className="text-sm font-semibold text-slate-900">Final Summary</p>
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <p className="font-semibold text-slate-900">Latest saved summary</p>
                   {currentTask.summary ? (
-                    <div className="mt-3 space-y-4 text-sm text-slate-700">
-                      <div className="rounded-2xl bg-slate-50 p-4">
-                        <p className="font-semibold text-slate-900">{currentTask.summary.message ?? "Summary ready."}</p>
-                        <p className="mt-2 text-xs text-slate-500">
-                          Updated: {formatTimestamp(currentTask.summary.updated_at)}
-                        </p>
-                      </div>
-
+                    <div className="mt-3 space-y-3 text-sm text-slate-700">
+                      <p>{currentTask.summary.message}</p>
                       <div className="grid gap-4 lg:grid-cols-2">
-                        <div className="rounded-2xl bg-slate-50 p-4">
-                          <p className="font-semibold text-slate-900">What completed</p>
-                          <ul className="mt-3 space-y-2">
+                        <div className="rounded-xl bg-white p-3">
+                          <p className="font-medium text-slate-900">What completed</p>
+                          <ul className="mt-2 space-y-2">
                             {(currentTask.summary.what_completed ?? []).map((item, index) => (
-                              <li key={`${item}-${index}`} className="rounded-xl bg-white px-3 py-2">
-                                {item}
-                              </li>
+                              <li key={`${item}-${index}`}>{item}</li>
                             ))}
                           </ul>
                         </div>
-
-                        <div className="rounded-2xl bg-slate-50 p-4">
-                          <p className="font-semibold text-slate-900">Manual setup still needed</p>
-                          <ul className="mt-3 space-y-2">
+                        <div className="rounded-xl bg-white p-3">
+                          <p className="font-medium text-slate-900">Still needs manual setup</p>
+                          <ul className="mt-2 space-y-2">
                             {(currentTask.summary.what_still_needs_manual_setup ?? []).map((item, index) => (
-                              <li key={`${item}-${index}`} className="rounded-xl bg-white px-3 py-2">
-                                {item}
-                              </li>
+                              <li key={`${item}-${index}`}>{item}</li>
                             ))}
                           </ul>
                         </div>
                       </div>
-
-                      <div className="rounded-2xl bg-slate-50 p-4">
-                        <p className="font-semibold text-slate-900">Next recommended step</p>
-                        <p className="mt-2">{currentTask.summary.next_recommended_step ?? "No next step recorded yet."}</p>
-                      </div>
-
-                      <div className="rounded-2xl bg-slate-50 p-4">
-                        <p className="font-semibold text-slate-900">Folder used</p>
-                        <p className="mt-2 break-all">{currentTask.summary.folder_used ?? "Unknown"}</p>
-                      </div>
+                      <p className="text-xs text-slate-500">
+                        Updated: {formatTimestamp(currentTask.summary.updated_at)}
+                      </p>
                     </div>
                   ) : (
-                    <p className="mt-3 text-sm text-slate-500">The backend summary will appear here when the task reaches the summary stage.</p>
+                    <p className="mt-2 text-sm text-slate-500">No summary has been saved for this task yet.</p>
                   )}
                 </div>
               </div>
             ) : (
-              <div className="mt-5 rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
-                Submit a command to create a real backend task, then Builder Core will poll its live status here.
-              </div>
+              <p className="mt-4 text-sm text-slate-500">Generate a prompt to create a tracked task.</p>
             )}
           </div>
 
@@ -855,129 +746,75 @@ export default function Home() {
                 Copy App Link
               </button>
             </div>
-            <p className="mt-3 text-sm text-slate-500">No App Store needed.</p>
-            {installMessage && <p className="mt-2 text-sm text-slate-700">{installMessage}</p>}
+            {installMessage && <p className="mt-3 text-sm text-slate-600">{installMessage}</p>}
           </div>
         </section>
 
         <aside className="space-y-6">
           <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">System</p>
-            <h2 className="mt-2 text-lg font-semibold text-slate-950">Backend and bridge</h2>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Bridge Status</p>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">Manual-Codex safety mode</h2>
             <div className="mt-4 space-y-3 text-sm text-slate-700">
               <div className="rounded-2xl bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Backend connection</p>
-                <p className="mt-2">
-                  {backendStatus === "online"
-                    ? "Backend is online."
-                    : backendStatus === "offline"
-                      ? "Backend is offline."
-                      : "Checking backend status..."}
+                <p className="font-semibold text-slate-900">Backend message</p>
+                <p className="mt-2">{activeBridgeStatus?.message ?? "Bridge status not loaded yet."}</p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="font-semibold text-slate-900">Why this mode is safer</p>
+                <ul className="mt-2 space-y-2">
+                  <li>Builder Core tracks the task and context.</li>
+                  <li>You review and paste the prompt into Codex manually.</li>
+                  <li>No fake GitHub or Codex automation is claimed.</li>
+                  <li>Project memory and lessons still improve after each task.</li>
+                </ul>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="font-semibold text-slate-900">Still disabled</p>
+                <p className="mt-2">Real GitHub automatic execution remains disabled in the main workflow.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Latest Summary</p>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">Most recent saved outcome</h2>
+            {memoryData?.latest_summary ? (
+              <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-700">
+                <p className="font-semibold text-slate-900">{memoryData.latest_summary.message}</p>
+                <p className="mt-2">Task: {memoryData.latest_summary.task_id ?? "Unknown"}</p>
+                <p className="mt-2 text-xs text-slate-500">
+                  Updated: {formatTimestamp(memoryData.latest_summary.updated_at)}
                 </p>
               </div>
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Bridge message</p>
-                <p className="mt-2">{bridgeStatus?.message ?? "Bridge status will appear here."}</p>
-                {bridgeStatus?.missing && bridgeStatus.missing.length > 0 && (
-                  <ul className="mt-3 space-y-2 text-xs text-slate-600">
-                    {bridgeStatus.missing.map((item) => (
-                      <li key={item} className="rounded-xl bg-white px-3 py-2">
-                        Missing: {item}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Storage</p>
-                <ul className="mt-2 space-y-2 text-xs text-slate-600">
-                  <li>Tasks: {systemStatus?.task_storage_backend ?? "Unknown"}</li>
-                  <li>Memory: {systemStatus?.memory_storage_backend ?? "Unknown"}</li>
-                  <li>Files: {systemStatus?.file_storage_backend ?? "Unknown"}</li>
-                </ul>
-              </div>
-            </div>
+            ) : (
+              <p className="mt-4 text-sm text-slate-500">No saved summary yet.</p>
+            )}
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Memory</p>
-                <h2 className="mt-2 text-lg font-semibold text-slate-950">Builder memory</h2>
-              </div>
-            </div>
-
-            <div className="mt-4 space-y-4">
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Latest saved task summary</p>
-                {memoryData?.latest_summary ? (
-                  <div className="mt-2 text-sm text-slate-700">
-                    <p>{memoryData.latest_summary.message ?? "Summary available."}</p>
-                    <p className="mt-2 text-xs text-slate-500">
-                      Task: {memoryData.latest_summary.task_id ?? "Unknown"} · {formatTimestamp(memoryData.latest_summary.updated_at)}
-                    </p>
-                  </div>
-                ) : (
-                  <p className="mt-2 text-sm text-slate-500">No saved summary yet.</p>
-                )}
-              </div>
-
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Add a manual project note</p>
-                <textarea
-                  value={memoryNote}
-                  onChange={(event) => setMemoryNote(event.target.value)}
-                  rows={3}
-                  placeholder="Write a short project note or reminder..."
-                  className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
-                />
-                <button
-                  type="button"
-                  onClick={handleSaveMemoryNote}
-                  className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
-                >
-                  Save Memory Note
-                </button>
-                {memoryMessage && <p className="mt-2 text-xs text-slate-600">{memoryMessage}</p>}
-              </div>
-
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Recent memory entries</p>
-                <ul className="mt-3 space-y-2 text-sm text-slate-700">
-                  {(memoryData?.project_memory ?? []).slice(0, 6).map((entry) => (
-                    <li key={entry.id} className="rounded-xl bg-white px-3 py-3">
-                      <p className="font-medium text-slate-900">{entry.type ?? "memory"}</p>
-                      <p className="mt-1">{entry.note ?? entry.command ?? "Saved entry"}</p>
-                      <p className="mt-2 text-xs text-slate-500">{formatTimestamp(entry.created_at)}</p>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Memory</p>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">Project memory</h2>
+            <ul className="mt-4 space-y-3 text-sm text-slate-700">
+              {(memoryData?.project_memory ?? []).slice(0, 6).map((entry) => (
+                <li key={entry.id} className="rounded-2xl bg-slate-50 p-4">
+                  <p className="font-medium text-slate-900">{entry.type ?? "memory"}</p>
+                  <p className="mt-1">{entry.note ?? entry.command ?? "Saved memory entry"}</p>
+                  <p className="mt-2 text-xs text-slate-500">{formatTimestamp(entry.created_at)}</p>
+                </li>
+              ))}
+            </ul>
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Learning</p>
-                <h2 className="mt-2 text-lg font-semibold text-slate-950">Project knowledge</h2>
-              </div>
-              <button
-                type="button"
-                onClick={handleLearningScan}
-                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700"
-              >
-                Scan Project
-              </button>
-            </div>
-
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Learning</p>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">Lessons and next steps</h2>
             <div className="mt-4 space-y-4">
               <div className="rounded-2xl bg-slate-50 p-4">
                 <p className="font-semibold text-slate-900">Known issues</p>
-                <ul className="mt-3 space-y-2 text-sm text-slate-700">
-                  {(learningData?.known_issues ?? memoryData?.known_environment_problems ?? []).slice(0, 6).map((item, index) => (
-                    <li key={`${item}-${index}`} className="rounded-xl bg-white px-3 py-2">
-                      {item}
+                <ul className="mt-2 space-y-2 text-sm text-slate-700">
+                  {(learningData?.known_issues ?? []).slice(0, 6).map((issue, index) => (
+                    <li key={`${issue}-${index}`} className="rounded-xl bg-white px-3 py-2">
+                      {issue}
                     </li>
                   ))}
                 </ul>
@@ -985,7 +822,7 @@ export default function Home() {
 
               <div className="rounded-2xl bg-slate-50 p-4">
                 <p className="font-semibold text-slate-900">Recommended next steps</p>
-                <ul className="mt-3 space-y-2 text-sm text-slate-700">
+                <ul className="mt-2 space-y-2 text-sm text-slate-700">
                   {(learningData?.recommended_next_steps ?? []).slice(0, 6).map((item, index) => (
                     <li key={`${item}-${index}`} className="rounded-xl bg-white px-3 py-2">
                       {item}
@@ -996,11 +833,11 @@ export default function Home() {
 
               <div className="rounded-2xl bg-slate-50 p-4">
                 <p className="font-semibold text-slate-900">Latest lessons</p>
-                <ul className="mt-3 space-y-3 text-sm text-slate-700">
+                <ul className="mt-2 space-y-3 text-sm text-slate-700">
                   {(learningData?.lessons ?? []).slice(0, 5).map((lesson) => (
                     <li key={lesson.id} className="rounded-xl bg-white px-3 py-3">
                       <p className="font-medium text-slate-900">{lesson.command ?? "Task lesson"}</p>
-                      <p className="mt-1">{lesson.lesson_learned ?? "No lesson text recorded yet."}</p>
+                      <p className="mt-1">{lesson.lesson_learned ?? "No lesson saved yet."}</p>
                       {lesson.next_recommendation && (
                         <p className="mt-2 text-xs text-slate-500">Next: {lesson.next_recommendation}</p>
                       )}
@@ -1008,38 +845,12 @@ export default function Home() {
                   ))}
                 </ul>
               </div>
-
-              <div className="rounded-2xl bg-slate-50 p-4">
-                <p className="font-semibold text-slate-900">Project structure summary</p>
-                {learningData?.project_structure_summary ? (
-                  <div className="mt-3 space-y-3 text-sm text-slate-700">
-                    <p>Scanned: {formatTimestamp(learningData.project_structure_summary.scanned_at)}</p>
-                    <div>
-                      <p className="font-medium text-slate-900">Top folders</p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {(learningData.project_structure_summary.top_level_folders ?? []).slice(0, 8).map((item) => (
-                          <span key={item} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700">
-                            {item}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="rounded-xl bg-white p-3 text-xs text-slate-600">
-                      <pre className="overflow-x-auto whitespace-pre-wrap">
-                        {(learningData.project_structure_summary.sample_tree ?? []).slice(0, 20).join("\n")}
-                      </pre>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="mt-2 text-sm text-slate-500">No project scan is saved yet.</p>
-                )}
-              </div>
             </div>
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Recent Tasks</p>
-            <h2 className="mt-2 text-lg font-semibold text-slate-950">Saved task history</h2>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">Prompt history</h2>
             <ul className="mt-4 space-y-3 text-sm text-slate-700">
               {recentTasks.slice(0, 8).map((task) => (
                 <li key={task.id} className="rounded-2xl bg-slate-50 p-4">
@@ -1047,7 +858,7 @@ export default function Home() {
                     <div className="min-w-0">
                       <p className="truncate font-semibold text-slate-900">{task.command}</p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {titleCaseStage(task.stage ?? task.current_stage)} · {task.progress}% · {formatTimestamp(task.updated_at)}
+                        {task.id} · {task.status} · {formatTimestamp(task.updated_at)}
                       </p>
                     </div>
                     <button
@@ -1055,6 +866,7 @@ export default function Home() {
                       onClick={() => {
                         setCurrentTaskId(task.id);
                         void loadTask(task.id);
+                        setGeneratedPrompt(task.generated_prompt ?? "");
                       }}
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
                     >

@@ -3,157 +3,99 @@
 ## Repo Folder Used
 - `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
 
-## What Changed In This Upgrade
-- Builder Core now creates real backend tasks with `POST /tasks`.
-- The backend runs those tasks in the background.
-- The frontend polls task status from `GET /tasks/{task_id}`.
-- Progress is now driven by backend stage updates.
-- Project memory and learning data are stored persistently in local JSON fallback files.
-- GitHub and Codex bridge checks are honest and backend-only.
+## Product Direction
+Builder Core is now a manual Codex Prompt Command Center.
 
-## Files Edited
+That means:
+- Builder Core generates the Codex prompt
+- the user copies it into Codex manually
+- Codex performs the repo work
+- the user pastes Codex’s final summary back into Builder Core
+- Builder Core stores memory and learning from that result
+
+## Files Changed In This Upgrade
 - `backend/app/main.py`
-- `backend/app/tasks.py`
+- `backend/app/prompt_builder.py`
 - `backend/app/storage.py`
-- `backend/app/bridge.py`
 - `backend/app/learning.py`
 - `backend/app/services/task_service.py`
-- `backend/.env.example`
 - `frontend/src/app/page.tsx`
 - `README.md`
 - `COMMAND_CENTER.md`
 - `PROJECT_PROGRESS.md`
 
-## Current Workflow
-1. User enters one command in the frontend.
-2. Frontend calls `POST /tasks`.
-3. Backend creates a persistent task record.
-4. Backend starts the task runner in the background.
-5. Frontend polls `GET /tasks/{task_id}`.
-6. Backend updates stage, progress, logs, errors, and final summary.
-7. Frontend shows real task state, memory, and learning panels.
+## Main Workflow
+1. User enters one command.
+2. Frontend calls `POST /prompts/codex`.
+3. Backend creates a real task and generates a Codex prompt.
+4. Frontend shows the prompt and task ID.
+5. User copies the prompt into Codex manually.
+6. Codex makes the repo changes outside Builder Core.
+7. User pastes Codex’s final summary back into Builder Core.
+8. Frontend calls `POST /tasks/{task_id}/codex-summary`.
+9. Backend saves the summary, updates memory, creates a lesson, and updates the latest summary.
 
-## Current Task Stages
-- `received`
-- `planning`
-- `bridge_check`
-- `codex_working`
-- `testing`
-- `deploy_check`
-- `summary`
-- `completed`
-- `failed`
+## Why This Mode Is Better Right Now
+- safer than pretending the backend already controls GitHub and Codex
+- easy to verify
+- easy to explain
+- still builds real project memory and lessons
 
-## What The Backend Checks During A Task
+## What Was Kept
+- backend task storage
+- task history
+- bridge status
+- memory storage
+- learning storage
+- latest summary storage
+- project structure scan
 
-### Planning
-- records the command
-- builds a simple safe plan
+## What Became Secondary
+- automatic-style backend task runner stages
+- bridge-execution expectations
+- deploy-check style progress as the main product story
 
-### Bridge check
-- checks `GITHUB_TOKEN`
-- checks `GITHUB_REPO`
-- checks `GITHUB_BRANCH`
-- checks `CODEX_API_KEY`
-- checks `CODEX_MODE`
-- records missing configuration honestly
+Those systems still exist, but the main user workflow is now prompt generation plus manual Codex handoff.
 
-### Codex working
-- does **not** fake repo changes
-- if bridge credentials are missing or Codex mode is disabled, Builder Core records that honestly
+## Prompt Content
+The generated prompt now includes:
+- project name
+- repo URL
+- main folders
+- main files
+- user command
+- recent memory
+- recent lessons
+- known issues
+- legal and safety rules
+- testing instructions
+- documentation update instructions
+- final summary requirements
 
-### Testing
-- verifies important backend routes exist
-- verifies task storage works
-- verifies memory storage works
+## New Endpoints
+- `POST /prompts/codex`
+- `GET /prompts/latest`
+- `POST /tasks/{task_id}/codex-summary`
 
-### Deploy check
-- checks GitHub workflow status if the token exists
-- checks backend `/system/status`
-- checks the frontend URL
+## What Is Real Now
+- real prompt generation
+- real task ID creation
+- real prompt storage
+- real Codex summary storage
+- real memory updates
+- real lesson creation
+- real latest summary updates
 
-### Summary
-- saves a final task summary
-- saves a project memory entry
-- saves a learning lesson
+## What Is Still Manual
+- user copies the prompt into Codex
+- user runs Codex
+- user pastes the Codex result back
 
-## Honest Bridge Rule
-If the repo bridge is not ready, Builder Core must say:
-
-`No real repo changes can happen until credentials are added.`
-
-That means:
-- no fake GitHub commit success
-- no fake Codex execution
-- no fake deploy success
-
-## What Is Automatic Now
-- real backend task creation
-- real backend task polling
-- real backend logs
-- real backend errors
-- real final summary generation
-- real saved task history
-- real saved project memory
-- real saved learning lessons
-
-## What Is Still Manual Or Missing
-- real Codex execution
-- real repo commits from the backend
-- real automatic GitHub write actions
-- Firestore as the default storage backend
-- Cloud Storage as the default upload backend
-
-## Cloud-First Architecture
-
-### Cloud Run
-- frontend runtime
-- backend runtime
-
-### Firestore
-Planned long-term home for:
-- tasks
-- commands
-- progress
-- history
-- memory entries
-- lessons
-
-### Cloud Storage
-Planned long-term home for:
-- uploaded files
-- generated files
-
-### Secret Manager
-Recommended home for:
-- `GITHUB_TOKEN`
-- `CODEX_API_KEY`
-- future provider keys
-
-### GitHub
-- source of truth for code
-
-### Laptop And Phone
-- control devices only
-- not long-term storage
-
-## Future Backend Endpoints
-- `POST /automation/tasks`
-- `GET /automation/tasks`
-- `GET /automation/tasks/{id}`
-- `GET /automation/history`
-- `POST /storage/files`
-- `GET /storage/files`
-
-## Local Storage Paths Today
-- Task history: `backend/runtime_data/automation_tasks.json`
-- Memory and latest summary: `backend/runtime_data/project_memory.json`
-- File storage metadata: `backend/runtime_data/storage_files.json`
-
-## Limits Of Current Storage
-- Local files on Cloud Run are temporary.
-- They are fine for development or fallback use.
-- They should be replaced later with Firestore, Cloud SQL, Supabase, or another persistent cloud database.
+## What May Be Automated Later
+- automatic Codex execution after approval
+- automatic GitHub write actions
+- automatic deployment tracking from real credentials
+- Firestore as the default task and memory store
 
 ## Running Locally
 
@@ -170,22 +112,12 @@ npm install
 npm run dev
 ```
 
-## Required Environment Variables
-- `FIRESTORE_ENABLED`
-- `GCP_PROJECT_ID`
-- `GCS_BUCKET_NAME`
-- `GITHUB_TOKEN`
-- `GITHUB_OWNER`
-- `GITHUB_REPO`
-- `GITHUB_BRANCH`
-- `CODEX_API_KEY`
-- `CODEX_MODE`
-- `FRONTEND_URL`
-- `BACKEND_URL`
+## Deploy
+- Backend and frontend remain separate Cloud Run services.
+- Frontend still calls backend using `API_BASE`.
+- No frontend secrets are introduced.
 
-## Legal And Safety Rules
-- Write original code for this repo
-- Do not copy external project code blindly
-- Keep secrets backend-only
-- Keep logs and summary honest
-- Explain missing credentials clearly
+## Important Honesty Rule
+Builder Core does not claim to edit GitHub automatically in this workflow.
+
+If a real repo change depends on missing credentials or a missing executor, Builder Core must stay honest and say so.

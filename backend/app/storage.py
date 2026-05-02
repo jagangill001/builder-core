@@ -36,6 +36,8 @@ class ProjectStorageService:
                 {
                     "project_memory": [],
                     "latest_summary": None,
+                    "latest_prompt": None,
+                    "prompt_history": [],
                     "latest_bridge_status": None,
                     "known_environment_problems": [],
                     "lessons": [],
@@ -48,6 +50,8 @@ class ProjectStorageService:
             return {
                 "project_memory": [],
                 "latest_summary": None,
+                "latest_prompt": None,
+                "prompt_history": [],
                 "latest_bridge_status": None,
                 "known_environment_problems": [],
                 "lessons": [],
@@ -60,6 +64,8 @@ class ProjectStorageService:
             return {
                 "project_memory": [],
                 "latest_summary": None,
+                "latest_prompt": None,
+                "prompt_history": [],
                 "latest_bridge_status": None,
                 "known_environment_problems": [],
                 "lessons": [],
@@ -68,6 +74,8 @@ class ProjectStorageService:
 
         payload.setdefault("project_memory", [])
         payload.setdefault("latest_summary", None)
+        payload.setdefault("latest_prompt", None)
+        payload.setdefault("prompt_history", [])
         payload.setdefault("latest_bridge_status", None)
         payload.setdefault("known_environment_problems", [])
         payload.setdefault("lessons", [])
@@ -87,6 +95,7 @@ class ProjectStorageService:
             "project_memory_count": len(payload.get("project_memory", [])),
             "lesson_count": len(payload.get("lessons", [])),
             "has_latest_summary": payload.get("latest_summary") is not None,
+            "has_latest_prompt": payload.get("latest_prompt") is not None,
         }
 
     def save_project_memory(self, entry: dict[str, Any]) -> dict[str, Any]:
@@ -121,6 +130,29 @@ class ProjectStorageService:
         with self.lock:
             payload = self._read_payload()
         return payload.get("latest_summary")
+
+    def save_latest_prompt(self, prompt_record: dict[str, Any]) -> dict[str, Any]:
+        with self.lock:
+            payload = self._read_payload()
+            saved_record = {
+                **prompt_record,
+                "saved_at": utc_now_iso(),
+            }
+            payload["latest_prompt"] = saved_record
+            payload["prompt_history"].insert(0, saved_record)
+            payload["prompt_history"] = payload["prompt_history"][:100]
+            self._write_payload(payload)
+        return saved_record
+
+    def get_latest_prompt(self) -> Optional[dict[str, Any]]:
+        with self.lock:
+            payload = self._read_payload()
+        return payload.get("latest_prompt")
+
+    def get_prompt_history(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self.lock:
+            payload = self._read_payload()
+        return payload.get("prompt_history", [])[:limit]
 
     def save_latest_bridge_status(self, bridge_status: dict[str, Any]) -> dict[str, Any]:
         with self.lock:

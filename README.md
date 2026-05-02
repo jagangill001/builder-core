@@ -1,66 +1,74 @@
 # Builder Core
 
-Builder Core is a cloud-first AI command center for Builder Core repo work. The frontend sends one command, the backend creates a real tracked task, the task runs through backend-controlled stages, and the UI polls the backend for live logs, errors, and the final summary.
+Builder Core is now a Codex Prompt Command Center. It creates a real backend task, generates a strong Codex prompt, lets the user copy that prompt into Codex manually, then stores the pasted Codex result back into project memory and lessons.
 
 ## Repo Folder Used
 - `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
 
-## Files Edited In This Upgrade
+## Files Changed In This Upgrade
 - `backend/app/main.py`
-- `backend/app/tasks.py`
+- `backend/app/prompt_builder.py`
 - `backend/app/storage.py`
-- `backend/app/bridge.py`
 - `backend/app/learning.py`
 - `backend/app/services/task_service.py`
-- `backend/.env.example`
 - `frontend/src/app/page.tsx`
 - `README.md`
 - `COMMAND_CENTER.md`
 - `PROJECT_PROGRESS.md`
 
-## What Changed
-- Added a real backend task runner with background execution.
-- Added `POST /tasks`, `GET /tasks`, `GET /tasks/{task_id}`, and `PATCH /tasks/{task_id}`.
-- Added persistent local JSON task history with richer task fields such as logs, errors, summary, bridge status, and stage history.
-- Added persistent project memory and learning storage.
-- Added learning endpoints and a project structure scan.
-- Added honest GitHub/Codex bridge checks.
-- Replaced frontend fake progress with backend task polling.
+## New Main Workflow
+1. User enters a command in Builder Core.
+2. Builder Core calls `POST /prompts/codex`.
+3. Backend creates a real task and generates a Codex prompt.
+4. Frontend shows the prompt in a copy box.
+5. User copies the prompt into Codex manually.
+6. Codex changes the repo outside Builder Core.
+7. User pastes Codex’s final summary back into Builder Core.
+8. Builder Core saves that summary into task history, memory, latest summary, and lessons.
+
+## Why This Is Safer
+- Builder Core does not pretend to change GitHub automatically.
+- The user stays in control of the repo change step.
+- Memory, learning, and task history are still real.
+- Bridge status remains honest about missing GitHub or Codex credentials.
 
 ## What Is Real Now
-- Task creation is real and stored by the backend.
-- Task stage, progress, logs, errors, and final summary come from the backend.
-- The frontend polls real backend task state.
-- Project memory is saved to local JSON storage.
-- Learning lessons are saved from completed or failed task runs.
-- Backend deploy health checks are real when URLs are reachable.
-- GitHub workflow checks are real if `GITHUB_TOKEN` is configured.
+- `POST /prompts/codex` creates a real task and real saved prompt.
+- `GET /prompts/latest` returns the latest generated prompt.
+- `POST /tasks/{task_id}/codex-summary` saves the pasted Codex result back into the backend.
+- `GET /memory` returns memory, latest prompt, and latest summary.
+- `GET /learning` returns lessons, known issues, recommended next steps, and project structure summary.
+- The old backend task system, bridge status, storage, and learning remain in place.
 
-## What Is Still Not Real
-- No real Codex repo execution is implemented yet.
-- No real GitHub repo change is performed by the backend.
-- Firestore is not the default task or memory backend yet.
-- Cloud Storage upload flow is still local fallback by default.
+## What Is Still Manual
+- Copying the generated prompt into Codex
+- Running Codex against the repo
+- Pasting Codex’s final summary back into Builder Core
 
-If bridge credentials are missing or Codex is disabled, Builder Core now says so clearly:
+## What Still Needs Real Credentials Later
+- real GitHub write automation
+- real Codex execution from the backend
+- real fully automatic deploy flow
 
-`No real repo changes can happen until credentials are added.`
+No real GitHub automatic execution is part of the main workflow right now.
 
 ## Backend Endpoints
 
-### Core task runner
-- `POST /tasks`
+### Prompt workflow
+- `POST /prompts/codex`
+- `GET /prompts/latest`
+- `POST /tasks/{task_id}/codex-summary`
+
+### Existing status, memory, and learning
+- `GET /system/status`
 - `GET /tasks`
 - `GET /tasks/{task_id}`
-- `PATCH /tasks/{task_id}`
-
-### Memory and learning
 - `GET /memory`
 - `POST /memory`
 - `GET /learning`
 - `POST /learning/scan`
 
-### Existing builder and status routes
+### Existing builder routes still kept
 - `POST /chat`
 - `POST /plan`
 - `GET /projects`
@@ -68,83 +76,80 @@ If bridge credentials are missing or Codex is disabled, Builder Core now says so
 - `GET /history`
 - `GET /project-files`
 - `GET /run-info`
-- `GET /system/status`
-- `GET /automation/github-status`
-- `GET /automation/deploy-status`
-- `POST /storage/files`
-- `GET /storage/files`
-- `GET /storage/files/{id}`
-- `DELETE /storage/files/{id}`
 
-## Storage Added
+## Storage Added And Used
 
 ### Task history
-- Stored through `AutomationTaskService`
-- Local fallback path: `backend/runtime_data/automation_tasks.json`
-- Firestore-ready abstraction remains in place for future production use
+- Local fallback: `backend/runtime_data/automation_tasks.json`
+- Stores:
+  - task ID
+  - command
+  - status
+  - stage
+  - progress
+  - generated prompt
+  - pasted Codex summary
+  - files changed
+  - known issues
+  - summary
 
 ### Project memory and latest summary
-- Stored through `ProjectStorageService`
-- Local path: `backend/runtime_data/project_memory.json`
+- Local fallback: `backend/runtime_data/project_memory.json`
+- Stores:
+  - memory entries
+  - latest prompt
+  - prompt history
+  - latest summary
+  - latest bridge status
+  - lessons
+  - project structure summary
 
-### File storage metadata
-- Stored through `FileStorageService`
-- Local fallback files:
-  - `backend/runtime_data/storage_files.json`
-  - `backend/runtime_data/storage_files/`
+### File storage
+- Local fallback metadata: `backend/runtime_data/storage_files.json`
+- Local fallback files: `backend/runtime_data/storage_files/`
 
-## Limits Of Local Storage On Cloud Run
-- Cloud Run local filesystem storage is temporary.
-- It is useful for development and MVP fallback, but it is not a reliable long-term production database.
-- If the service restarts or scales differently, local files may not be durable.
+## Cloud Storage Foundation
+- Firestore-ready task abstraction still exists
+- GCS-ready file abstraction still exists
+- Local JSON fallback remains active until cloud configuration is enabled
 
-## Future Storage Upgrade Path
-- Firestore: tasks, commands, progress, history, memory entries, lessons
-- Cloud SQL or Supabase: relational project history and richer reporting
-- Google Cloud Storage: uploaded files and generated output files
-- Secret Manager: GitHub token, API keys, future Codex credentials
+Important:
+- Cloud Run local storage is temporary.
+- This fallback is good for development and MVP use, but later it should move to Firestore, Cloud SQL, Supabase, or another persistent database.
 
-## Learning System: What It Can Do Now
-- Scan and summarize project structure
-- Save lessons from successful or failed tasks
-- Save known issues from recent errors
-- Suggest recommended next steps based on project memory and bridge problems
+## Learning System
 
-## Learning System: What It Cannot Do Yet
-- It does not train a custom AI model
-- It does not automatically rewrite the repo
-- It does not understand every file semantically
-- It does not perform autonomous Codex execution
+### What it can do now
+- remember commands
+- remember prompt generation history
+- remember pasted Codex summaries
+- extract likely files changed
+- extract what was completed
+- extract what still remains
+- create a lesson
+- recommend a next step
 
-Learning in this phase means:
-- storing project history
-- recording outcomes
-- summarizing patterns
-- helping the next task start from better context
+### What it cannot do yet
+- train a custom AI model
+- automatically understand all repo semantics
+- automatically apply Codex changes
 
-It does **not** mean training a new AI model.
+Builder Core is learning from project history, not training a new AI model.
 
 ## Required Environment Variables
-Set these in Cloud Run backend settings when you are ready:
+Builder Core reads these on the backend:
 
-### Storage
 - `FIRESTORE_ENABLED=false`
 - `GCP_PROJECT_ID=`
 - `GCS_BUCKET_NAME=`
-
-### Bridge
 - `GITHUB_TOKEN=`
 - `GITHUB_OWNER=jagangill001`
 - `GITHUB_REPO=jagangill001/builder-core`
 - `GITHUB_BRANCH=main`
 - `CODEX_API_KEY=`
 - `CODEX_MODE=disabled`
-
-### Public URLs
 - `FRONTEND_URL=https://builder-core-frontend-599596796788.us-central1.run.app`
 - `BACKEND_URL=https://builder-core-599596796788.us-central1.run.app`
-
-See `backend/.env.example` for the full current template.
 
 ## Local Run
 
@@ -162,15 +167,13 @@ npm run dev
 ```
 
 ## Deploy
-- Backend and frontend remain separate Cloud Run services.
+- Keep backend and frontend deployed separately on Cloud Run.
 - Backend entrypoint remains `backend/app/main.py` exporting `app`.
-- Backend startup remains compatible with:
-  - `uvicorn app.main:app --host 0.0.0.0 --port 8080`
-- Frontend still uses the existing `API_BASE` environment logic and PWA setup.
+- Frontend still uses `API_BASE` and the current PWA setup.
 
 ## Legal And Safety Note
-- Prefer original repo-specific code
-- Avoid copying third-party project code
-- Use licensed frameworks normally
-- Keep GitHub and Codex credentials backend-only
-- Be honest about missing automation or missing credentials
+- Write original repo-specific code
+- Do not copy external copyrighted code
+- Do not add secrets to the frontend
+- Do not fake GitHub, Codex, or deployment success
+- Keep the manual Codex workflow explicit and honest

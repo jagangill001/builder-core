@@ -16,12 +16,26 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 try:
     from app.bridge import BridgeService
     from app.learning import LearningService
+    from app.prompt_builder import (
+        build_acceptance_checks,
+        build_codex_prompt as build_manual_codex_prompt,
+        build_legal_safe_instructions,
+        build_summary_requirements,
+        get_project_context,
+    )
     from app.services import AutomationTaskService, FileStorageService
     from app.storage import ProjectStorageService
     from app.tasks import BackendTaskRunner
 except ImportError:
     from bridge import BridgeService
     from learning import LearningService
+    from prompt_builder import (
+        build_acceptance_checks,
+        build_codex_prompt as build_manual_codex_prompt,
+        build_legal_safe_instructions,
+        build_summary_requirements,
+        get_project_context,
+    )
     from services import AutomationTaskService, FileStorageService
     from storage import ProjectStorageService
     from tasks import BackendTaskRunner
@@ -178,6 +192,13 @@ class MemoryEntryCreate(BaseModel):
     category: Optional[str] = "manual_note"
     project_name: Optional[str] = "Builder Core"
 
+class CodexPromptRequest(BaseModel):
+    command: str
+    project_name: Optional[str] = "Builder Core"
+
+class CodexSummaryRequest(BaseModel):
+    codex_summary: str
+
 class StorageFileCreate(BaseModel):
     filename: str
     content: str
@@ -192,6 +213,77 @@ def model_to_dict(model: BaseModel) -> dict[str, Any]:
         return model.model_dump(exclude_none=True)
 
     return model.dict(exclude_none=True)
+
+
+def get_prompt_generation_context() -> dict[str, Any]:
+    project_structure_summary = project_storage_service.get_project_structure_summary()
+    project_context = get_project_context(project_structure_summary)
+    memory = project_storage_service.get_project_memory(8)
+    lessons = learning_service.get_lessons(8)
+    known_issues = learning_service.get_known_issues()
+    return {
+        "project_context": project_context,
+        "memory": memory,
+        "lessons": lessons,
+        "known_issues": known_issues,
+    }
+
+
+def summarize_stage_history(task: dict[str, Any]) -> list[str]:
+    stage_history = task.get("stage_history")
+    if not isinstance(stage_history, list):
+        return []
+
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for item in stage_history:
+        if not isinstance(item, dict):
+            continue
+
+        stage = str(item.get("stage", "")).strip()
+        if not stage or stage in seen:
+            continue
+
+        ordered.append(stage)
+        seen.add(stage)
+    return ordered
+
+
+def build_manual_codex_summary(task: dict[str, Any], codex_summary: str, extracted: dict[str, Any]) -> dict[str, Any]:
+    task_logs = list(task.get("logs") or [])
+    task_errors = list(task.get("errors") or [])
+    known_issues = extracted.get("known_issues", [])
+    if isinstance(known_issues, list):
+        for item in known_issues:
+            text = str(item).strip()
+            if text and text not in task_errors:
+                task_errors.append(text)
+
+    what_completed = extracted.get("what_completed", [])
+    what_remains = extracted.get("what_remains", [])
+    next_recommended_step = extracted.get(
+        "next_recommendation",
+        "Review the Codex summary and choose the next small Builder Core upgrade.",
+    )
+
+    return {
+        "task_id": task.get("id"),
+        "original_command": task.get("command"),
+        "final_status": "completed_manual_codex",
+        "stages_completed": summarize_stage_history(task) + ["prompt_ready", "summary_received"],
+        "files_changed": extracted.get("files_changed", []),
+        "folder_used": str(REPO_ROOT),
+        "backend_logs": task_logs + ["Codex summary was pasted back into Builder Core."],
+        "errors": task_errors,
+        "what_completed": what_completed,
+        "what_still_needs_manual_setup": what_remains,
+        "next_recommended_step": next_recommended_step,
+        "bridge_status": task.get("bridge_status", {}),
+        "message": "Codex summary saved. Builder Core updated project memory and learning from the manual Codex result.",
+        "codex_summary": codex_summary,
+        "known_issues": known_issues,
+        "updated_at": utc_now_iso(),
+    }
 
 def safe_name(value: str) -> str:
     return value.strip().replace(" ", "_").replace("-", "_").lower()
@@ -1312,6 +1404,82 @@ def get_project_files(project_name: str):
 def get_run_info(project_name: str):
     return build_run_info_payload(project_name)
 
+@app.post("/prompts/codex")
+def create_codex_prompt(payload: CodexPromptRequest):
+    command = payload.command.strip()
+    project_name = normalize_project_name(payload.project_name)
+
+    if not command:
+        raise HTTPException(status_code=400, detail="Command is empty.")
+
+    prompt_context = get_prompt_generation_context()
+    prompt = build_manual_codex_prompt(
+        command=command,
+        project_context=prompt_context["project_context"],
+        memory=prompt_context["memory"],
+        lessons=prompt_context["lessons"],
+        known_issues=prompt_context["known_issues"],
+    )
+
+    bridge_status = bridge_service.build_bridge_status_payload()
+    task = automation_task_service.create_task(
+        command=command,
+        project_name=project_name,
+        status="prompt_ready",
+        current_stage="planning",
+        progress=10,
+        logs=[
+            "Codex prompt generated for manual execution.",
+            "Builder Core is waiting for the user to copy this prompt into Codex.",
+        ],
+        errors=[],
+        summary=None,
+        bridge_status=bridge_status,
+        files_changed=[],
+        generated_prompt=prompt,
+    )
+
+    prompt_record = {
+        "task_id": task["id"],
+        "command": command,
+        "project_name": project_name,
+        "status": "prompt_ready",
+        "prompt": prompt,
+        "created_at": utc_now_iso(),
+    }
+    project_storage_service.save_latest_prompt(prompt_record)
+    project_storage_service.save_project_memory(
+        {
+            "type": "prompt_generated",
+            "task_id": task["id"],
+            "command": command,
+            "project_name": project_name,
+            "note": "Generated a Codex prompt for manual execution.",
+            "prompt_preview": prompt[:500],
+        }
+    )
+
+    return {
+        "task_id": task["id"],
+        "prompt": prompt,
+        "status": "prompt_ready",
+    }
+
+@app.get("/prompts/latest")
+def get_latest_prompt():
+    latest_prompt = project_storage_service.get_latest_prompt()
+    if latest_prompt is None:
+        return {
+            "ok": False,
+            "message": "No Codex prompt has been generated yet.",
+            "item": None,
+        }
+
+    return {
+        "ok": True,
+        "item": latest_prompt,
+    }
+
 @app.post("/tasks")
 def create_task(payload: TaskCreateRequest):
     command = payload.command.strip()
@@ -1360,6 +1528,75 @@ def update_task(task_id: str, payload: TaskUpdateRequest):
         raise HTTPException(status_code=404, detail="Task not found.")
 
     return item
+
+@app.post("/tasks/{task_id}/codex-summary")
+def save_codex_summary(task_id: str, payload: CodexSummaryRequest):
+    codex_summary = payload.codex_summary.strip()
+    if not codex_summary:
+        raise HTTPException(status_code=400, detail="Codex summary is empty.")
+
+    task = automation_task_service.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+
+    extracted = learning_service.extract_codex_summary_details(codex_summary)
+    logs = list(task.get("logs") or [])
+    logs.append("Codex summary received from the user.")
+
+    stage_history = list(task.get("stage_history") or [])
+    stage_history.append(
+        {
+            "stage": "summary_received",
+            "status": "completed_manual_codex",
+            "progress": 100,
+            "timestamp": utc_now_iso(),
+            "message": "Codex summary was saved manually.",
+        }
+    )
+
+    summary = build_manual_codex_summary(task, codex_summary, extracted)
+    updates = {
+        "status": "completed_manual_codex",
+        "stage": "completed",
+        "current_stage": "completed",
+        "progress": 100,
+        "logs": logs,
+        "errors": summary["errors"],
+        "summary": summary,
+        "codex_summary": codex_summary,
+        "files_changed": extracted.get("files_changed", []),
+        "stage_history": stage_history,
+        "known_issues": extracted.get("known_issues", []),
+        "what_completed": extracted.get("what_completed", []),
+        "what_remains": extracted.get("what_remains", []),
+        "next_recommended_step": extracted.get("next_recommendation"),
+    }
+    updated = automation_task_service.update_task(task_id, updates)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+
+    project_storage_service.save_latest_summary(summary)
+    project_storage_service.save_project_memory(
+        {
+            "type": "codex_summary",
+            "task_id": task_id,
+            "command": task.get("command"),
+            "project_name": task.get("project_name", "Builder Core"),
+            "note": "Saved a manual Codex summary for this Builder Core task.",
+            "codex_summary": codex_summary,
+            "files_changed": extracted.get("files_changed", []),
+            "known_issues": extracted.get("known_issues", []),
+            "next_recommended_step": extracted.get("next_recommendation"),
+        }
+    )
+    lesson = learning_service.record_codex_summary_lesson(updated, codex_summary)
+
+    return {
+        "ok": True,
+        "message": "Codex summary saved.",
+        "item": updated,
+        "lesson": lesson,
+    }
 
 @app.post("/automation/tasks")
 def create_automation_task(payload: AutomationTaskCreate):
@@ -1447,6 +1684,8 @@ def get_memory():
         "storage_message": project_storage_service.storage_message,
         "project_memory": project_storage_service.get_project_memory(20),
         "latest_summary": project_storage_service.get_latest_summary(),
+        "latest_prompt": project_storage_service.get_latest_prompt(),
+        "prompt_history": project_storage_service.get_prompt_history(10),
         "latest_bridge_status": project_storage_service.get_latest_bridge_status(),
         "known_environment_problems": project_storage_service.get_known_environment_problems(),
     }
@@ -1647,6 +1886,7 @@ def system_status():
     return {
         "status": "ok",
         "service": "Builder Core",
+        "manual_codex_mode": True,
         "bridge_status": bridge_service.build_bridge_status_payload(),
         "task_storage_backend": automation_task_service.storage_backend,
         "task_storage_message": automation_task_service.storage_message,
@@ -1655,7 +1895,13 @@ def system_status():
         "file_storage_backend": file_storage_service.storage_backend,
         "file_storage_message": file_storage_service.storage_message,
         "latest_summary_available": project_storage_service.get_latest_summary() is not None,
+        "latest_prompt_available": project_storage_service.get_latest_prompt() is not None,
         "project_structure_scanned": project_storage_service.get_project_structure_summary() is not None,
+        "legal_safe_prompting": {
+            "summary_requirements": build_summary_requirements(),
+            "acceptance_checks": build_acceptance_checks(),
+            "legal_safe_instructions": build_legal_safe_instructions(),
+        },
     }
 
 import uvicorn
