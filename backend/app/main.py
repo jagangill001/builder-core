@@ -9,11 +9,12 @@ from urllib import request as urlrequest
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import Column, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 try:
+    from app.chat_assistant import ASSISTANT_MODES, ChatAssistantService
     from app.bridge import BridgeService
     from app.intelligence import build_intelligence_brief, get_supported_modes
     from app.learning import LearningService
@@ -24,10 +25,13 @@ try:
         build_summary_requirements,
         get_project_context,
     )
+    from app.research_tasks import RESEARCH_CATEGORIES, ResearchTaskService, SUPPORTED_SOURCES
+    from app.self_improvement import SelfImprovementService
     from app.services import AutomationTaskService, FileStorageService
     from app.storage import ProjectStorageService
     from app.tasks import BackendTaskRunner
 except ImportError:
+    from chat_assistant import ASSISTANT_MODES, ChatAssistantService
     from bridge import BridgeService
     from intelligence import build_intelligence_brief, get_supported_modes
     from learning import LearningService
@@ -38,6 +42,8 @@ except ImportError:
         build_summary_requirements,
         get_project_context,
     )
+    from research_tasks import RESEARCH_CATEGORIES, ResearchTaskService, SUPPORTED_SOURCES
+    from self_improvement import SelfImprovementService
     from services import AutomationTaskService, FileStorageService
     from storage import ProjectStorageService
     from tasks import BackendTaskRunner
@@ -77,6 +83,9 @@ file_storage_service = FileStorageService(BASE_DIR)
 project_storage_service = ProjectStorageService(BASE_DIR)
 bridge_service = BridgeService()
 learning_service = LearningService(REPO_ROOT, project_storage_service)
+assistant_service = ChatAssistantService(project_storage_service, learning_service)
+research_task_service = ResearchTaskService(project_storage_service, learning_service)
+self_improvement_service = SelfImprovementService(project_storage_service)
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
@@ -205,6 +214,26 @@ class IntelligencePlanRequest(BaseModel):
 class CodexSummaryRequest(BaseModel):
     codex_summary: str
 
+class AssistantChatRequest(BaseModel):
+    message: str
+    mode: str = "general"
+    save_to_memory: bool = True
+
+class AssistantIdeaRequest(BaseModel):
+    topic: str
+    goal: str
+
+class ResearchTaskCreateRequest(BaseModel):
+    topic: str
+    goal: str
+    category: str = "general"
+    sources: list[str] = Field(default_factory=lambda: ["memory"])
+    run_now: bool = True
+
+class SelfImprovementCreateRequest(BaseModel):
+    note: str
+    category: str = "chat"
+
 class StorageFileCreate(BaseModel):
     filename: str
     content: str
@@ -225,11 +254,19 @@ def get_prompt_generation_context() -> dict[str, Any]:
     project_structure_summary = project_storage_service.get_project_structure_summary()
     project_context = get_project_context(project_structure_summary)
     memory = project_storage_service.get_project_memory(8)
+    assistant_memory = project_storage_service.get_assistant_memory(5)
+    self_improvement_notes = [
+        {
+            "type": "self_improvement",
+            "note": item.get("next_recommended_improvement") or item.get("project_lesson") or item.get("user_message"),
+        }
+        for item in project_storage_service.get_self_improvements(4)
+    ]
     lessons = learning_service.get_lessons(8)
     known_issues = learning_service.get_known_issues()
     return {
         "project_context": project_context,
-        "memory": memory,
+        "memory": memory + assistant_memory + self_improvement_notes,
         "lessons": lessons,
         "known_issues": known_issues,
     }
@@ -1562,6 +1599,154 @@ def get_intelligence():
         ],
     }
 
+@app.post("/assistant/chat")
+def assistant_chat(payload: AssistantChatRequest):
+    message = payload.message.strip()
+    mode = (payload.mode or "general").strip().lower()
+
+    if not message:
+        raise HTTPException(status_code=400, detail="Assistant message is empty.")
+
+    if mode not in ASSISTANT_MODES:
+        mode = "general"
+
+    result = assistant_service.chat(message=message, mode=mode, save_to_memory=bool(payload.save_to_memory))
+
+    if payload.save_to_memory:
+        self_improvement_service.record_interaction_lesson(
+            {
+                "category": "chat",
+                "user_message": message,
+                "assistant_reply": result["reply"],
+                "suggestions": result["suggestions"],
+                "status": "saved_to_memory",
+            }
+        )
+
+    return result
+
+
+@app.get("/assistant/history")
+def assistant_history(limit: int = 30):
+    return {
+        "ok": True,
+        "items": assistant_service.get_history(limit),
+        "assistant_status": assistant_service.build_status(),
+        "storage_backend": project_storage_service.storage_backend,
+        "storage_message": project_storage_service.storage_message,
+    }
+
+
+@app.post("/assistant/idea")
+def assistant_idea(payload: AssistantIdeaRequest):
+    topic = payload.topic.strip()
+    goal = payload.goal.strip()
+
+    if not topic and not goal:
+        raise HTTPException(status_code=400, detail="Idea topic or goal is required.")
+
+    return assistant_service.generate_ideas(topic=topic, goal=goal)
+
+
+@app.post("/research/tasks")
+def create_research_task(payload: ResearchTaskCreateRequest):
+    topic = payload.topic.strip()
+    goal = payload.goal.strip()
+    category = (payload.category or "general").strip().lower()
+    sources = payload.sources or ["memory"]
+
+    if not topic:
+        raise HTTPException(status_code=400, detail="Research topic is empty.")
+
+    if not goal:
+        raise HTTPException(status_code=400, detail="Research goal is empty.")
+
+    if category not in RESEARCH_CATEGORIES:
+        category = "general"
+
+    task = research_task_service.create_task(
+        topic=topic,
+        goal=goal,
+        category=category,
+        sources=sources,
+        run_now=bool(payload.run_now),
+    )
+
+    return {
+        "research_id": task["research_id"],
+        "topic": task["topic"],
+        "goal": task["goal"],
+        "category": task["category"],
+        "sources": task["sources"],
+        "status": task["status"],
+        "summary": task["summary"],
+        "findings": task["findings"],
+        "limitations": task["limitations"],
+        "next_steps": task["next_steps"],
+        "created_at": task["created_at"],
+        "updated_at": task["updated_at"],
+        "web_connected": task.get("web_connected", False),
+    }
+
+
+@app.get("/research/tasks")
+def list_research_tasks(limit: int = 20):
+    return {
+        "ok": True,
+        "items": research_task_service.list_tasks(limit),
+        "storage_backend": project_storage_service.storage_backend,
+        "storage_message": project_storage_service.storage_message,
+        "notes": [
+            "Research tasks are saved honestly and do not secretly run forever in the background.",
+            "Web research is not connected yet in this build.",
+        ],
+    }
+
+
+@app.get("/research/tasks/{research_id}")
+def get_research_task(research_id: str):
+    item = research_task_service.get_task(research_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Research task not found.")
+
+    return item
+
+
+@app.get("/self-improvement")
+def get_self_improvement():
+    return {
+        "ok": True,
+        "items": self_improvement_service.get_improvement_notes(20),
+        "next_recommended_upgrade": self_improvement_service.suggest_next_project_upgrade(),
+        "storage_backend": project_storage_service.storage_backend,
+        "storage_message": project_storage_service.storage_message,
+        "notes": [
+            "This is memory-based improvement, not real AI model training.",
+            "Builder Core learns from saved chats, tasks, and summaries only.",
+        ],
+    }
+
+
+@app.post("/self-improvement")
+def create_self_improvement_entry(payload: SelfImprovementCreateRequest):
+    note = payload.note.strip()
+    if not note:
+        raise HTTPException(status_code=400, detail="Self-improvement note is empty.")
+
+    item = self_improvement_service.record_interaction_lesson(
+        {
+            "category": payload.category or "chat",
+            "user_message": note,
+            "assistant_reply": "",
+            "status": "manual_note",
+        }
+    )
+    return {
+        "ok": True,
+        "item": item,
+        "next_recommended_upgrade": self_improvement_service.suggest_next_project_upgrade(),
+    }
+
 @app.post("/tasks")
 def create_task(payload: TaskCreateRequest):
     command = payload.command.strip()
@@ -1673,6 +1858,15 @@ def save_codex_summary(task_id: str, payload: CodexSummaryRequest):
         }
     )
     lesson = learning_service.record_codex_summary_lesson(updated, codex_summary)
+    self_improvement_service.record_interaction_lesson(
+        {
+            "category": "project",
+            "command": task.get("command"),
+            "summary": codex_summary,
+            "status": "completed_manual_codex",
+            "suggestions": [extracted.get("next_recommendation")],
+        }
+    )
 
     return {
         "ok": True,
@@ -1766,6 +1960,11 @@ def get_memory():
         "storage_backend": project_storage_service.storage_backend,
         "storage_message": project_storage_service.storage_message,
         "project_memory": project_storage_service.get_project_memory(20),
+        "assistant_memory": project_storage_service.get_assistant_memory(20),
+        "chat_history": project_storage_service.get_chat_history(20),
+        "research_tasks": project_storage_service.get_research_tasks(10),
+        "research_results": project_storage_service.get_research_results(10),
+        "self_improvement": project_storage_service.get_self_improvements(10),
         "latest_summary": project_storage_service.get_latest_summary(),
         "latest_prompt": project_storage_service.get_latest_prompt(),
         "prompt_history": project_storage_service.get_prompt_history(10),
@@ -1773,6 +1972,7 @@ def get_memory():
         "intelligence_history": project_storage_service.get_intelligence_history(10),
         "latest_bridge_status": project_storage_service.get_latest_bridge_status(),
         "known_environment_problems": project_storage_service.get_known_environment_problems(),
+        "cloud_ready_notes": project_storage_service.cloud_ready_notes,
     }
 
 @app.post("/memory")
@@ -1973,17 +2173,26 @@ def system_status():
         "service": "Builder Core",
         "manual_codex_mode": True,
         "intelligence_center_enabled": True,
+        "assistant_enabled": True,
+        "assistant_status": assistant_service.build_status(),
+        "research_system_enabled": True,
         "supported_intelligence_modes": get_supported_modes(),
         "bridge_status": bridge_service.build_bridge_status_payload(),
         "task_storage_backend": automation_task_service.storage_backend,
         "task_storage_message": automation_task_service.storage_message,
         "memory_storage_backend": project_storage_service.storage_backend,
         "memory_storage_message": project_storage_service.storage_message,
+        "storage_mode_requested": project_storage_service.storage_mode_requested,
+        "cloud_ready_notes": project_storage_service.cloud_ready_notes,
         "file_storage_backend": file_storage_service.storage_backend,
         "file_storage_message": file_storage_service.storage_message,
         "latest_summary_available": project_storage_service.get_latest_summary() is not None,
         "latest_prompt_available": project_storage_service.get_latest_prompt() is not None,
         "latest_intelligence_available": project_storage_service.get_latest_intelligence_brief() is not None,
+        "assistant_memory_available": len(project_storage_service.get_assistant_memory(1)) > 0,
+        "chat_history_available": len(project_storage_service.get_chat_history(1)) > 0,
+        "research_tasks_available": len(project_storage_service.get_research_tasks(1)) > 0,
+        "self_improvement_available": len(project_storage_service.get_self_improvements(1)) > 0,
         "project_structure_scanned": project_storage_service.get_project_structure_summary() is not None,
         "legal_safe_prompting": {
             "summary_requirements": build_summary_requirements(),

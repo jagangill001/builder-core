@@ -10,6 +10,9 @@ MAIN_FILES = [
     "backend/app/tasks.py",
     "backend/app/storage.py",
     "backend/app/bridge.py",
+    "backend/app/chat_assistant.py",
+    "backend/app/research_tasks.py",
+    "backend/app/self_improvement.py",
     "backend/app/learning.py",
     "backend/app/services/task_service.py",
     "frontend/src/app/page.tsx",
@@ -63,6 +66,14 @@ def build_summary_requirements() -> list[str]:
 def build_acceptance_checks() -> list[str]:
     return [
         "Backend: GET /system/status",
+        "Backend: POST /assistant/chat",
+        "Backend: GET /assistant/history",
+        "Backend: POST /assistant/idea",
+        "Backend: POST /research/tasks",
+        "Backend: GET /research/tasks",
+        "Backend: GET /research/tasks/{research_id}",
+        "Backend: GET /self-improvement",
+        "Backend: POST /self-improvement",
         "Backend: POST /intelligence/plan",
         "Backend: GET /intelligence",
         "Backend: POST /prompts/codex",
@@ -70,10 +81,13 @@ def build_acceptance_checks() -> list[str]:
         "Backend: POST /tasks/{task_id}/codex-summary",
         "Backend: GET /memory",
         "Backend: GET /learning",
+        "Frontend: user can chat with Builder Core Assistant",
+        "Frontend: user can generate ideas",
+        "Frontend: user can create research tasks",
         "Frontend: user can generate a Codex prompt",
         "Frontend: user can copy the prompt",
         "Frontend: user can paste and save a Codex summary",
-        "Frontend: memory, learning, and latest summary panels refresh correctly",
+        "Frontend: memory, learning, self-improvement, and latest summary panels refresh correctly",
     ]
 
 

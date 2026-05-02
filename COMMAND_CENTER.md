@@ -3,116 +3,205 @@
 ## Repo Folder Used
 - `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
 
-## Product Direction
-Builder Core is now a manual Codex Prompt Command Center with an Intelligence Center.
-
-That means:
-- Builder Core structures the task safely
-- Builder Core generates the Codex prompt
-- the user copies the prompt into Codex manually
-- Codex performs the repo work
-- the user pastes Codex's final summary back into Builder Core
-- Builder Core stores memory, lessons, and the latest outcome
+## Current Product Direction
+Builder Core is now:
+- a local-first Builder Core Assistant
+- a manual Codex Prompt Command Center
+- a safe research task tracker
+- a memory and lesson system
+- a self-improvement note system
 
 ## Files Changed In This Upgrade
 - `backend/app/main.py`
-- `backend/app/intelligence.py`
-- `backend/app/prompt_builder.py`
+- `backend/app/chat_assistant.py`
+- `backend/app/research_tasks.py`
+- `backend/app/self_improvement.py`
 - `backend/app/storage.py`
+- `backend/app/prompt_builder.py`
 - `backend/app/learning.py`
-- `backend/app/services/task_service.py`
+- `backend/.env.example`
 - `frontend/src/app/page.tsx`
 - `README.md`
 - `COMMAND_CENTER.md`
 - `PROJECT_PROGRESS.md`
 
-## Main Workflow
-1. User enters one command.
-2. Frontend calls `POST /prompts/codex`.
-3. Backend builds an intelligence brief and a manual Codex prompt.
-4. Frontend shows:
-   - intelligence mode
-   - safety firewall
-   - research steps
-   - evidence checklist
-   - generated Codex prompt
-5. User copies the prompt into Codex manually.
-6. User runs Codex outside Builder Core.
-7. User pastes Codex's final summary back into Builder Core.
-8. Frontend calls `POST /tasks/{task_id}/codex-summary`.
-9. Backend updates task history, memory, intelligence history, latest summary, and lessons.
+## Main User Flow
+1. User opens Builder Core.
+2. User chats with Builder Core Assistant.
+3. User can:
+   - save useful info to memory
+   - generate ideas
+   - create a research task
+   - generate a Codex prompt
+4. User copies the prompt into Codex manually.
+5. Codex performs the repo work outside Builder Core.
+6. User pastes Codex's final summary back into Builder Core.
+7. Builder Core saves:
+   - task history
+   - prompt history
+   - codex summary
+   - memory
+   - lessons
+   - self-improvement notes
 
-## Intelligence Center Modes
-- Safe Research
-- Law and Policy Planning
-- Market Analysis
-- Exam Planning
-- Forecasting
-- Language Learning
-- Video Transcript Learning
-- Self-Improvement Memory
+## Builder Core Assistant
 
-## What The Intelligence Center Does
-- detects the most likely planning mode from the command
-- creates a safe research and action structure
-- adds a safety firewall
-- prepares better context for the Codex prompt
-- remembers what kind of work the user is doing
+### Endpoints
+- `POST /assistant/chat`
+- `GET /assistant/history`
+- `POST /assistant/idea`
 
-## Safety Firewall Rules
-- do not invent facts, citations, legal conclusions, or market numbers
-- do not claim Builder Core replaced a lawyer, analyst, teacher, or expert
-- separate assumptions from verified evidence
-- label manual verification steps clearly
-- stay honest about missing information
+### What it does
+- understands the current project context
+- uses saved memory and lessons
+- gives natural local-first replies
+- suggests next actions
+- can save useful chats to memory
+- can propose ideas for:
+  - app features
+  - coding improvements
+  - business ideas
+  - research angles
+  - exam strategies
+  - legal-information structure
+  - market-analysis structure
+  - project improvements
 
-## What Was Kept
-- backend task storage
-- task history
-- bridge status
-- project memory storage
-- lesson storage
-- latest summary storage
-- local JSON fallback storage
-- frontend/backend connection
-- PWA install flow
+### Honest assistant statements
+The assistant should keep saying clearly:
+- `I can research this when you ask me.`
+- `I can save this to memory.`
+- `I can create a research task.`
+- `I can use previous memory and lessons.`
+- `I do not automatically know new internet information unless research is run.`
 
-## What Became Secondary
-- automatic-style GitHub/Codex execution as the main story
-- fake-seeming deployment progress as the main UI flow
+### Local-first mode
+If `OPENAI_API_KEY` is missing:
+- `Local assistant mode is running. Add OPENAI_API_KEY later for stronger AI replies.`
 
-These systems can stay in the codebase, but the main workflow is now manual Codex handoff plus saved intelligence, memory, and learning.
+## Codex Prompt Command Center
 
-## What Is Real Now
-- real intelligence brief generation
-- real prompt generation
-- real task creation
-- real prompt history
-- real intelligence history
-- real manual summary save-back
-- real memory updates
-- real lesson creation
-
-## What Is Still Manual
-- copying prompt into Codex
-- running Codex
-- reviewing repo changes
-- pasting the final summary back
-
-## What May Be Automated Later
-- authenticated Codex execution after approval
-- authenticated GitHub write actions
-- automatic deployment tracking from real credentials
-- Firestore as the default task, memory, and intelligence store
-
-## New Endpoints
-- `POST /intelligence/plan`
-- `GET /intelligence`
+### Endpoints
 - `POST /prompts/codex`
 - `GET /prompts/latest`
 - `POST /tasks/{task_id}/codex-summary`
 
-## Running Locally
+### What happens
+- Builder Core generates the prompt
+- user copies it into Codex
+- Codex edits the repo manually outside Builder Core
+- user pastes the final Codex summary back
+- Builder Core stores that result for memory and learning
+
+## Research Tasks
+
+### Endpoints
+- `POST /research/tasks`
+- `GET /research/tasks`
+- `GET /research/tasks/{research_id}`
+
+### What happens
+- research tasks are created and saved
+- research can use:
+  - memory
+  - user notes placeholder
+  - web placeholder
+- research results are stored honestly
+
+### Safety rule
+Web research is not connected yet in this build.
+
+Builder Core must not fake live internet findings.
+
+When web research is requested, it says:
+- `Web research is not connected yet. This task was saved and can use provided notes/memory only.`
+
+## Self-Improvement Notes
+
+### Endpoints
+- `GET /self-improvement`
+- `POST /self-improvement`
+
+### What it stores
+- user messages
+- assistant replies
+- what worked
+- what failed
+- repeated preferences
+- better future instructions
+- project lessons
+- next recommended improvement
+
+This is memory-based improvement only.
+It is not real AI model training.
+
+## What Is Real Now
+- assistant chat
+- assistant history
+- idea generation
+- research task creation
+- research task storage
+- self-improvement notes
+- prompt generation
+- summary save-back
+- memory and lesson updates
+
+## What Is Still Manual
+- copying the prompt into Codex
+- running Codex
+- reviewing Codex changes
+- pasting Codex's final summary back
+
+## What Is Not Real Yet
+- real Codex execution from Builder Core
+- real GitHub automatic repo editing
+- real live web research
+- real secret background scheduling
+
+## Why This Is Safer
+- user stays in control of repo changes
+- the app does not invent internet research
+- the app does not pretend it trained an AI model
+- storage and memory remain visible and understandable
+- future automation can be added later with approval
+
+## Local Storage And Cloud Plan
+
+### Local fallback today
+- `backend/runtime_data/automation_tasks.json`
+- `backend/runtime_data/project_memory.json`
+- `backend/runtime_data/storage_files.json`
+
+### Cloud-ready direction
+- Firestore for:
+  - assistant memory
+  - chat history
+  - research tasks
+  - project memory
+  - lessons
+  - self-improvement notes
+- Google Cloud Storage for:
+  - uploaded files
+  - generated outputs
+- Secret Manager for:
+  - GitHub token
+  - future assistant API keys
+  - future Codex credentials
+
+Cloud Run local storage is temporary, so local JSON is still only a fallback.
+
+## Future Scheduled Research
+Scheduled research can be added later only if:
+- the user explicitly approves it
+- the schedule is visible
+- the scope is limited
+- the sources are clear
+- the logs are visible
+- the app stays honest about missing web access
+
+No secret background work should be added.
+
+## How To Run Locally
 
 ### Backend
 ```powershell
@@ -127,12 +216,30 @@ npm install
 npm run dev
 ```
 
-## Deploy
-- Backend and frontend remain separate Cloud Run services.
-- Frontend still calls backend using `API_BASE`.
-- No frontend secrets are introduced.
+### Frontend build
+```powershell
+cd frontend
+npm run build
+```
 
-## Important Honesty Rule
-Builder Core does not claim to edit GitHub automatically in this workflow.
+## How To Deploy
+- Push to `main`
+- Let the existing GitHub Actions / Cloud Run flow deploy backend and frontend
+- Keep frontend and backend as separate Cloud Run services
 
-If real repo work depends on missing credentials or a missing executor, Builder Core must stay honest and say so.
+## Required Environment Variables
+- `STORAGE_MODE=local`
+- `FIRESTORE_ENABLED=false`
+- `GCP_PROJECT_ID=`
+- `GCS_BUCKET_NAME=`
+- `OPENAI_API_KEY=`
+- `ASSISTANT_MODE=local`
+- `ASSISTANT_MODEL=`
+- `GITHUB_TOKEN=`
+- `GITHUB_OWNER=jagangill001`
+- `GITHUB_REPO=jagangill001/builder-core`
+- `GITHUB_BRANCH=main`
+- `CODEX_API_KEY=`
+- `CODEX_MODE=disabled`
+- `FRONTEND_URL=https://builder-core-frontend-599596796788.us-central1.run.app`
+- `BACKEND_URL=https://builder-core-599596796788.us-central1.run.app`

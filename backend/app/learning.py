@@ -224,6 +224,12 @@ class LearningService:
         if not self.storage.get_project_structure_summary():
             steps.append("Run a project scan so Builder Core has a fresh structure summary.")
 
+        if not self.storage.get_chat_history(3):
+            steps.append("Use the Builder Core Assistant a few times so chat history and memory become more useful.")
+
+        if not self.storage.get_research_tasks(2):
+            steps.append("Create a research task to start building saved findings and limitations.")
+
         bridge_status = self.storage.get_latest_bridge_status() or {}
         if isinstance(bridge_status, dict) and bridge_status.get("ready_for_repo_work") is False:
             steps.append("Add GitHub and Codex bridge credentials before expecting real repo changes.")
