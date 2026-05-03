@@ -195,6 +195,7 @@ class PrivateSearchService:
             "app_plans": lambda record: str(record.get("app_concept") or ""),
             "document_ingest": lambda record: str(record.get("text") or ""),
             "url_ingest_records": lambda record: str(record.get("text") or ""),
+            "knowledge_base": lambda record: str(record.get("content") or record.get("summary") or ""),
         }
 
         created = 0

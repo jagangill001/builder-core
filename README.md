@@ -391,3 +391,96 @@ Verify Firestore from the live Cloud Run backend by calling `/storage/status` an
 - richer private-search ranking and evidence display
 - optional local model integration
 - safer scheduled background jobs with Cloud Scheduler, Cloud Tasks, Pub/Sub, or Cloud Run Jobs
+
+## Admin Authentication
+Builder Core protects internal dashboard endpoints with an admin key.
+
+- Environment variable: `ADMIN_API_KEY`
+- Request header: `X-Admin-Key`
+- Do not commit a real key.
+- Do not put the key in frontend source code.
+- The frontend only stores a manually entered key in browser `localStorage`.
+
+Cloud Run setup:
+1. Open Cloud Run.
+2. Select `builder-core`.
+3. Choose Edit & deploy new revision.
+4. Open Variables & Secrets.
+5. Add `ADMIN_API_KEY=your-long-random-admin-key`.
+6. Deploy the revision.
+
+Protected endpoints include `/security/events`, `/security/report`, `/security/hardening`, `/approvals`, `/agents/tasks`, `/agent/history`, `/account-agent/status`, `/account-agent/search`, `/connectors`, `/memory`, `/learning`, `/self-improvement`, `/storage/test`, `/knowledge/seed`, `/knowledge/scan-project`, and `/tools`.
+
+Public safe endpoints include `/system/status`, `/os/status`, `/platform/status`, `/security/status`, and `/storage/status`. They expose status only and never reveal the admin key.
+
+## System-Safety Routing Fix
+The `/command` brain now recognizes system-safety and defensive security questions such as:
+
+- `check security`
+- `protect Builder Core`
+- `system safety`
+- `security status`
+- `security report`
+- `harden system`
+- `firewall`
+- `rate limiter`
+- `incident report`
+
+Security workflows return a defensive status object with monitor state, rate limiter state, event counts, highest severity, hardening summaries, recommendations, and this limit: IP/location data is approximate and does not identify a person. Builder Core does not retaliate.
+
+## Safe Authorized Defensive Checks
+Run these only against your own Builder Core backend:
+
+```powershell
+curl.exe -sS https://builder-core-599596796788.us-central1.run.app/security/status
+curl.exe -H "X-Admin-Key: YOUR_ADMIN_KEY" -sS https://builder-core-599596796788.us-central1.run.app/security/report
+curl.exe -H "X-Admin-Key: YOUR_ADMIN_KEY" -sS https://builder-core-599596796788.us-central1.run.app/security/events
+curl.exe -i https://builder-core-599596796788.us-central1.run.app/.env
+```
+
+These checks do not test third-party targets, exploit vulnerabilities, bypass protections, or retaliate. The suspicious-path check only verifies defensive logging on your own backend.
+
+## Knowledge Feeding System
+Builder Core can now save and search knowledge entries from:
+
+- manual notes
+- pasted text
+- safe one-page public URLs provided by the user
+- seed packs
+- safe project file summaries
+- agent results and future research summaries
+
+Knowledge endpoints:
+- `POST /knowledge/add`
+- `GET /knowledge`
+- `GET /knowledge/{knowledge_id}`
+- `POST /knowledge/search`
+- `GET /knowledge/status`
+- `POST /knowledge/seed` with admin key
+- `POST /knowledge/scan-project` with admin key
+
+Seed packs cover Builder Core OS architecture, defensive security, agents, business and market analysis, app building, teaching, trucking business basics, and high-risk safety limits.
+
+## One-Chat Learning
+The main chat now understands:
+
+- `Remember this: ...`
+- `Learn this: ...`
+- `Add this to knowledge: ...`
+- `Search your knowledge for ...`
+- `What do you know about ...`
+- `Learn this URL https://example.com`
+
+This is knowledge-base learning only. It saves records to Firestore or local fallback, indexes them into private search, and uses them in future answers. It is not model training and it does not create internet-wide knowledge.
+
+## Agent Answer Quality
+Agent answers now include goal, selected role, what was checked, analysis, plan, risks and limitations, missing knowledge, tools used, next actions, memory saved status, and approval status. Specialized roles add their own structure, such as CEO 7-day plans, research evidence gaps, developer files/tests, defensive security recommendations, teaching practice tasks, and finance/legal/medical disclaimers.
+
+## Knowledge Confidence
+Builder Core reports confidence as:
+
+- `low` when no saved source or only weak notes exist
+- `medium` when saved notes or seed entries support the answer
+- `high` when multiple clear saved sources support the answer
+
+If confidence is low or medium, add more notes or safe public URLs. Builder Core does not fake missing knowledge.

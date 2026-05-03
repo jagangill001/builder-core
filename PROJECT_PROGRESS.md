@@ -324,3 +324,117 @@ Honest note:
   - safe scheduled background jobs
 - Next recommended step:
   - deploy and verify `/storage/status` plus `/storage/test` on Cloud Run, then improve evidence display in the unified chat
+
+## Latest Codex Work Summary
+- Date/time: 2026-05-03 America/Toronto
+- Repo folder used: `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
+- Files changed:
+  - `backend/app/auth.py`
+  - `backend/app/knowledge_manager.py`
+  - `backend/app/seed_knowledge.py`
+  - `backend/app/main.py`
+  - `backend/app/orchestrator.py`
+  - `backend/app/command_router.py`
+  - `backend/app/agent_engine.py`
+  - `backend/app/agent_roles.py`
+  - `backend/app/os_core.py`
+  - `backend/app/storage.py`
+  - `backend/app/private_search.py`
+  - `backend/app/security_monitor.py`
+  - `backend/app/security_hardening.py`
+  - `backend/.env.example`
+  - `frontend/src/app/page.tsx`
+  - `README.md`
+  - `COMMAND_CENTER.md`
+  - `PROJECT_PROGRESS.md`
+- Admin auth added:
+  - `ADMIN_API_KEY` environment variable support
+  - `X-Admin-Key` header support
+  - protected internal dashboard endpoints
+  - safe public auth status in `/system/status` and `/os/status`
+- Protected endpoints:
+  - `/security/events`
+  - `/security/report`
+  - `/security/hardening`
+  - `/approvals`
+  - `/agents/tasks`
+  - `/agent/history`
+  - `/account-agent/status`
+  - `/account-agent/search`
+  - `/connectors`
+  - `/memory`
+  - `/learning`
+  - `/self-improvement`
+  - `/storage/test`
+  - `/knowledge/seed`
+  - `/knowledge/scan-project`
+  - `/tools`
+- `/command` routing fixed:
+  - system-safety and defensive security prompts now route to `security_check`
+  - added `security_check`, `system_protection`, `firewall_hardening`, and `incident_report` routing coverage
+  - security responses include monitor status, rate limiter status, event count, highest severity, hardening summaries, and no-retaliation disclaimer
+- Warning-risk wording reduced:
+  - docs and runtime output describe authorized defensive checks
+  - wording avoids third-party testing, bypass, exploit, stealth, or retaliation framing
+- Agent answer quality improved:
+  - all agent answers include goal, selected role, checked tools, analysis, plan, risks, missing knowledge, tools used, memory status, and approval status
+  - CEO, research, developer, cybersecurity, teacher, finance, legal, and medical roles include role-specific structure and disclaimers
+- Knowledge manager added:
+  - stores knowledge records
+  - extracts summaries, key points, tags, categories, confidence, and chunks
+  - indexes knowledge into private search
+  - creates learning lessons
+- Knowledge endpoints added:
+  - `POST /knowledge/add`
+  - `GET /knowledge`
+  - `GET /knowledge/{knowledge_id}`
+  - `POST /knowledge/search`
+  - `GET /knowledge/status`
+  - `POST /knowledge/seed`
+  - `POST /knowledge/scan-project`
+- Seed packs added:
+  - Builder Core OS Architecture
+  - Safe Defensive System
+  - AI Agent System
+  - Business and Market Analysis
+  - App Building Workflow
+  - Teaching and Study System
+  - Trucking Business Knowledge Starter
+  - Legal, Medical, and Finance Safety Limits
+- Project scan added:
+  - scans safe docs and source summaries only
+  - does not scan `.env`, credentials, `node_modules`, venv, runtime data, or build artifacts
+- Learn URL workflow added:
+  - main chat detects safe URL learning requests
+  - one public http/https page only
+  - blocks localhost, private IPs, `.onion`, and non-http/https schemes
+  - no login, paywall, CAPTCHA bypass, private scraping, or uncontrolled crawling
+- Remember-this workflow added:
+  - main chat can save notes into knowledge
+  - indexed into private search
+  - saved to Firestore or local fallback depending on environment
+- Frontend knowledge/admin panels added:
+  - Admin Access panel with browser-only localStorage key storage
+  - Knowledge Base panel with add, search, seed, scan, and status
+  - main chat displays workflow, tools, storage, memory, security data, knowledge data, confidence, limitations, and next actions
+- Tests run twice:
+  - first pass backend import: passed
+  - first pass backend endpoint checks: 31 checks passed
+  - first pass protected endpoint no-key/wrong-key/with-key behavior: passed
+  - first pass command security routing, remember-this, knowledge, seed, scan, storage test, and agent run: passed
+  - first pass frontend `npm run build`: passed
+  - second pass backend import: passed
+  - second pass backend endpoint checks: 16 key checks passed
+  - second pass command security routing, remember-this, knowledge answer, knowledge search, storage test, protected endpoint behavior, and agent run: passed
+  - second pass frontend `npm run build`: passed
+- Test notes:
+  - local tests used local JSON fallback storage
+  - local safe URL workflow routed correctly and did not crash
+  - local `https://example.com` fetch returned `learned=false`, so URL learning success still depends on network access from the running environment
+  - `FastAPI TestClient` was not used because this venv does not include `httpx`; tests used a real local Uvicorn server and HTTP calls instead
+- Deployment status:
+  - pending commit and push at the time of this progress note
+  - GitHub Actions / Cloud Run should deploy after push to `main`
+  - Cloud Run still needs manual `ADMIN_API_KEY` setup for protected live dashboard endpoints
+- Next recommended step:
+  - set `ADMIN_API_KEY` in Cloud Run, redeploy, seed the live knowledge base, and then verify the protected live endpoints with `X-Admin-Key`

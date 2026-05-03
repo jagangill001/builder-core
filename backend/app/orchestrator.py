@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
+
+from fastapi import HTTPException
 
 try:
     from app.app_planner import AppPlannerService
@@ -14,6 +17,7 @@ try:
     from app.prompt_builder import build_codex_prompt, get_project_context
     from app.research_engine import ResearchEngineService
     from app.safety import check_request_safety
+    from app.security_hardening import get_security_hardening_payload
     from app.self_improvement import SelfImprovementService
     from app.storage import ProjectStorageService
     from app.tool_registry import ToolRegistryService
@@ -27,6 +31,7 @@ except ImportError:
     from prompt_builder import build_codex_prompt, get_project_context
     from research_engine import ResearchEngineService
     from safety import check_request_safety
+    from security_hardening import get_security_hardening_payload
     from self_improvement import SelfImprovementService
     from storage import ProjectStorageService
     from tool_registry import ToolRegistryService
@@ -53,6 +58,8 @@ class UnifiedOrchestrator:
         security_monitor: Any | None = None,
         account_agent: Any | None = None,
         approval_system: Any | None = None,
+        rate_limiter: Any | None = None,
+        knowledge_manager: Any | None = None,
     ) -> None:
         self.storage = storage
         self.learning = learning
@@ -68,6 +75,8 @@ class UnifiedOrchestrator:
         self.security_monitor = security_monitor
         self.account_agent = account_agent
         self.approval_system = approval_system
+        self.rate_limiter = rate_limiter
+        self.knowledge_manager = knowledge_manager
 
     def run_unified_workflow(self, message: str, mode: str = "auto", save_to_memory: bool = True) -> dict[str, Any]:
         safety = check_request_safety(message, category=mode)
@@ -120,6 +129,18 @@ class UnifiedOrchestrator:
                 },
             )
             return blocked
+
+        if route["workflow"] == "security_check":
+            return self._run_security_command(command_id, message, mode, route, save_to_memory, created_at)
+
+        if route["workflow"] == "knowledge_add":
+            return self._run_knowledge_add_command(command_id, message, mode, route, save_to_memory, created_at)
+
+        if route["workflow"] == "knowledge_search":
+            return self._run_knowledge_search_command(command_id, message, mode, route, save_to_memory, created_at)
+
+        if route["workflow"] == "url_learning":
+            return self._run_url_learning_command(command_id, message, mode, route, save_to_memory, created_at)
 
         if route["workflow"] == "agent_os" and self.agent_engine is not None:
             return self._run_agent_os_command(command_id, message, mode, route, save_to_memory, created_at)
@@ -291,6 +312,430 @@ class UnifiedOrchestrator:
             ],
             "created_at": created_at,
         }
+
+    def _run_security_command(
+        self,
+        command_id: str,
+        message: str,
+        mode: str,
+        route: dict[str, Any],
+        save_to_memory: bool,
+        created_at: str,
+    ) -> dict[str, Any]:
+        summary = self.security_monitor.get_security_summary() if self.security_monitor is not None else {}
+        report = self.security_monitor.create_incident_report() if self.security_monitor is not None else {}
+        hardening = get_security_hardening_payload()
+        rate_limit_status = self.rate_limiter.get_rate_limit_status() if self.rate_limiter is not None else {}
+        highest = str(report.get("highest_severity") or "low")
+        security = {
+            "monitor_enabled": self.security_monitor is not None,
+            "rate_limiter_enabled": bool(getattr(self.rate_limiter, "enabled", False)),
+            "events_count": summary.get("events_count", 0),
+            "highest_severity": highest,
+            "recent_high_severity": summary.get("recent_high_severity", []),
+            "top_patterns": report.get("top_patterns", []),
+            "approximate_sources": report.get("approximate_sources", []),
+            "recommendations": report.get("recommended_actions") or summary.get("recommendations", []),
+            "hardening": {
+                "cloud_run": hardening.get("cloud_run", [])[:3],
+                "firestore": hardening.get("firestore", [])[:3],
+                "secret_safety": hardening.get("secret_safety", [])[:3],
+                "frontend_security": hardening.get("frontend_security", [])[:3],
+                "incident_response": hardening.get("incident_response", [])[:3],
+            },
+            "rate_limit_status": rate_limit_status,
+            "disclaimer": "IP/location data is approximate and does not identify a person. Builder Core does not retaliate.",
+        }
+        tools_used = [
+            "safety_firewall",
+            "command_router",
+            "security_monitor",
+            "security_hardening",
+            "rate_limiter",
+        ]
+        reply = self._compose_security_reply(security)
+        memory_saved = False
+        if save_to_memory:
+            self.storage.save_project_memory(
+                {
+                    "type": "security_check",
+                    "command_id": command_id,
+                    "command": message,
+                    "note": f"Security check completed. Highest severity: {highest}.",
+                    "workflow": route["workflow"],
+                }
+            )
+            memory_saved = True
+        self.storage.save_record(
+            "command_history",
+            {
+                "command_id": command_id,
+                "message": message,
+                "mode": mode,
+                "workflow": route["workflow"],
+                "detected_intents": route["intents"],
+                "reply": reply,
+                "security": security,
+            },
+        )
+        return {
+            "command_id": command_id,
+            "reply": reply,
+            "detected_intents": route["intents"],
+            "workflow": route["workflow"],
+            "internal_tools_used": tools_used,
+            "progress": {
+                "status": "completed",
+                "steps": [
+                    "Safety firewall checked the request.",
+                    "Command router selected the defensive security workflow.",
+                    "Security monitor summarized logged events.",
+                    "Hardening checklists and rate-limit status were included.",
+                ],
+            },
+            "security": security,
+            "private_search": {"used": False, "results_count": 0, "top_sources": []},
+            "research": {},
+            "market_analysis": {},
+            "app_plan": {},
+            "codex_prompt": "",
+            "summary": {"message": reply},
+            "storage_used": "firestore" if self.storage.using_firestore else "local",
+            "memory_saved": memory_saved,
+            "next_actions": [
+                "Set ADMIN_API_KEY in Cloud Run before using internal dashboard panels.",
+                "Review recent high-severity events before changing any policy.",
+                "Use Cloud Armor/API Gateway later for production perimeter controls.",
+            ],
+            "limitations": [
+                "This is defensive status and hardening guidance only.",
+                "IP/location data is approximate and does not identify a person.",
+                "Builder Core does not retaliate or perform offensive security actions.",
+            ],
+            "created_at": created_at,
+        }
+
+    def _run_knowledge_add_command(
+        self,
+        command_id: str,
+        message: str,
+        mode: str,
+        route: dict[str, Any],
+        save_to_memory: bool,
+        created_at: str,
+    ) -> dict[str, Any]:
+        if self.knowledge_manager is None:
+            raise RuntimeError("Knowledge manager is not configured.")
+        note = self._extract_knowledge_note(message)
+        result = self.knowledge_manager.add_knowledge_entry(
+            {
+                "title": self._knowledge_title(note),
+                "content": note,
+                "source_type": "manual_note",
+                "category": self.knowledge_manager.classify_knowledge(note),
+                "tags": self.knowledge_manager.tag_knowledge(note),
+            }
+        )
+        memory_saved = False
+        if save_to_memory and result.get("ok"):
+            self.storage.save_project_memory(
+                {
+                    "type": "knowledge_note",
+                    "command_id": command_id,
+                    "command": message,
+                    "note": note,
+                    "knowledge_id": result.get("knowledge_id"),
+                    "workflow": route["workflow"],
+                }
+            )
+            memory_saved = True
+        reply = (
+            f"I saved that into Builder Core knowledge as {result.get('knowledge_id')}. "
+            f"It was indexed for private search with {result.get('chunks_created', 0)} chunks."
+            if result.get("ok")
+            else "I could not save that knowledge note because the content was empty."
+        )
+        knowledge = {
+            "action": "add",
+            "saved": bool(result.get("ok")),
+            "knowledge_id": result.get("knowledge_id"),
+            "summary": result.get("summary"),
+            "key_points": result.get("key_points", []),
+            "confidence": result.get("entry", {}).get("confidence") or "low",
+            "sources_used": [result.get("entry", {}).get("title")] if result.get("entry") else [],
+            "missing_knowledge": [],
+        }
+        self.storage.save_record(
+            "command_history",
+            {
+                "command_id": command_id,
+                "message": message,
+                "mode": mode,
+                "workflow": route["workflow"],
+                "detected_intents": route["intents"],
+                "reply": reply,
+                "knowledge": knowledge,
+            },
+        )
+        return {
+            "command_id": command_id,
+            "reply": reply,
+            "detected_intents": route["intents"],
+            "workflow": route["workflow"],
+            "internal_tools_used": ["safety_firewall", "command_router", "knowledge_manager", "private_search", "learning_engine"],
+            "progress": {
+                "status": "completed" if result.get("ok") else "failed",
+                "steps": [
+                    "Detected a one-chat memory/knowledge save request.",
+                    "Saved the note into the knowledge base.",
+                    "Indexed the note into private search.",
+                    "Created a learning lesson for reuse.",
+                ],
+            },
+            "knowledge": knowledge,
+            "knowledge_sources_used": knowledge["sources_used"],
+            "confidence": knowledge["confidence"],
+            "storage_used": "firestore" if self.storage.using_firestore else "local",
+            "memory_saved": memory_saved,
+            "private_search": {"used": True, "results_count": 0, "top_sources": knowledge["sources_used"]},
+            "research": {},
+            "market_analysis": {},
+            "app_plan": {},
+            "codex_prompt": "",
+            "summary": result,
+            "next_actions": ["Ask: what do you know about this topic?", "Add another note or safe URL to improve confidence."],
+            "limitations": ["This is knowledge-base memory, not model training."],
+            "created_at": created_at,
+        }
+
+    def _run_knowledge_search_command(
+        self,
+        command_id: str,
+        message: str,
+        mode: str,
+        route: dict[str, Any],
+        save_to_memory: bool,
+        created_at: str,
+    ) -> dict[str, Any]:
+        if self.knowledge_manager is None:
+            raise RuntimeError("Knowledge manager is not configured.")
+        query = self._extract_knowledge_query(message)
+        result = self.knowledge_manager.search_knowledge(query=query, limit=8)
+        sources = result.get("sources_used", [])
+        facts = [item.get("summary") or item.get("preview") or item.get("title") for item in result.get("results", [])[:5]]
+        if facts:
+            reply = "Here is what Builder Core currently has saved:\n" + "\n".join(f"- {fact}" for fact in facts if fact)
+        else:
+            reply = "Builder Core does not have strong saved knowledge for that yet. Add notes, seed packs, or one safe public URL to improve answers."
+        knowledge = {
+            "action": "search",
+            "query": query,
+            "results": result.get("results", []),
+            "sources_used": sources,
+            "confidence": result.get("confidence", "low"),
+            "missing_knowledge": result.get("missing_knowledge", []),
+        }
+        memory_saved = False
+        if save_to_memory:
+            self.storage.save_project_memory(
+                {
+                    "type": "knowledge_search",
+                    "command_id": command_id,
+                    "command": message,
+                    "note": f"Knowledge search completed for: {query}",
+                    "workflow": route["workflow"],
+                    "sources_used": sources,
+                }
+            )
+            memory_saved = True
+        self.storage.save_record(
+            "command_history",
+            {
+                "command_id": command_id,
+                "message": message,
+                "mode": mode,
+                "workflow": route["workflow"],
+                "detected_intents": route["intents"],
+                "reply": reply,
+                "knowledge": knowledge,
+            },
+        )
+        return {
+            "command_id": command_id,
+            "reply": reply,
+            "detected_intents": route["intents"],
+            "workflow": route["workflow"],
+            "internal_tools_used": ["safety_firewall", "command_router", "knowledge_manager", "private_search"],
+            "progress": {
+                "status": "completed",
+                "steps": [
+                    "Detected a knowledge question.",
+                    "Searched structured knowledge entries.",
+                    "Searched private-search chunks.",
+                    "Returned saved sources and confidence honestly.",
+                ],
+            },
+            "knowledge": knowledge,
+            "knowledge_sources_used": sources,
+            "confidence": result.get("confidence", "low"),
+            "private_search": result.get("private_search", {"used": True}),
+            "research": {},
+            "market_analysis": {},
+            "app_plan": {},
+            "codex_prompt": "",
+            "summary": {"message": reply},
+            "storage_used": "firestore" if self.storage.using_firestore else "local",
+            "memory_saved": memory_saved,
+            "next_actions": ["Seed the knowledge base.", "Add more notes or a safe public URL if the answer is weak."],
+            "limitations": result.get("missing_knowledge", []) or ["Builder Core only searches saved/internal knowledge here."],
+            "created_at": created_at,
+        }
+
+    def _run_url_learning_command(
+        self,
+        command_id: str,
+        message: str,
+        mode: str,
+        route: dict[str, Any],
+        save_to_memory: bool,
+        created_at: str,
+    ) -> dict[str, Any]:
+        url = self._extract_first_url(message)
+        if not url:
+            raise HTTPException(status_code=400, detail="No URL found in message.")
+        learned = self.agent_engine.learn_url(url=url, topic=message, reason="command_chat") if self.agent_engine else {}
+        knowledge_result = (
+            self.knowledge_manager.add_url_ingest_result(learned, url=url, topic=message)
+            if self.knowledge_manager is not None and learned.get("learned")
+            else {"ok": False, "warnings": learned.get("warnings", [])}
+        )
+        reply = (
+            f"I learned one safe public page: {url}. Title: {learned.get('title') or 'Unknown'}. "
+            f"Text chars: {learned.get('text_chars', 0)}. Chunks created: {learned.get('chunks_created', 0)}."
+            if learned.get("learned")
+            else f"I could not learn that URL. {learned.get('blocked_reason') or '; '.join(learned.get('warnings', []))}"
+        )
+        memory_saved = False
+        if save_to_memory:
+            self.storage.save_project_memory(
+                {
+                    "type": "url_learning",
+                    "command_id": command_id,
+                    "command": message,
+                    "note": f"URL learning attempted for {url}. learned={learned.get('learned')}",
+                    "workflow": route["workflow"],
+                }
+            )
+            memory_saved = True
+        knowledge = {
+            "action": "learn_url",
+            "source_url": url,
+            "learned": bool(learned.get("learned")),
+            "title": learned.get("title"),
+            "text_chars": learned.get("text_chars", 0),
+            "chunks_created": learned.get("chunks_created", 0),
+            "knowledge_id": knowledge_result.get("knowledge_id"),
+            "warnings": learned.get("warnings", []) + knowledge_result.get("warnings", []),
+            "confidence": knowledge_result.get("entry", {}).get("confidence") or ("medium" if learned.get("learned") else "low"),
+        }
+        self.storage.save_record(
+            "command_history",
+            {
+                "command_id": command_id,
+                "message": message,
+                "mode": mode,
+                "workflow": route["workflow"],
+                "detected_intents": route["intents"],
+                "reply": reply,
+                "knowledge": knowledge,
+            },
+        )
+        return {
+            "command_id": command_id,
+            "reply": reply,
+            "detected_intents": route["intents"],
+            "workflow": route["workflow"],
+            "internal_tools_used": ["safety_firewall", "command_router", "url_ingest", "knowledge_manager", "private_search"],
+            "progress": {
+                "status": "completed" if learned.get("learned") else "blocked",
+                "steps": [
+                    "Detected a URL learning request in the main chat.",
+                    "Checked safe URL rules.",
+                    "Fetched one page only when allowed.",
+                    "Indexed the result into private search and knowledge when learning succeeded.",
+                ],
+            },
+            "knowledge": knowledge,
+            "knowledge_sources_used": [knowledge.get("title")] if knowledge.get("title") else [],
+            "confidence": knowledge["confidence"],
+            "private_search": {"used": bool(learned.get("learned")), "results_count": 0, "top_sources": [knowledge.get("title")] if knowledge.get("title") else []},
+            "research": {},
+            "market_analysis": {},
+            "app_plan": {},
+            "codex_prompt": "",
+            "summary": learned,
+            "storage_used": "firestore" if self.storage.using_firestore else "local",
+            "memory_saved": memory_saved,
+            "next_actions": ["Ask what Builder Core learned from the page.", "Add another safe public URL only when you want one-page learning."],
+            "limitations": [
+                "Only one user-provided public http/https page is fetched.",
+                "No login, paywall, CAPTCHA bypass, private scraping, or uncontrolled crawling is performed.",
+            ],
+            "created_at": created_at,
+        }
+
+    def _compose_security_reply(self, security: dict[str, Any]) -> str:
+        return "\n".join(
+            [
+                "Builder Core defensive security status:",
+                f"- Monitor enabled: {security.get('monitor_enabled')}",
+                f"- Rate limiter enabled: {security.get('rate_limiter_enabled')}",
+                f"- Events logged: {security.get('events_count', 0)}",
+                f"- Highest severity: {security.get('highest_severity', 'low')}",
+                "- Recommended actions: " + "; ".join(security.get("recommendations", [])[:3]),
+                "- Policy: no retaliation; use logs, hardening, provider controls, and human approval for policy changes.",
+                f"- Limit: {security.get('disclaimer')}",
+            ]
+        )
+
+    def _extract_knowledge_note(self, message: str) -> str:
+        patterns = [
+            r"remember this:\s*(.*)",
+            r"learn this note:\s*(.*)",
+            r"learn this:\s*(.*)",
+            r"save this to memory:\s*(.*)",
+            r"save this:\s*(.*)",
+            r"add this to knowledge:\s*(.*)",
+            r"study this:\s*(.*)",
+            r"teach yourself this:\s*(.*)",
+            r"ingest this note:\s*(.*)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, message, flags=re.IGNORECASE | re.DOTALL)
+            if match:
+                return match.group(1).strip()
+        return message.strip()
+
+    def _extract_knowledge_query(self, message: str) -> str:
+        patterns = [
+            r"search your knowledge for\s*(.*)",
+            r"what do you know about\s*(.*)",
+            r"use your knowledge to\s*(.*)",
+            r"build knowledge about\s*(.*)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, message, flags=re.IGNORECASE | re.DOTALL)
+            if match and match.group(1).strip():
+                return match.group(1).strip(" ?:")
+        return message.strip()
+
+    def _extract_first_url(self, text: str) -> str | None:
+        match = re.search(r"https?://[^\s<>\"]+", text)
+        return match.group(0).rstrip(").,]") if match else None
+
+    def _knowledge_title(self, note: str) -> str:
+        first = note.strip().split(".")[0].strip()
+        return first[:120] or "Manual knowledge note"
 
     def _save_manual_summary(
         self,

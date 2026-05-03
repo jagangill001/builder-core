@@ -96,7 +96,7 @@ class SecurityMonitorService:
                 "IP headers can be spoofed unless trusted proxy configuration is enforced.",
                 "IP location is approximate and does not identify a person.",
                 "VPN, proxy, and cloud hosts may hide the true origin.",
-                "Builder Core does not hack back or perform offensive retaliation.",
+                "Builder Core follows a no-retaliation policy and uses defensive controls only.",
             ],
             "recommendations": [
                 "Add authentication before exposing admin security dashboards.",

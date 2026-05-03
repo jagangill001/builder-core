@@ -75,7 +75,7 @@ def get_security_hardening_payload() -> dict[str, Any]:
         "incident_response": get_incident_response_steps(),
         "future_security_upgrade_path": get_future_security_upgrade_path(),
         "policy": [
-            "No hack-back.",
+            "No retaliation.",
             "No malware.",
             "No credential theft.",
             "No exact attacker identity claims from IP metadata.",

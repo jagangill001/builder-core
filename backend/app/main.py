@@ -7,7 +7,7 @@ from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -17,6 +17,7 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 try:
     from app.app_planner import AppPlannerService
     from app.account_agent import AccountAgentService
+    from app.auth import get_admin_auth_status, require_admin
     from app.agent_engine import AgentEngineService
     from app.agent_roles import AgentRoleService
     from app.agent_tasks import AgentTaskService
@@ -28,6 +29,7 @@ try:
     from app.crawler_plan import CrawlerPlanService
     from app.document_ingest import DocumentIngestService
     from app.intelligence import build_intelligence_brief, get_supported_modes
+    from app.knowledge_manager import KnowledgeManagerService
     from app.learning import LearningService
     from app.market_analyzer import MarketAnalyzerService
     from app.model_router import ModelRouterService
@@ -49,6 +51,7 @@ try:
     from app.rate_limiter import RateLimiterService
     from app.security_hardening import get_security_hardening_payload
     from app.security_monitor import extract_client_ip, summarize_headers_safely, estimate_geo_hint, SecurityMonitorService
+    from app.seed_knowledge import SeedKnowledgeService
     from app.services import AutomationTaskService, FileStorageService
     from app.storage import ProjectStorageService
     from app.tasks import BackendTaskRunner
@@ -57,6 +60,7 @@ try:
 except ImportError:
     from app_planner import AppPlannerService
     from account_agent import AccountAgentService
+    from auth import get_admin_auth_status, require_admin
     from agent_engine import AgentEngineService
     from agent_roles import AgentRoleService
     from agent_tasks import AgentTaskService
@@ -68,6 +72,7 @@ except ImportError:
     from crawler_plan import CrawlerPlanService
     from document_ingest import DocumentIngestService
     from intelligence import build_intelligence_brief, get_supported_modes
+    from knowledge_manager import KnowledgeManagerService
     from learning import LearningService
     from market_analyzer import MarketAnalyzerService
     from model_router import ModelRouterService
@@ -89,6 +94,7 @@ except ImportError:
     from rate_limiter import RateLimiterService
     from security_hardening import get_security_hardening_payload
     from security_monitor import extract_client_ip, summarize_headers_safely, estimate_geo_hint, SecurityMonitorService
+    from seed_knowledge import SeedKnowledgeService
     from services import AutomationTaskService, FileStorageService
     from storage import ProjectStorageService
     from tasks import BackendTaskRunner
@@ -132,6 +138,8 @@ bridge_service = BridgeService()
 learning_service = LearningService(REPO_ROOT, project_storage_service)
 model_router_service = ModelRouterService()
 private_search_service = PrivateSearchService(project_storage_service)
+knowledge_manager_service = KnowledgeManagerService(project_storage_service, private_search_service, REPO_ROOT)
+seed_knowledge_service = SeedKnowledgeService(knowledge_manager_service)
 research_engine_service = ResearchEngineService(project_storage_service, private_search_service)
 market_analyzer_service = MarketAnalyzerService(project_storage_service)
 app_planner_service = AppPlannerService(project_storage_service)
@@ -148,6 +156,7 @@ security_monitor_service = SecurityMonitorService(project_storage_service)
 rate_limiter_service = RateLimiterService()
 connector_registry_service = ConnectorRegistryService()
 account_agent_service = AccountAgentService(project_storage_service, private_search_service, connector_registry_service)
+app.state.project_storage = project_storage_service
 os_core_service = BuilderCoreOSService(
     storage=project_storage_service,
     tool_registry=tool_registry_service,
@@ -167,6 +176,7 @@ agent_engine_service = AgentEngineService(
     roles=agent_role_service,
     security_monitor=security_monitor_service,
     account_agent=account_agent_service,
+    knowledge_manager=knowledge_manager_service,
 )
 orchestrator_service = UnifiedOrchestrator(
     storage=project_storage_service,
@@ -183,6 +193,8 @@ orchestrator_service = UnifiedOrchestrator(
     security_monitor=security_monitor_service,
     account_agent=account_agent_service,
     approval_system=approval_system_service,
+    rate_limiter=rate_limiter_service,
+    knowledge_manager=knowledge_manager_service,
 )
 
 SENSITIVE_RATE_LIMIT_PATHS = {
@@ -195,6 +207,9 @@ SENSITIVE_RATE_LIMIT_PATHS = {
     "/assistant/chat",
     "/agents/tasks",
     "/approvals/request",
+    "/knowledge/add",
+    "/knowledge/seed",
+    "/knowledge/scan-project",
 }
 
 
@@ -419,6 +434,18 @@ class SearchAddRequest(BaseModel):
     metadata: Optional[dict[str, Any]] = None
 
 class SearchQueryRequest(BaseModel):
+    query: str
+    limit: int = 10
+
+class KnowledgeAddRequest(BaseModel):
+    title: str
+    content: str
+    source_type: str = "manual_note"
+    category: str = "general"
+    tags: list[str] = Field(default_factory=list)
+    source_url: Optional[str] = None
+
+class KnowledgeSearchRequest(BaseModel):
     query: str
     limit: int = 10
 
@@ -1908,7 +1935,7 @@ def assistant_model_status():
     return model_router_service.get_active_model_status()
 
 
-@app.get("/tools")
+@app.get("/tools", dependencies=[Depends(require_admin)])
 def get_tools():
     return {
         "ok": True,
@@ -1922,7 +1949,7 @@ def storage_status():
     return project_storage_service.health_check()
 
 
-@app.post("/storage/test")
+@app.post("/storage/test", dependencies=[Depends(require_admin)])
 def storage_test():
     return project_storage_service.run_storage_test()
 
@@ -1964,7 +1991,7 @@ def agent_role(agent_id: str):
     return role
 
 
-@app.post("/agents/tasks")
+@app.post("/agents/tasks", dependencies=[Depends(require_admin)])
 def create_agent_task(payload: AgentTaskCreateRequest):
     goal = payload.user_goal.strip()
     if not goal:
@@ -1976,7 +2003,7 @@ def create_agent_task(payload: AgentTaskCreateRequest):
     )
 
 
-@app.get("/agents/tasks")
+@app.get("/agents/tasks", dependencies=[Depends(require_admin)])
 def list_agent_tasks(limit: int = 50):
     return {
         "ok": True,
@@ -1984,7 +2011,7 @@ def list_agent_tasks(limit: int = 50):
     }
 
 
-@app.get("/agents/tasks/{task_id}")
+@app.get("/agents/tasks/{task_id}", dependencies=[Depends(require_admin)])
 def get_agent_task(task_id: str):
     item = agent_task_service.get_agent_task(task_id)
     if item is None:
@@ -1992,7 +2019,7 @@ def get_agent_task(task_id: str):
     return item
 
 
-@app.post("/approvals/request")
+@app.post("/approvals/request", dependencies=[Depends(require_admin)])
 def request_approval(payload: ApprovalCreateRequest):
     if not payload.action_type.strip():
         raise HTTPException(status_code=400, detail="Approval action type is empty.")
@@ -2006,7 +2033,7 @@ def request_approval(payload: ApprovalCreateRequest):
     )
 
 
-@app.post("/approvals/{approval_id}/approve")
+@app.post("/approvals/{approval_id}/approve", dependencies=[Depends(require_admin)])
 def approve_request(approval_id: str):
     item = approval_system_service.approve(approval_id)
     if item is None:
@@ -2014,7 +2041,7 @@ def approve_request(approval_id: str):
     return item
 
 
-@app.post("/approvals/{approval_id}/reject")
+@app.post("/approvals/{approval_id}/reject", dependencies=[Depends(require_admin)])
 def reject_request(approval_id: str, payload: ApprovalRejectRequest | None = None):
     item = approval_system_service.reject(approval_id, reason=(payload.reason if payload else "") or "")
     if item is None:
@@ -2022,7 +2049,7 @@ def reject_request(approval_id: str, payload: ApprovalRejectRequest | None = Non
     return item
 
 
-@app.get("/approvals")
+@app.get("/approvals", dependencies=[Depends(require_admin)])
 def list_approvals(limit: int = 50, status: Optional[str] = None):
     return {
         "ok": True,
@@ -2041,7 +2068,7 @@ def security_status():
     }
 
 
-@app.get("/security/events")
+@app.get("/security/events", dependencies=[Depends(require_admin)])
 def security_events(limit: int = 50):
     return {
         "ok": True,
@@ -2049,22 +2076,22 @@ def security_events(limit: int = 50):
     }
 
 
-@app.get("/security/report")
+@app.get("/security/report", dependencies=[Depends(require_admin)])
 def security_report():
     return security_monitor_service.create_incident_report()
 
 
-@app.get("/security/hardening")
+@app.get("/security/hardening", dependencies=[Depends(require_admin)])
 def security_hardening():
     return get_security_hardening_payload()
 
 
-@app.get("/security/rate-limit")
+@app.get("/security/rate-limit", dependencies=[Depends(require_admin)])
 def security_rate_limit_status():
     return rate_limiter_service.get_rate_limit_status()
 
 
-@app.get("/connectors")
+@app.get("/connectors", dependencies=[Depends(require_admin)])
 def connectors():
     status = connector_registry_service.get_status()
     for item in status.get("items", []):
@@ -2072,12 +2099,12 @@ def connectors():
     return status
 
 
-@app.get("/account-agent/status")
+@app.get("/account-agent/status", dependencies=[Depends(require_admin)])
 def account_agent_status():
     return account_agent_service.get_account_agent_status()
 
 
-@app.post("/account-agent/search")
+@app.post("/account-agent/search", dependencies=[Depends(require_admin)])
 def account_agent_search(payload: AccountAgentSearchRequest):
     query = payload.query.strip()
     if not query:
@@ -2106,7 +2133,7 @@ def run_agent(payload: AgentRunRequest):
     )
 
 
-@app.get("/agent/history")
+@app.get("/agent/history", dependencies=[Depends(require_admin)])
 def agent_history(limit: int = 50):
     return {
         "ok": True,
@@ -2170,6 +2197,65 @@ def search_query(payload: SearchQueryRequest):
 @app.get("/search/status")
 def search_status():
     return private_search_service.get_search_status()
+
+
+@app.post("/knowledge/add")
+def knowledge_add(payload: KnowledgeAddRequest):
+    if not payload.content.strip():
+        raise HTTPException(status_code=400, detail="Knowledge content is empty.")
+    result = knowledge_manager_service.add_knowledge_entry(
+        {
+            "title": payload.title,
+            "content": payload.content,
+            "source_type": payload.source_type,
+            "category": payload.category,
+            "tags": payload.tags,
+            "source_url": payload.source_url,
+        }
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail="Knowledge entry could not be saved.")
+    return result
+
+
+@app.get("/knowledge")
+def knowledge_list(limit: int = 50, category: Optional[str] = None):
+    return {
+        "ok": True,
+        "items": knowledge_manager_service.list_knowledge(limit=limit, category=category),
+        "storage_used": "firestore" if project_storage_service.using_firestore else "local",
+    }
+
+
+@app.get("/knowledge/status")
+def knowledge_status():
+    return knowledge_manager_service.get_status()
+
+
+@app.post("/knowledge/search")
+def knowledge_search(payload: KnowledgeSearchRequest):
+    query = payload.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Knowledge query is empty.")
+    return knowledge_manager_service.search_knowledge(query=query, limit=payload.limit)
+
+
+@app.post("/knowledge/seed", dependencies=[Depends(require_admin)])
+def knowledge_seed():
+    return seed_knowledge_service.seed_default_packs()
+
+
+@app.post("/knowledge/scan-project", dependencies=[Depends(require_admin)])
+def knowledge_scan_project():
+    return knowledge_manager_service.scan_project_files()
+
+
+@app.get("/knowledge/{knowledge_id}")
+def knowledge_get(knowledge_id: str):
+    item = knowledge_manager_service.get_knowledge_entry(knowledge_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Knowledge entry not found.")
+    return item
 
 
 @app.post("/search/rebuild")
@@ -2284,7 +2370,7 @@ def get_research_task(research_id: str):
     return item
 
 
-@app.get("/self-improvement")
+@app.get("/self-improvement", dependencies=[Depends(require_admin)])
 def get_self_improvement():
     return {
         "ok": True,
@@ -2299,7 +2385,7 @@ def get_self_improvement():
     }
 
 
-@app.post("/self-improvement")
+@app.post("/self-improvement", dependencies=[Depends(require_admin)])
 def create_self_improvement_entry(payload: SelfImprovementCreateRequest):
     note = payload.note.strip()
     if not note:
@@ -2525,7 +2611,7 @@ def automation_github_status():
 def automation_deploy_status():
     return bridge_service.build_deploy_status_payload()
 
-@app.get("/memory")
+@app.get("/memory", dependencies=[Depends(require_admin)])
 def get_memory():
     return {
         "ok": True,
@@ -2550,7 +2636,7 @@ def get_memory():
         "cloud_ready_notes": project_storage_service.cloud_ready_notes,
     }
 
-@app.post("/memory")
+@app.post("/memory", dependencies=[Depends(require_admin)])
 def create_memory_entry(payload: MemoryEntryCreate):
     note = payload.note.strip()
     if not note:
@@ -2570,7 +2656,7 @@ def create_memory_entry(payload: MemoryEntryCreate):
         "storage_message": project_storage_service.storage_message,
     }
 
-@app.get("/learning")
+@app.get("/learning", dependencies=[Depends(require_admin)])
 def get_learning():
     payload = learning_service.build_learning_payload()
     return {
@@ -2578,7 +2664,7 @@ def get_learning():
         **payload,
     }
 
-@app.post("/learning/scan")
+@app.post("/learning/scan", dependencies=[Depends(require_admin)])
 def scan_learning():
     summary = learning_service.scan_project_structure()
     project_storage_service.save_project_memory(
@@ -2752,6 +2838,8 @@ def system_status():
     platform_status_payload = get_platform_status()
     agent_status_payload = agent_engine_service.get_status()
     security_status_payload = security_monitor_service.get_security_summary()
+    auth_status_payload = get_admin_auth_status()
+    knowledge_status_payload = knowledge_manager_service.get_status()
     connector_status_payload = connector_registry_service.get_status()
     account_agent_status_payload = account_agent_service.get_account_agent_status()
     recent_security_events = security_monitor_service.list_security_events(limit=100)
@@ -2766,18 +2854,40 @@ def system_status():
         "agent_status": agent_status_payload,
         "agent_roles_count": agent_role_service.count_roles(),
         "pending_approvals_count": approval_system_service.count_pending(),
+        "admin_auth_configured": auth_status_payload["admin_auth_configured"],
+        "protected_endpoints_enabled": auth_status_payload["protected_endpoints_enabled"],
+        "auth_status": auth_status_payload,
+        "knowledge_status": knowledge_status_payload,
+        "knowledge_seed_status": knowledge_status_payload.get("knowledge_seed_status", {}),
+        "knowledge_entries_count": knowledge_status_payload.get("total_entries", 0),
+        "command_security_routing_enabled": True,
+        "url_learning_from_chat_enabled": True,
+        "memory_save_from_chat_enabled": True,
         "security_monitor_enabled": True,
         "rate_limiter_enabled": rate_limiter_service.enabled,
         "recent_security_event_count": len(recent_security_events),
         "high_severity_security_event_count": high_severity_count,
-        "account_agent_status": account_agent_status_payload,
-        "connector_status": connector_status_payload,
+        "account_agent_status": {
+            "enabled": account_agent_status_payload.get("enabled"),
+            "mode": account_agent_status_payload.get("mode"),
+            "connected_sources_count": len(account_agent_status_payload.get("connected_sources", [])),
+            "future_ready_sources_count": len(account_agent_status_payload.get("future_ready_sources", [])),
+            "write_actions_require_confirmation": account_agent_status_payload.get("write_actions_require_confirmation"),
+            "warnings": account_agent_status_payload.get("warnings", []),
+        },
+        "connector_status": {
+            "count": len(connector_status_payload.get("items", [])),
+            "available_count": len([item for item in connector_status_payload.get("items", []) if item.get("status") == "available"]),
+            "future_ready_count": len([item for item in connector_status_payload.get("items", []) if item.get("status") == "ready_not_connected"]),
+            "warnings": connector_status_payload.get("warnings", []),
+        },
         "warnings": list(
             dict.fromkeys(
                 (storage_status_payload.get("warnings") or [])
                 + (platform_status_payload.get("warnings") or [])
                 + (model_status.get("warnings") or [])
                 + security_status_payload.get("warnings", [])
+                + auth_status_payload.get("warnings", [])
             )
         ),
         "manual_codex_mode": True,
@@ -2823,6 +2933,10 @@ def system_status():
                 "document_ingest",
                 "url_ingest",
                 "crawler_plan",
+                "security_check",
+                "knowledge_add",
+                "knowledge_search",
+                "url_learning",
             ],
         },
         "orchestrator_status": {
@@ -2841,7 +2955,7 @@ def system_status():
             "warnings": storage_status_payload.get("warnings", []),
         },
         "search_status": search_status_payload,
-        "knowledge_base_count": search_status_payload.get("knowledge_entries", 0),
+        "knowledge_base_count": knowledge_status_payload.get("total_entries", search_status_payload.get("knowledge_entries", 0)),
         "security_status": security_status_payload,
         "rate_limit_status": rate_limiter_service.get_rate_limit_status(),
         "agent_tasks_count": len(agent_task_service.list_agent_tasks(limit=200)),

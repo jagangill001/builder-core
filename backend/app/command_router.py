@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -37,8 +38,40 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         intents.append("law_research")
     if any(token in lowered for token in ["exam", "study plan", "syllabus", "revision"]):
         intents.append("exam_planning")
+    url_found = bool(re.search(r"https?://[^\s<>\"]+", message or ""))
+    memory_prefixes = [
+        "remember this:",
+        "learn this:",
+        "learn this note:",
+        "save this:",
+        "save this to memory:",
+        "add this to knowledge:",
+        "study this:",
+        "teach yourself this:",
+        "ingest this note:",
+    ]
+    knowledge_search_phrases = [
+        "search your knowledge for",
+        "what do you know about",
+        "use your knowledge to",
+        "build knowledge about",
+    ]
+    url_learning_phrases = [
+        "learn this url",
+        "learn this http",
+        "learn this https",
+        "ingest this url",
+        "remember this website",
+        "save this url",
+        "study this page",
+    ]
+
     if any(token in lowered for token in ["memory", "remember", "save this"]):
         intents.append("memory_save")
+    if any(prefix in lowered for prefix in memory_prefixes):
+        intents.append("knowledge_add")
+    if any(phrase in lowered for phrase in knowledge_search_phrases):
+        intents.append("knowledge_search")
     if any(token in lowered for token in ["learn from", "lesson", "update learning"]):
         intents.append("learning_update")
     if any(token in lowered for token in ["improve", "preference", "what worked", "what failed"]):
@@ -54,12 +87,32 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         intents.append("document_ingest")
     if any(token in lowered for token in ["ingest url", "save url", "crawl page", "fetch page", "learn this url", "learn url"]):
         intents.append("url_ingest")
+    if url_found and any(phrase in lowered for phrase in url_learning_phrases):
+        intents.append("url_learning")
     if any(token in lowered for token in ["crawl", "crawler", "max pages", "seed urls"]):
         intents.append("crawler_plan")
     if any(token in lowered for token in ["code", "backend", "frontend", "route", "typescript", "python"]):
         intents.append("coding")
-    if any(token in lowered for token in ["check security", "protect builder core", "protect system", "under attack", "security report"]):
+    security_phrases = [
+        "check security",
+        "protect builder core",
+        "protect system",
+        "system safety",
+        "security report",
+        "security status",
+        "security monitor",
+        "security events",
+        "harden system",
+        "firewall",
+        "rate limiter",
+        "incident report",
+        "protect my backend",
+        "protect my app",
+    ]
+    if any(token in lowered for token in security_phrases) or ("security" in lowered and any(token in lowered for token in ["check", "protect", "protected", "status", "report"])):
         intents.append("security_check")
+    if any(token in lowered for token in ["protect builder core", "protect system", "system safety", "protect my backend", "protect my app", "system is protected"]):
+        intents.append("system_protection")
     if any(token in lowered for token in ["attack detection", "am i under attack"]):
         intents.append("attack_detection")
     if any(token in lowered for token in ["firewall", "harden firewall", "hardening"]):
@@ -98,6 +151,7 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         "agent_role_request",
         "business_planning",
         "security_check",
+        "system_protection",
         "attack_detection",
         "firewall_hardening",
         "incident_report",
@@ -112,6 +166,14 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
 
     if "summary_save" in unique_intents:
         workflow = "save_summary"
+    elif "security_check" in unique_intents or "system_protection" in unique_intents:
+        workflow = "incident_report" if "incident_report" in unique_intents else "security_check"
+    elif "url_learning" in unique_intents:
+        workflow = "url_learning"
+    elif "knowledge_add" in unique_intents:
+        workflow = "knowledge_add"
+    elif "knowledge_search" in unique_intents:
+        workflow = "knowledge_search"
     elif any(intent in unique_intents for intent in os_agent_intents):
         workflow = "agent_os"
     elif "research" in unique_intents and "market_analysis" in unique_intents and "app_builder" in unique_intents:
@@ -138,7 +200,15 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         workflow = "cloud_storage_setup"
 
     primary_intent = unique_intents[0]
-    if "market_analysis" in unique_intents:
+    if "security_check" in unique_intents:
+        primary_intent = "security_check"
+    elif "knowledge_add" in unique_intents:
+        primary_intent = "knowledge_add"
+    elif "knowledge_search" in unique_intents:
+        primary_intent = "knowledge_search"
+    elif "url_learning" in unique_intents:
+        primary_intent = "url_learning"
+    elif "market_analysis" in unique_intents:
         primary_intent = "market_analysis"
     elif "app_builder" in unique_intents:
         primary_intent = "app_builder"
@@ -155,6 +225,6 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         "primary_intent": primary_intent,
         "intents": unique_intents,
         "workflow": workflow,
-        "confidence": "medium",
+        "confidence": "high" if workflow in {"security_check", "knowledge_add", "knowledge_search", "url_learning"} else "medium",
         "actions": actions,
     }

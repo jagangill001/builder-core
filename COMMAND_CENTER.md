@@ -359,3 +359,94 @@ npm run build
 After this upgrade, the clean next step is to verify Firestore on the live backend and then decide between:
 - improving evidence display and private-search ranking
 - enabling an optional local model endpoint while keeping local rule-based fallback
+
+## Admin Authentication
+Internal dashboard routes now require `X-Admin-Key` when `ADMIN_API_KEY` is configured.
+
+Set it in Cloud Run:
+1. Cloud Run
+2. `builder-core`
+3. Edit & deploy new revision
+4. Variables & Secrets
+5. Add `ADMIN_API_KEY=your-long-random-admin-key`
+6. Deploy
+
+The key is never hardcoded, never returned by status endpoints, never stored in Firestore, and never placed in frontend source. The frontend Admin Access panel stores the key only in browser `localStorage` after the admin enters it.
+
+Protected internal routes:
+- `/security/events`
+- `/security/report`
+- `/security/hardening`
+- `/approvals`
+- `/agents/tasks`
+- `/agent/history`
+- `/account-agent/status`
+- `/account-agent/search`
+- `/connectors`
+- `/memory`
+- `/learning`
+- `/self-improvement`
+- `/storage/test`
+- `/knowledge/seed`
+- `/knowledge/scan-project`
+- `/tools`
+
+## System-Safety Routing
+The main `/command` workflow now routes defensive security and system-safety questions to `security_check` instead of `normal_chat`.
+
+Examples:
+- `Check Builder Core security and tell me if the system is protected`
+- `Protect Builder Core`
+- `Show security status`
+- `Harden system`
+- `Show incident report`
+
+The response includes monitor status, rate-limit status, event count, highest severity, defensive recommendations, hardening checklist summaries, and a no-retaliation disclaimer.
+
+## Safe Authorized Defensive Checks
+Only run these against your own Builder Core backend:
+
+```powershell
+curl.exe -sS https://builder-core-599596796788.us-central1.run.app/security/status
+curl.exe -H "X-Admin-Key: YOUR_ADMIN_KEY" -sS https://builder-core-599596796788.us-central1.run.app/security/report
+curl.exe -H "X-Admin-Key: YOUR_ADMIN_KEY" -sS https://builder-core-599596796788.us-central1.run.app/security/events
+curl.exe -i https://builder-core-599596796788.us-central1.run.app/.env
+```
+
+These are defensive logging and reporting checks. They do not scan third parties, exploit vulnerabilities, bypass protections, or retaliate.
+
+## Knowledge Feeding System
+Builder Core can now accept knowledge from manual notes, pasted text, safe public URLs provided by the user, seed packs, and safe project file summaries.
+
+Endpoints:
+- `POST /knowledge/add`
+- `GET /knowledge`
+- `GET /knowledge/{knowledge_id}`
+- `POST /knowledge/search`
+- `GET /knowledge/status`
+- `POST /knowledge/seed` with admin key
+- `POST /knowledge/scan-project` with admin key
+
+Seed packs:
+- Builder Core OS Architecture
+- Safe Defensive System
+- AI Agent System
+- Business and Market Analysis
+- App Building Workflow
+- Teaching and Study System
+- Trucking Business Knowledge Starter
+- Legal, Medical, and Finance Safety Limits
+
+## One-Chat Knowledge Workflows
+The main chat can now handle:
+- `Remember this: ...`
+- `Learn this: ...`
+- `Add this to knowledge: ...`
+- `Search your knowledge for ...`
+- `What do you know about ...`
+- `Learn this URL https://example.com`
+
+URL learning fetches one user-provided public page only. It blocks localhost, private IPs, `.onion`, and non-http/https schemes. It does not bypass login, CAPTCHA, paywalls, or site rules.
+
+## No Fake Knowledge Policy
+Builder Core answers from saved/internal knowledge, seed packs, user notes, and safely ingested URLs. Confidence is low, medium, or high based on saved source strength. It does not claim internet-wide knowledge and does not train a model.

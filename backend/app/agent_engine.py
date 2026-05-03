@@ -42,6 +42,7 @@ class AgentEngineService:
         roles: AgentRoleService,
         security_monitor: Any | None = None,
         account_agent: Any | None = None,
+        knowledge_manager: Any | None = None,
     ) -> None:
         self.storage = storage
         self.private_search = private_search
@@ -53,6 +54,7 @@ class AgentEngineService:
         self.roles = roles
         self.security_monitor = security_monitor
         self.account_agent = account_agent
+        self.knowledge_manager = knowledge_manager
 
     def run_agent(self, message: str, mode: str = "auto", save_to_memory: bool = True) -> dict[str, Any]:
         context = {
@@ -64,6 +66,7 @@ class AgentEngineService:
         plan = self.create_agent_plan(message, context)
         execution = self.execute_agent_steps(plan)
         summary = self.summarize_agent_result(execution)
+        structured_response = self.build_structured_agent_response(execution)
         memory_saved = self.save_agent_memory(execution) if save_to_memory else False
         followups = self.create_followup_suggestions(execution)
         run_id = f"agent_run_{uuid4().hex[:12]}"
@@ -104,6 +107,7 @@ class AgentEngineService:
             "agent_run_id": saved_run["id"],
             "selected_agent_role": selected_role,
             "answer": summary,
+            "structured_response": structured_response,
             "plan": plan,
             "result": execution,
             "tools_used": execution.get("tools_used", []),
@@ -111,6 +115,7 @@ class AgentEngineService:
             "security_warnings": execution.get("security_warnings", []),
             "knowledge_sources_used": execution.get("knowledge_sources_used", []),
             "confidence": execution.get("confidence", "medium"),
+            "missing_knowledge": execution.get("missing_knowledge", []),
             "limitations": execution.get("limitations", []),
             "memory_saved": memory_saved,
             "storage_used": "firestore" if self.storage.using_firestore else "local",
@@ -151,6 +156,8 @@ class AgentEngineService:
 
     def choose_tools_for_goal(self, goal: str, detected_intents: list[str]) -> list[str]:
         tools = ["private_search"]
+        if any(intent in detected_intents for intent in ["knowledge_search", "knowledge_add"]):
+            tools.append("knowledge_manager")
         if "security_check" in detected_intents or "incident_report" in detected_intents:
             tools.append("security_monitor")
         if "url_learning" in detected_intents:
@@ -203,6 +210,12 @@ class AgentEngineService:
                 outputs["security"] = {"status": summary, "report": report}
                 security_warnings.extend(summary.get("warnings", []))
                 step_result["result_summary"] = report.get("summary", "Security summary ready.")
+            elif tool == "knowledge_manager" and self.knowledge_manager is not None:
+                knowledge = self.knowledge_manager.search_knowledge(goal, limit=5)
+                outputs["knowledge"] = knowledge
+                knowledge_sources.extend(knowledge.get("sources_used", []))
+                missing_knowledge.extend(knowledge.get("missing_knowledge", []))
+                step_result["result_summary"] = f"Knowledge manager found {len(knowledge.get('results', []))} structured matches."
             elif tool == "market_analyzer" and self.market_analyzer is not None:
                 market = self.market_analyzer.analyze_market(goal, outputs.get("private_search", {}).get("results", []))
                 outputs["market_analysis"] = market
@@ -269,24 +282,131 @@ class AgentEngineService:
                 "Agent work is rule-based and internal in this foundation stage.",
                 "It does not perform uncontrolled background work or external high-risk action.",
             ],
-            "confidence": "medium",
+            "confidence": self._calculate_agent_confidence(knowledge_sources, missing_knowledge),
         }
 
     def summarize_agent_result(self, result: dict[str, Any]) -> str:
-        role = result.get("selected_agent_role") or "internal_agent"
-        lines = [f"{role} handled the goal using Builder Core internal tools."]
-        if result.get("outputs", {}).get("security"):
-            lines.append(result["outputs"]["security"]["report"].get("summary", "Security report is ready."))
-        if result.get("outputs", {}).get("learn_url"):
-            learned = result["outputs"]["learn_url"]
-            lines.append(f"URL learning: learned={learned.get('learned')} chunks={learned.get('chunks_created', 0)}.")
-        if result.get("outputs", {}).get("crawler_plan"):
-            lines.append("Crawler plan created without starting uncontrolled crawling.")
-        if result.get("knowledge_sources_used"):
-            lines.append(f"Knowledge sources used: {', '.join(result['knowledge_sources_used'][:5])}.")
-        if result.get("approvals_needed"):
-            lines.append("Approval gates apply before high-risk or external action.")
-        return " ".join(lines)
+        structured = self.build_structured_agent_response(result)
+        lines = [
+            f"Goal: {structured['goal']}",
+            f"Selected role: {structured['selected_role']}",
+            f"What I checked: {', '.join(structured['what_i_checked']) or 'Builder Core saved context.'}",
+            f"Analysis: {structured['analysis']}",
+            "Plan:",
+            *[f"- {item}" for item in structured["plan"]],
+            f"Risks / limitations: {'; '.join(structured['risks_limitations'])}",
+            f"Missing knowledge: {'; '.join(structured['missing_knowledge']) or 'None found for this run.'}",
+            f"Tools used: {', '.join(structured['tools_used'])}",
+            f"Memory saved status: {structured['memory_saved_status']}",
+            f"Approval needed: {structured['approval_needed']}",
+        ]
+        return "\n".join(lines)
+
+    def build_structured_agent_response(self, result: dict[str, Any]) -> dict[str, Any]:
+        role = str(result.get("selected_agent_role") or "research_agent")
+        outputs = result.get("outputs", {})
+        base_plan = [
+            "Use saved Builder Core knowledge first.",
+            "Separate evidence from assumptions.",
+            "Keep real-world or high-risk actions behind human approval.",
+        ]
+        role_plan = self._role_specific_plan(role, result)
+        analysis = self._role_specific_analysis(role, result)
+        return {
+            "goal": result.get("goal") or "",
+            "selected_role": role,
+            "what_i_checked": result.get("tools_used", []),
+            "analysis": analysis,
+            "plan": role_plan or base_plan,
+            "risks_limitations": result.get("limitations", []),
+            "missing_knowledge": result.get("missing_knowledge", []),
+            "tools_used": result.get("tools_used", []),
+            "next_actions": self.create_followup_suggestions(result),
+            "memory_saved_status": "saved when save_to_memory is true",
+            "approval_needed": "yes" if result.get("approvals_needed") else "no",
+            "knowledge_sources_used": result.get("knowledge_sources_used", []),
+            "confidence": result.get("confidence", "medium"),
+            "role_specific": outputs,
+        }
+
+    def _role_specific_analysis(self, role: str, result: dict[str, Any]) -> str:
+        source_count = len(result.get("knowledge_sources_used", []))
+        if role == "ceo_agent":
+            return "This should be treated as an operating plan: define the user, MVP, revenue path, cost areas, risks, and short roadmap."
+        if role == "research_agent":
+            return f"Research confidence depends on saved evidence. I found {source_count} saved source references and listed missing evidence separately."
+        if role == "developer_agent":
+            return "Implementation should stay scoped: backend routes, frontend display, storage records, tests, and a Codex-ready prompt when needed."
+        if role in {"cybersecurity_agent", "firewall_defense_agent", "incident_response_agent"}:
+            return "This is defensive status and hardening work only. Builder Core does not retaliate, dox, or claim exact identity from IP data."
+        if role == "teacher_agent":
+            return "The best teaching path is explanation, lesson plan, practice, review, and more saved notes when the knowledge base is thin."
+        if role == "finance_trading_analyst":
+            return "Decision-support only: compare bullish and bearish factors, state missing data, and never execute a live trade."
+        if role in {"legal_research_assistant", "medical_info_assistant"}:
+            return "Information-only support. A qualified professional must review real legal, medical, or safety-critical decisions."
+        return "Builder Core used internal tools and saved knowledge where available, with limitations shown honestly."
+
+    def _role_specific_plan(self, role: str, result: dict[str, Any]) -> list[str]:
+        if role == "ceo_agent":
+            return [
+                "Business vision: make Builder Core OS useful as a self-sufficient internal operating system.",
+                "Target user: the owner/operator who wants one private command center for building, learning, security, and business planning.",
+                "MVP: one-chat command flow, memory, knowledge search, admin protection, and reliable status panels.",
+                "Revenue model: services, setup support, private deployments, and later subscription features after validation.",
+                "Cost areas: Cloud Run, Firestore, storage, logging, domain, optional model/API usage, and maintenance time.",
+                "Main risks: thin knowledge base, missing auth setup, overpromising AI ability, and insufficient testing.",
+                "7-day action plan: seed knowledge, protect admin routes, improve chat answers, verify deploy, document setup, gather user notes, test daily workflows.",
+                "30-day roadmap: add richer knowledge import, admin dashboard, better local model adapter, audit logs, and safer deployment controls.",
+            ]
+        if role == "research_agent":
+            return [
+                "State the research question.",
+                "List known saved evidence.",
+                "List missing evidence and source gaps.",
+                "Show sources used and confidence.",
+                "Recommend next research steps or safe URL ingestion.",
+            ]
+        if role == "developer_agent":
+            return [
+                "Files likely affected: backend routes/services, frontend chat display, storage collections, docs.",
+                "Backend plan: route intent, use services, persist results, keep safety gates.",
+                "Frontend plan: show workflow, tools, knowledge, confidence, approvals, and limitations.",
+                "Storage plan: write only scoped records to Firestore/local fallback.",
+                "Tests: backend import, endpoint checks, frontend build, and deployment verification.",
+                "Codex prompt: generate one only when implementation handoff is requested.",
+            ]
+        if role in {"cybersecurity_agent", "firewall_defense_agent", "incident_response_agent"}:
+            return [
+                "Check security monitor status and recent suspicious events.",
+                "Summarize defensive recommendations.",
+                "State no-retaliation policy and IP/location limits.",
+                "Require approval for blocking, cloud changes, secret rotation, or policy changes.",
+            ]
+        if role == "teacher_agent":
+            return [
+                "Give a simple explanation.",
+                "Create a short lesson plan.",
+                "Add practice tasks.",
+                "Ask review questions.",
+                "Suggest notes or URLs to improve future lessons.",
+            ]
+        if role == "finance_trading_analyst":
+            return [
+                "State decision-support-only limits.",
+                "List bullish factors.",
+                "List bearish factors.",
+                "List risk factors and missing data.",
+                "Do not execute live trades.",
+            ]
+        if role in {"legal_research_assistant", "medical_info_assistant"}:
+            return [
+                "Provide information only.",
+                "List relevant saved sources if available.",
+                "State missing evidence.",
+                "Require professional review for real decisions.",
+            ]
+        return []
 
     def save_agent_memory(self, result: dict[str, Any]) -> bool:
         self.storage.save_record(
@@ -333,6 +453,8 @@ class AgentEngineService:
         return {
             "ok": bool(result.get("ok")),
             "document_id": result.get("document_id"),
+            "title": result.get("title"),
+            "text_chars": result.get("text_chars", 0),
             "learned": learned,
             "chunks_created": result.get("chunks_created", 0),
             "saved_to_firestore": bool(self.storage.using_firestore and learned),
@@ -378,6 +500,10 @@ class AgentEngineService:
             intents.append("incident_report")
         if any(token in lowered for token in ["learn this url", "learn url", "http://", "https://"]):
             intents.append("url_learning")
+        if any(token in lowered for token in ["remember this:", "add this to knowledge:", "save this to memory:", "learn this:"]):
+            intents.append("knowledge_add")
+        if any(token in lowered for token in ["search your knowledge", "what do you know about", "use your knowledge"]):
+            intents.append("knowledge_search")
         if "crawl" in lowered:
             intents.append("crawler_plan")
         if any(token in lowered for token in ["teach", "study", "python"]):
@@ -436,3 +562,11 @@ class AgentEngineService:
     def _extract_first_url(self, text: str) -> str | None:
         match = re.search(r"https?://[^\s<>\"]+", text)
         return match.group(0).rstrip(").,]") if match else None
+
+    def _calculate_agent_confidence(self, sources: list[str], missing_knowledge: list[str]) -> str:
+        unique_sources = [source for source in dict.fromkeys(sources) if source]
+        if len(unique_sources) >= 3 and not missing_knowledge:
+            return "high"
+        if unique_sources:
+            return "medium"
+        return "low"

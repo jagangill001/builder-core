@@ -48,8 +48,11 @@ type CommandResponse = {
   summary?: AnyRecord;
   approvals_needed?: string[];
   security_warnings?: string[];
+  security?: AnyRecord;
+  knowledge?: AnyRecord;
   knowledge_sources_used?: string[];
   confidence?: string;
+  missing_knowledge?: string[];
   limitations?: string[];
   storage_used?: string;
   memory_saved?: boolean;
@@ -77,6 +80,9 @@ type StatusBundle = {
   security?: AnyRecord;
   securityReport?: AnyRecord;
   hardening?: AnyRecord;
+  knowledge?: AnyRecord;
+  knowledgeSearch?: AnyRecord;
+  protectedErrors?: Record<string, string>;
   tools?: AnyRecord;
   search?: AnyRecord;
   storage?: AnyRecord;
@@ -103,11 +109,23 @@ async function parseResponse<T>(response: Response): Promise<T | null> {
   }
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+function friendlyProtectedMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : "Request failed";
+  if (message.includes("401") || message.toLowerCase().includes("required")) {
+    return "Admin key required for this panel. Add your admin key in Admin Access.";
+  }
+  if (message.includes("403") || message.toLowerCase().includes("rejected")) {
+    return "Admin key rejected. Check ADMIN_API_KEY.";
+  }
+  return message;
+}
+
+async function requestJson<T>(path: string, init?: RequestInit, adminKey?: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...(adminKey ? { "X-Admin-Key": adminKey } : {}),
       ...(init?.headers ?? {}),
     },
   });
@@ -192,8 +210,40 @@ function MessageResult({ result }: { result: CommandResponse }) {
       <ListBlock title="Approvals Needed" items={result.approvals_needed} />
       <ListBlock title="Security Warnings" items={result.security_warnings} />
       <ListBlock title="Knowledge Sources" items={result.knowledge_sources_used ?? result.private_search?.top_sources} />
+      <ListBlock title="Missing Knowledge" items={result.missing_knowledge ?? ((result.knowledge?.missing_knowledge as unknown[]) ?? [])} />
       <ListBlock title="Limitations" items={result.limitations} />
       <ListBlock title="Next Actions" items={result.next_actions} />
+
+      {result.security && (
+        <div className="space-y-2 rounded-md border border-emerald-200 bg-emerald-50 p-3">
+          <h3 className="text-sm font-semibold text-emerald-950">Security Status</h3>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Field label="Monitor" value={String(result.security.monitor_enabled ?? false)} />
+            <Field label="Rate Limiter" value={String(result.security.rate_limiter_enabled ?? false)} />
+            <Field label="Events" value={String(result.security.events_count ?? 0)} />
+            <Field label="Highest" value={String(result.security.highest_severity ?? "low")} />
+          </div>
+          <ListBlock title="Recent High Severity" items={(result.security.recent_high_severity as unknown[]) ?? []} />
+          <ListBlock title="Top Patterns" items={(result.security.top_patterns as unknown[]) ?? []} />
+          <ListBlock title="Recommended Defensive Actions" items={(result.security.recommendations as unknown[]) ?? []} />
+          <ListBlock title="Hardening Summary" items={Object.entries((result.security.hardening as AnyRecord) ?? {}).flatMap(([key, value]) => [`${titleCase(key)}: ${Array.isArray(value) ? value.slice(0, 2).join("; ") : String(value)}`])} />
+          <p className="text-sm font-semibold text-emerald-900">{String(result.security.disclaimer ?? "IP/location data is approximate and does not identify a person.")}</p>
+        </div>
+      )}
+
+      {result.knowledge && (
+        <div className="space-y-2 rounded-md border border-sky-200 bg-sky-50 p-3">
+          <h3 className="text-sm font-semibold text-sky-950">Knowledge</h3>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Field label="Action" value={String(result.knowledge.action ?? "used")} />
+            <Field label="Confidence" value={titleCase(String(result.knowledge.confidence ?? result.confidence ?? "low"))} />
+          </div>
+          <ListBlock title="Source Titles" items={(result.knowledge.sources_used as unknown[]) ?? result.knowledge_sources_used ?? []} />
+          <ListBlock title="Key Points" items={(result.knowledge.key_points as unknown[]) ?? []} />
+          <ListBlock title="Missing Knowledge" items={(result.knowledge.missing_knowledge as unknown[]) ?? []} />
+          <JsonBlock value={result.knowledge} />
+        </div>
+      )}
 
       {prompt && (
         <div className="space-y-2">
@@ -245,13 +295,31 @@ export default function Home() {
   const [sending, setSending] = useState(false);
   const [statuses, setStatuses] = useState<StatusBundle>({});
   const [statusError, setStatusError] = useState("");
+  const [adminKey, setAdminKey] = useState("");
+  const [adminDraft, setAdminDraft] = useState("");
+  const [adminMessage, setAdminMessage] = useState("");
   const [urlToLearn, setUrlToLearn] = useState("");
   const [crawlUrl, setCrawlUrl] = useState("");
   const [accountQuery, setAccountQuery] = useState("");
+  const [knowledgeTitle, setKnowledgeTitle] = useState("");
+  const [knowledgeContent, setKnowledgeContent] = useState("");
+  const [knowledgeCategory, setKnowledgeCategory] = useState("general");
+  const [knowledgeTags, setKnowledgeTags] = useState("");
+  const [knowledgeQuery, setKnowledgeQuery] = useState("");
 
   const latestAssistant = useMemo(() => [...thread].reverse().find((item) => item.role === "assistant" && item.result), [thread]);
 
-  async function refreshStatuses() {
+  async function protectedJson<T>(path: string, keyOverride?: string): Promise<T | { error: string }> {
+    const key = keyOverride ?? adminKey;
+    if (!key) return { error: "Admin key required for this panel. Add your admin key in Admin Access." };
+    try {
+      return await requestJson<T>(path, undefined, key);
+    } catch (error) {
+      return { error: friendlyProtectedMessage(error) };
+    }
+  }
+
+  async function refreshStatuses(keyOverride?: string) {
     setStatusError("");
     try {
       const [
@@ -259,49 +327,77 @@ export default function Home() {
         os,
         platform,
         roles,
-        tasks,
-        approvals,
-        account,
-        connectors,
         security,
-        securityReport,
-        hardening,
-        tools,
         search,
         storage,
         model,
-        memory,
-        learning,
-        selfImprovement,
+        knowledge,
       ] = await Promise.all([
         requestJson<AnyRecord>("/system/status"),
         requestJson<AnyRecord>("/os/status"),
         requestJson<AnyRecord>("/platform/status"),
         requestJson<AnyRecord>("/agents/roles"),
-        requestJson<AnyRecord>("/agents/tasks"),
-        requestJson<AnyRecord>("/approvals"),
-        requestJson<AnyRecord>("/account-agent/status"),
-        requestJson<AnyRecord>("/connectors"),
         requestJson<AnyRecord>("/security/status"),
-        requestJson<AnyRecord>("/security/report"),
-        requestJson<AnyRecord>("/security/hardening"),
-        requestJson<AnyRecord>("/tools"),
         requestJson<AnyRecord>("/search/status"),
         requestJson<AnyRecord>("/storage/status"),
         requestJson<AnyRecord>("/assistant/model-status"),
-        requestJson<AnyRecord>("/memory"),
-        requestJson<AnyRecord>("/learning"),
-        requestJson<AnyRecord>("/self-improvement"),
+        requestJson<AnyRecord>("/knowledge/status"),
       ]);
-      setStatuses({ system, os, platform, roles, tasks, approvals, account, connectors, security, securityReport, hardening, tools, search, storage, model, memory, learning, selfImprovement });
+      const [
+        tasks,
+        approvals,
+        account,
+        connectors,
+        securityReport,
+        hardening,
+        tools,
+        memory,
+        learning,
+        selfImprovement,
+      ] = await Promise.all([
+        protectedJson<AnyRecord>("/agents/tasks", keyOverride),
+        protectedJson<AnyRecord>("/approvals", keyOverride),
+        protectedJson<AnyRecord>("/account-agent/status", keyOverride),
+        protectedJson<AnyRecord>("/connectors", keyOverride),
+        protectedJson<AnyRecord>("/security/report", keyOverride),
+        protectedJson<AnyRecord>("/security/hardening", keyOverride),
+        protectedJson<AnyRecord>("/tools", keyOverride),
+        protectedJson<AnyRecord>("/memory", keyOverride),
+        protectedJson<AnyRecord>("/learning", keyOverride),
+        protectedJson<AnyRecord>("/self-improvement", keyOverride),
+      ]);
+      const protectedErrors: Record<string, string> = {};
+      Object.entries({ tasks, approvals, account, connectors, securityReport, hardening, tools, memory, learning, selfImprovement }).forEach(([key, value]) => {
+        if (typeof value === "object" && value !== null && "error" in value) protectedErrors[key] = String((value as AnyRecord).error);
+      });
+      setStatuses({ system, os, platform, roles, tasks, approvals, account, connectors, security, securityReport, hardening, tools, search, storage, model, memory, learning, selfImprovement, knowledge, protectedErrors });
     } catch (error) {
       setStatusError(error instanceof Error ? error.message : "Status refresh failed");
     }
   }
 
   useEffect(() => {
-    refreshStatuses();
+    const stored = window.localStorage.getItem("builder_core_admin_key") ?? "";
+    setAdminKey(stored);
+    setAdminDraft(stored);
+    refreshStatuses(stored);
   }, []);
+
+  function saveAdminKey() {
+    const value = adminDraft.trim();
+    window.localStorage.setItem("builder_core_admin_key", value);
+    setAdminKey(value);
+    setAdminMessage(value ? "Admin key saved in this browser only." : "Admin key cleared.");
+    refreshStatuses(value);
+  }
+
+  function clearAdminKey() {
+    window.localStorage.removeItem("builder_core_admin_key");
+    setAdminKey("");
+    setAdminDraft("");
+    setAdminMessage("Admin key cleared.");
+    refreshStatuses("");
+  }
 
   async function submitCommand(event: FormEvent) {
     event.preventDefault();
@@ -364,16 +460,95 @@ export default function Home() {
   async function searchAccountAgent(event: FormEvent) {
     event.preventDefault();
     if (!accountQuery.trim()) return;
-    const result = await requestJson<AnyRecord>("/account-agent/search", {
+    if (!adminKey) {
+      setStatusError("Admin key required for this panel. Add your admin key in Admin Access.");
+      return;
+    }
+    try {
+      const result = await requestJson<AnyRecord>(
+        "/account-agent/search",
+        {
+          method: "POST",
+          body: JSON.stringify({ query: accountQuery.trim(), sources: ["firestore_memory", "private_search"], save_to_memory: saveToMemory }),
+        },
+        adminKey,
+      );
+      setThread((current) => [
+        ...current,
+        { id: createId("assistant"), role: "assistant", content: String(result.summary ?? "Account-agent search completed.") },
+      ]);
+      setAccountQuery("");
+      refreshStatuses(adminKey);
+    } catch (error) {
+      setStatusError(friendlyProtectedMessage(error));
+    }
+  }
+
+  async function addKnowledge(event: FormEvent) {
+    event.preventDefault();
+    if (!knowledgeContent.trim()) return;
+    const result = await requestJson<AnyRecord>("/knowledge/add", {
       method: "POST",
-      body: JSON.stringify({ query: accountQuery.trim(), sources: ["firestore_memory", "private_search"], save_to_memory: saveToMemory }),
+      body: JSON.stringify({
+        title: knowledgeTitle.trim() || "Manual knowledge note",
+        content: knowledgeContent.trim(),
+        source_type: "manual_note",
+        category: knowledgeCategory,
+        tags: knowledgeTags.split(",").map((tag) => tag.trim()).filter(Boolean),
+      }),
     });
     setThread((current) => [
       ...current,
-      { id: createId("assistant"), role: "assistant", content: String(result.summary ?? "Account-agent search completed.") },
+      { id: createId("assistant"), role: "assistant", content: `Knowledge saved: ${String(result.knowledge_id ?? "saved")} chunks=${String(result.chunks_created ?? 0)}` },
     ]);
-    setAccountQuery("");
+    setKnowledgeTitle("");
+    setKnowledgeContent("");
+    setKnowledgeTags("");
     refreshStatuses();
+  }
+
+  async function searchKnowledge(event: FormEvent) {
+    event.preventDefault();
+    if (!knowledgeQuery.trim()) return;
+    const result = await requestJson<AnyRecord>("/knowledge/search", {
+      method: "POST",
+      body: JSON.stringify({ query: knowledgeQuery.trim(), limit: 8 }),
+    });
+    setStatuses((current) => ({ ...current, knowledgeSearch: result }));
+  }
+
+  async function seedKnowledge() {
+    if (!adminKey) {
+      setStatusError("Admin key required for this panel. Add your admin key in Admin Access.");
+      return;
+    }
+    try {
+      const result = await requestJson<AnyRecord>("/knowledge/seed", { method: "POST", body: JSON.stringify({}) }, adminKey);
+      setThread((current) => [
+        ...current,
+        { id: createId("assistant"), role: "assistant", content: String(result.message ?? "Knowledge seed complete.") },
+      ]);
+      refreshStatuses(adminKey);
+    } catch (error) {
+      setStatusError(friendlyProtectedMessage(error));
+    }
+  }
+
+  async function scanProjectKnowledge() {
+    if (!adminKey) {
+      setStatusError("Admin key required for this panel. Add your admin key in Admin Access.");
+      return;
+    }
+    try {
+      const result = await requestJson<AnyRecord>("/knowledge/scan-project", { method: "POST", body: JSON.stringify({}) }, adminKey);
+      setThread((current) => [
+        ...current,
+        { id: createId("assistant"), role: "assistant", content: `Project scan complete: ${String(result.knowledge_entries_created ?? 0)} entries.` },
+      ]);
+      refreshStatuses(adminKey);
+    } catch (error) {
+      setStatusError(friendlyProtectedMessage(error));
+    }
   }
 
   const system = statuses.system ?? {};
@@ -467,6 +642,27 @@ export default function Home() {
               </div>
             </div>
 
+            <Panel title="Admin Access">
+              <div className="space-y-3">
+                <input
+                  value={adminDraft}
+                  onChange={(event) => setAdminDraft(event.target.value)}
+                  type="password"
+                  placeholder="X-Admin-Key"
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                />
+                <div className="flex gap-2">
+                  <button type="button" onClick={saveAdminKey} className="rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white">
+                    Save key
+                  </button>
+                  <button type="button" onClick={clearAdminKey} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800">
+                    Clear
+                  </button>
+                </div>
+                <p className="text-sm text-slate-600">{adminMessage || (adminKey ? "Admin key is stored only in this browser." : "Admin key required for protected dashboard panels.")}</p>
+              </div>
+            </Panel>
+
             <Panel title="Learn URL">
               <form onSubmit={learnUrl} className="flex gap-2">
                 <input value={urlToLearn} onChange={(event) => setUrlToLearn(event.target.value)} placeholder="https://example.com" className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" />
@@ -481,6 +677,38 @@ export default function Home() {
               </form>
             </Panel>
 
+            <Panel title="Knowledge Base">
+              <div className="space-y-4">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Field label="Entries" value={String(statuses.knowledge?.total_entries ?? 0)} />
+                  <Field label="Storage" value={String(statuses.knowledge?.storage_used ?? "unknown")} />
+                  <Field label="Search Docs" value={String(statuses.knowledge?.private_search_documents ?? 0)} />
+                  <Field label="Search Chunks" value={String(statuses.knowledge?.private_search_chunks ?? 0)} />
+                </div>
+                <form onSubmit={addKnowledge} className="space-y-2">
+                  <input value={knowledgeTitle} onChange={(event) => setKnowledgeTitle(event.target.value)} placeholder="Title" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                  <select value={knowledgeCategory} onChange={(event) => setKnowledgeCategory(event.target.value)} className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">
+                    {["general", "code", "business", "market", "law", "medical_info", "security", "teaching", "exam", "trucking", "project", "ai_os"].map((category) => (
+                      <option key={category} value={category}>{titleCase(category)}</option>
+                    ))}
+                  </select>
+                  <input value={knowledgeTags} onChange={(event) => setKnowledgeTags(event.target.value)} placeholder="tags, comma, separated" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                  <textarea value={knowledgeContent} onChange={(event) => setKnowledgeContent(event.target.value)} placeholder="Add a note Builder Core can remember" className="min-h-28 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                  <button className="rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white">Add note</button>
+                </form>
+                <form onSubmit={searchKnowledge} className="flex gap-2">
+                  <input value={knowledgeQuery} onChange={(event) => setKnowledgeQuery(event.target.value)} placeholder="Search knowledge" className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                  <button className="rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white">Search</button>
+                </form>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={seedKnowledge} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800">Seed packs</button>
+                  <button type="button" onClick={scanProjectKnowledge} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800">Scan project</button>
+                </div>
+                {!adminKey && <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">Admin key required for seed packs and project scan.</p>}
+                <ListBlock title="Knowledge Search Results" items={(statuses.knowledgeSearch?.results as unknown[]) ?? []} />
+              </div>
+            </Panel>
+
             <Panel title="Account Agent Search">
               <form onSubmit={searchAccountAgent} className="flex gap-2">
                 <input value={accountQuery} onChange={(event) => setAccountQuery(event.target.value)} placeholder="Search memory" className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" />
@@ -492,6 +720,11 @@ export default function Home() {
         </section>
 
         {statusError && <div className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">{statusError}</div>}
+        {Object.values(statuses.protectedErrors ?? {}).length > 0 && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+            {Object.values(statuses.protectedErrors ?? {})[0]}
+          </div>
+        )}
 
         <section className="grid gap-3">
           <StatusPanel title="OS Status" value={statuses.os} fields={[["System", String(os.system ?? "Builder Core OS")], ["Stage", String(os.version_stage ?? "foundation")], ["Storage", String(os.storage ?? "unknown")]]} />
@@ -501,6 +734,7 @@ export default function Home() {
           <StatusPanel title="Pending Approvals" value={statuses.approvals} fields={[["Pending", String(statuses.approvals?.pending_count ?? 0)]]} />
           <StatusPanel title="Account Agent / Connectors" value={{ account: statuses.account, connectors: statuses.connectors }} />
           <StatusPanel title="Security Center" value={{ status: statuses.security, report: statuses.securityReport, hardening: statuses.hardening }} fields={[["Events", String(security.events_count ?? 0)], ["Rate Limiter", String(security.rate_limiter_enabled ?? false)], ["Highest", String(statuses.securityReport?.highest_severity ?? "low")]]} />
+          <StatusPanel title="Knowledge Base" value={{ status: statuses.knowledge, search: statuses.knowledgeSearch }} fields={[["Entries", String(statuses.knowledge?.total_entries ?? 0)], ["Storage", String(statuses.knowledge?.storage_used ?? "unknown")], ["Seeded", String((statuses.knowledge?.knowledge_seed_status as AnyRecord | undefined)?.seeded ?? false)]]} />
           <StatusPanel title="Tool Registry" value={statuses.tools} />
           <StatusPanel title="Private Search" value={statuses.search} />
           <StatusPanel title="Storage Status" value={statuses.storage} />

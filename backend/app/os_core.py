@@ -4,8 +4,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 try:
+    from app.auth import get_admin_auth_status
     from app.platform_adapter import get_platform_status
 except ImportError:
+    from auth import get_admin_auth_status
     from platform_adapter import get_platform_status
 
 
@@ -34,10 +36,14 @@ class BuilderCoreOSService:
         tool_status = self.tool_registry.get_tool_status() if self.tool_registry else {}
         model_status = self.model_router.get_active_model_status() if self.model_router else {}
         security_summary = self.security_monitor.get_security_summary() if self.security_monitor else {}
+        auth_status = get_admin_auth_status()
+        knowledge_entries = len([item for item in self.storage.list_records("knowledge_base", 1000) if item.get("knowledge_id")])
+        seed_entries = len([item for item in self.storage.list_records("knowledge_base", 1000) if item.get("source_type") == "seed_pack"])
         warnings = []
         warnings.extend(storage_status.get("warnings") or [])
         warnings.extend(platform_status.get("warnings") or [])
         warnings.extend(model_status.get("warnings") or [])
+        warnings.extend(auth_status.get("warnings") or [])
         warnings.append("Builder Core OS is a foundation-stage internal system, not AGI or human consciousness.")
 
         payload = {
@@ -57,6 +63,17 @@ class BuilderCoreOSService:
             "tool_registry_status": tool_status,
             "model_router_status": model_status,
             "security_status": security_summary,
+            "admin_auth_configured": auth_status["admin_auth_configured"],
+            "protected_endpoints_enabled": auth_status["protected_endpoints_enabled"],
+            "auth_status": auth_status,
+            "knowledge_seed_status": {
+                "seed_entries": seed_entries,
+                "seeded": seed_entries > 0,
+            },
+            "knowledge_entries_count": knowledge_entries,
+            "command_security_routing_enabled": True,
+            "url_learning_from_chat_enabled": True,
+            "memory_save_from_chat_enabled": True,
             "warnings": list(dict.fromkeys(str(item) for item in warnings if item)),
             "created_at": utc_now_iso(),
         }
