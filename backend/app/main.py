@@ -3081,6 +3081,7 @@ def system_status():
                 "security_check",
                 "knowledge_add",
                 "knowledge_search",
+                "domain_search",
                 "url_learning",
                 "roadmap",
             ],

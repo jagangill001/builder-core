@@ -4,15 +4,18 @@ import re
 from typing import Any
 
 try:
-    from app.message_normalizer import normalize_message
+    from app.message_normalizer import normalize_message, remove_domains_from_message
 except ImportError:
-    from message_normalizer import normalize_message
+    from message_normalizer import normalize_message, remove_domains_from_message
 
 
 def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
     normalization = normalize_message(message)
     normalized_message = str(normalization.get("normalized_message") or message or "")
     lowered = normalized_message.lower()
+    domain = str(normalization.get("domain") or "")
+    domain_search_requested = bool(normalization.get("learned_domain_request") or normalization.get("learned_domain_list_request"))
+    intent_text = remove_domains_from_message(normalized_message).lower()
     mode_hint = str(context.get("mode") or "auto").strip().lower()
     intents: list[str] = []
 
@@ -43,7 +46,7 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         intents.append("codex_prompt")
     if any(token in lowered for token in ["law", "legal", "policy", "compliance", "contract"]):
         intents.append("law_research")
-    if any(token in lowered for token in ["exam", "study plan", "syllabus", "revision"]):
+    if re.search(r"\b(exam|study plan|syllabus|revision)\b", intent_text):
         intents.append("exam_planning")
     url_found = bool(re.search(r"https?://[^\s<>\"]+", normalized_message or ""))
     memory_prefixes = [
@@ -73,13 +76,16 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         "study this page",
     ]
 
+    if domain_search_requested:
+        intents.append("domain_search")
+        intents.append("knowledge_search")
     if any(token in lowered for token in ["memory", "remember", "save this"]):
         intents.append("memory_save")
     if any(prefix in lowered for prefix in memory_prefixes):
         intents.append("knowledge_add")
     if any(phrase in lowered for phrase in knowledge_search_phrases):
         intents.append("knowledge_search")
-    if any(token in lowered for token in ["learn from", "lesson", "update learning"]):
+    if not domain_search_requested and any(token in lowered for token in ["learn from", "lesson", "update learning"]):
         intents.append("learning_update")
     if any(token in lowered for token in ["improve", "preference", "what worked", "what failed"]):
         intents.append("self_improvement")
@@ -177,6 +183,8 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         workflow = "save_summary"
     elif "security_check" in unique_intents or "system_protection" in unique_intents:
         workflow = "incident_report" if "incident_report" in unique_intents else "security_check"
+    elif "domain_search" in unique_intents:
+        workflow = "domain_search"
     elif "url_learning" in unique_intents:
         workflow = "url_learning"
     elif "knowledge_add" in unique_intents:
@@ -215,6 +223,8 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         primary_intent = "security_check"
     elif "knowledge_add" in unique_intents:
         primary_intent = "knowledge_add"
+    elif "domain_search" in unique_intents:
+        primary_intent = "domain_search"
     elif "knowledge_search" in unique_intents:
         primary_intent = "knowledge_search"
     elif "url_learning" in unique_intents:
@@ -238,9 +248,10 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         "primary_intent": primary_intent,
         "intents": unique_intents,
         "workflow": workflow,
-        "confidence": "high" if workflow in {"security_check", "knowledge_add", "knowledge_search", "url_learning"} else "medium",
+        "confidence": "high" if workflow in {"security_check", "knowledge_add", "knowledge_search", "url_learning", "domain_search"} else "medium",
         "actions": actions,
         "original_message": normalization.get("original_message", message),
         "normalized_message": normalized_message,
         "normalization": normalization,
+        "domain": domain,
     }

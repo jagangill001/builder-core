@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib import parse as urlparse
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -140,6 +141,9 @@ class UnifiedOrchestrator:
 
         if route["workflow"] == "roadmap":
             return self._run_roadmap_command(command_id, message, mode, route, save_to_memory, created_at)
+
+        if route["workflow"] == "domain_search":
+            return self._run_domain_search_command(command_id, message, mode, route, save_to_memory, created_at)
 
         if route["workflow"] == "security_check":
             return self._run_security_command(command_id, message, mode, route, save_to_memory, created_at)
@@ -513,6 +517,150 @@ class UnifiedOrchestrator:
             "created_at": created_at,
         }
 
+    def _run_domain_search_command(
+        self,
+        command_id: str,
+        message: str,
+        mode: str,
+        route: dict[str, Any],
+        save_to_memory: bool,
+        created_at: str,
+    ) -> dict[str, Any]:
+        working_message = str(route.get("normalized_message") or message)
+        domain = self._normalize_domain(str(route.get("domain") or self._extract_domain_from_text(working_message)))
+        query = self._extract_domain_search_query(working_message, domain)
+        list_urls = "url" in working_message.lower() and not domain
+
+        if domain:
+            domain_chunks = self._get_learned_chunks_for_domain(domain)
+            ranked = self.private_search.rank_results(query or domain, domain_chunks) if domain_chunks else []
+            if domain_chunks and not ranked and not query:
+                ranked = [{**chunk, "score": 1, "preview": str(chunk.get("text") or "")[:240]} for chunk in domain_chunks]
+            results = self._format_domain_results(ranked[:8], domain)
+            confidence = "high" if len(results) >= 2 else "medium" if results else "low"
+            missing = [] if results else [f"No saved learned content exists for {domain}. Learn a URL from that domain first."]
+            reply = (
+                f"Here is what Builder Core learned from {domain}:\n"
+                + "\n".join(f"- {item['title']}: {item['snippet']}" for item in results[:5])
+                if results
+                else f"Builder Core has no saved learned content for {domain} yet. Learn a URL from that domain first."
+            )
+            domain_payload = {
+                "action": "domain_search",
+                "domain": domain,
+                "query": query,
+                "results": results,
+                "results_count": len(results),
+                "confidence": confidence,
+                "missing_knowledge": missing,
+            }
+        else:
+            learned = self._list_learned_domain_sources()
+            domains = learned["domains"]
+            urls = learned["urls"]
+            confidence = "medium" if domains else "low"
+            missing = [] if domains else ["No learned public URL domains are saved yet."]
+            reply = (
+                "Learned URLs:\n" + "\n".join(f"- {item['title']} ({item['url']})" for item in urls[:10])
+                if list_urls and urls
+                else "Learned domains:\n" + "\n".join(f"- {item['domain']} ({item['sources_count']} saved source chunks)" for item in domains[:10])
+                if domains
+                else "Builder Core does not have any learned public URL domains saved yet."
+            )
+            domain_payload = {
+                "action": "list_learned_urls" if list_urls else "list_learned_domains",
+                "domain": "",
+                "query": query,
+                "domains": domains,
+                "urls": urls,
+                "results": urls[:8] if list_urls else [],
+                "results_count": len(urls if list_urls else domains),
+                "confidence": confidence,
+                "missing_knowledge": missing,
+            }
+
+        memory_saved = False
+        if save_to_memory:
+            self.storage.save_project_memory(
+                {
+                    "type": "domain_search",
+                    "command_id": command_id,
+                    "command": message,
+                    "normalized_command": working_message,
+                    "domain": domain,
+                    "query": query,
+                    "workflow": route["workflow"],
+                    "results_count": domain_payload.get("results_count", 0),
+                }
+            )
+            memory_saved = True
+
+        sources_used = [item.get("title") for item in domain_payload.get("results", []) if item.get("title")]
+        self.storage.save_record(
+            "command_history",
+            {
+                "command_id": command_id,
+                "message": message,
+                "original_message": route.get("original_message") or message,
+                "normalized_message": working_message,
+                "normalization": route.get("normalization", {}),
+                "mode": mode,
+                "workflow": route["workflow"],
+                "detected_intents": route["intents"],
+                "reply": reply,
+                "domain_search": domain_payload,
+            },
+        )
+        return {
+            "command_id": command_id,
+            "original_message": route.get("original_message") or message,
+            "normalized_message": working_message,
+            "reply": reply,
+            "detected_intents": route["intents"],
+            "workflow": route["workflow"],
+            "internal_tools_used": ["safety_firewall", "command_router", "private_search", "domain_filter"],
+            "progress": {
+                "status": "completed",
+                "steps": [
+                    "Detected a learned domain or learned URL question.",
+                    "Filtered saved private-search chunks by learned domain.",
+                    "Returned saved sources only.",
+                ],
+            },
+            "domain_search": domain_payload,
+            "knowledge": {
+                "action": "domain_search",
+                "domain": domain,
+                "query": query,
+                "results": domain_payload.get("results", []),
+                "sources_used": sources_used,
+                "confidence": confidence,
+                "missing_knowledge": missing,
+            },
+            "knowledge_sources_used": sources_used,
+            "confidence": confidence,
+            "private_search": {
+                "used": True,
+                "domain_filtered": bool(domain),
+                "query": query,
+                "results_count": domain_payload.get("results_count", 0),
+                "results": domain_payload.get("results", []),
+                "top_sources": sources_used[:3],
+            },
+            "research": {},
+            "market_analysis": {},
+            "app_plan": {},
+            "codex_prompt": "",
+            "summary": domain_payload,
+            "storage_used": "firestore" if self.storage.using_firestore else "local",
+            "memory_saved": memory_saved,
+            "next_actions": [
+                f"Learn a URL from {domain} first." if domain and not domain_payload.get("results") else "Ask a more specific question about the learned domain."
+            ],
+            "limitations": ["This searches saved learned URL content only, not the live web."],
+            "created_at": created_at,
+        }
+
     def _run_knowledge_add_command(
         self,
         command_id: str,
@@ -816,6 +964,160 @@ class UnifiedOrchestrator:
                 f"- Limit: {security.get('disclaimer')}",
             ]
         )
+
+    def _normalize_domain(self, value: str) -> str:
+        candidate = str(value or "").strip().lower().strip(".,;:!?)]}")
+        if not candidate:
+            return ""
+        if "://" in candidate:
+            parsed = urlparse.urlparse(candidate)
+            candidate = parsed.hostname or ""
+        candidate = candidate.lower().removeprefix("www.").strip(".,;:!?)]}")
+        return candidate if "." in candidate else ""
+
+    def _extract_domain_from_text(self, text: str) -> str:
+        match = re.search(
+            r"\b(?:https?://)?(?:www\.)?([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+)(?:/[^\s<>\"]*)?",
+            str(text or ""),
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return ""
+        raw = match.group(0)
+        return self._normalize_domain(raw if "://" in raw else match.group(1))
+
+    def _extract_domain_search_query(self, message: str, domain: str) -> str:
+        query = str(message or "")
+        query = re.sub(r"https?://[^\s<>\"]+", " ", query, flags=re.IGNORECASE)
+        if domain:
+            query = re.sub(rf"\b(?:www\.)?{re.escape(domain)}\b", " ", query, flags=re.IGNORECASE)
+        phrase_patterns = [
+            r"\bwhat did you learn from\b",
+            r"\bwhat do you know from\b",
+            r"\bsearch inside\b",
+            r"\bsearch learned domain\b",
+            r"\bshow learned domains\b",
+            r"\bshow learned urls\b",
+            r"\blearned domain\b",
+            r"\blearned url\b",
+        ]
+        for pattern in phrase_patterns:
+            query = re.sub(pattern, " ", query, flags=re.IGNORECASE)
+        query = re.sub(r"^\s*for\s+", "", query, flags=re.IGNORECASE)
+        query = re.sub(r"\s+", " ", query).strip(" ?:")
+        return query
+
+    def _get_learned_chunks_for_domain(self, domain: str) -> list[dict[str, Any]]:
+        normalized_domain = self._normalize_domain(domain)
+        if not normalized_domain:
+            return []
+        if not self.storage.list_records("search_chunks", 1):
+            self.private_search.rebuild_index_from_storage()
+        chunks = self.storage.list_records("search_chunks", 5000)
+        matches = [
+            chunk
+            for chunk in chunks
+            if self._record_domain(chunk) == normalized_domain and self._is_learned_url_source(chunk)
+        ]
+        return matches
+
+    def _format_domain_results(self, ranked: list[dict[str, Any]], domain: str) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in ranked:
+            url = str(item.get("url") or item.get("source_url") or "")
+            snippet = str(item.get("preview") or item.get("text") or item.get("summary") or "").strip()
+            title = str(item.get("title") or url or domain or "Learned source").strip()
+            key = url or str(item.get("document_id") or item.get("id") or f"{domain}|{title}")
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(
+                {
+                    "title": title,
+                    "domain": self._record_domain(item) or domain,
+                    "url": url,
+                    "snippet": snippet[:360],
+                    "score": item.get("score", 0),
+                    "confidence": "medium" if snippet else "low",
+                    "source_type": item.get("source_type"),
+                    "document_id": item.get("document_id") or item.get("id"),
+                    "chunk_index": item.get("chunk_index"),
+                }
+            )
+        return results
+
+    def _list_learned_domain_sources(self) -> dict[str, list[dict[str, Any]]]:
+        chunks = [chunk for chunk in self.storage.list_records("search_chunks", 5000) if self._is_learned_url_source(chunk)]
+        url_records = self.storage.list_records("url_ingest_records", 1000)
+        domains_by_name: dict[str, dict[str, Any]] = {}
+        urls_by_key: dict[str, dict[str, Any]] = {}
+
+        for item in chunks + url_records:
+            domain = self._record_domain(item)
+            if not domain:
+                continue
+            title = str(item.get("title") or item.get("url") or domain)
+            url = str(item.get("url") or item.get("final_url") or item.get("source_url") or "")
+            summary = domains_by_name.setdefault(
+                domain,
+                {"domain": domain, "sources_count": 0, "titles": [], "urls": []},
+            )
+            summary["sources_count"] += 1
+            if title and title not in summary["titles"]:
+                summary["titles"].append(title)
+            if url and url not in summary["urls"]:
+                summary["urls"].append(url)
+
+            url_key = url or f"{domain}|{title}"
+            if url_key not in urls_by_key:
+                urls_by_key[url_key] = {
+                    "title": title,
+                    "domain": domain,
+                    "url": url,
+                    "snippet": str(item.get("preview") or item.get("text") or "")[:260],
+                    "score": item.get("score", 0),
+                    "confidence": "medium",
+                }
+
+        domains = sorted(domains_by_name.values(), key=lambda item: str(item.get("domain")))
+        urls = sorted(urls_by_key.values(), key=lambda item: (str(item.get("domain")), str(item.get("title"))))
+        return {"domains": domains, "urls": urls}
+
+    def _record_domain(self, record: dict[str, Any]) -> str:
+        metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+        candidates = [
+            record.get("domain"),
+            metadata.get("domain"),
+            record.get("source_domain"),
+            record.get("url"),
+            record.get("final_url"),
+            record.get("source_url"),
+        ]
+        for candidate in candidates:
+            value = str(candidate or "").strip()
+            if not value:
+                continue
+            if "://" in value:
+                domain = self._normalize_domain(value)
+                if domain:
+                    return domain
+            elif "." in value and "/" not in value:
+                domain = self._normalize_domain(value)
+                if domain:
+                    return domain
+        return ""
+
+    def _is_learned_url_source(self, record: dict[str, Any]) -> bool:
+        metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+        if str(record.get("status") or "").lower() in {"blocked", "failed"}:
+            return False
+        source_type = str(record.get("source_type") or metadata.get("source_type") or "")
+        if source_type in {"url_ingest", "public_url"}:
+            return True
+        if record.get("source_url") or record.get("final_url"):
+            return True
+        return str(metadata.get("source_collection") or "") == "url_ingest_records"
 
     def _extract_knowledge_note(self, message: str) -> str:
         patterns = [

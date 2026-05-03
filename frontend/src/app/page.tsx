@@ -21,6 +21,16 @@ const MODE_OPTIONS = [
 
 type AnyRecord = Record<string, unknown>;
 
+type DomainSearchResult = {
+  title?: string;
+  domain?: string;
+  url?: string;
+  snippet?: string;
+  score?: number;
+  confidence?: string;
+  source_type?: string;
+};
+
 type CommandResponse = {
   command_id?: string;
   reply?: string;
@@ -50,6 +60,17 @@ type CommandResponse = {
   security_warnings?: string[];
   security?: AnyRecord;
   knowledge?: AnyRecord;
+  domain_search?: {
+    action?: string;
+    domain?: string;
+    query?: string;
+    confidence?: string;
+    results_count?: number;
+    results?: DomainSearchResult[];
+    domains?: Array<{ domain?: string; sources_count?: number; titles?: string[]; urls?: string[] }>;
+    urls?: DomainSearchResult[];
+    missing_knowledge?: string[];
+  };
   knowledge_sources_used?: string[];
   confidence?: string;
   missing_knowledge?: string[];
@@ -196,6 +217,8 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
 function MessageResult({ result }: { result: CommandResponse }) {
   const steps = result.progress?.steps ?? result.progress?.agent_plan?.steps?.map((step) => `${step.tool}: ${step.action}`) ?? [];
   const prompt = result.codex_prompt || (typeof result.app_plan?.codex_prompt === "string" ? result.app_plan.codex_prompt : "");
+  const domainResults = result.domain_search?.results ?? [];
+  const learnedDomains = result.domain_search?.domains ?? [];
 
   return (
     <div className="mt-4 space-y-4">
@@ -215,6 +238,34 @@ function MessageResult({ result }: { result: CommandResponse }) {
       <ListBlock title="Missing Knowledge" items={result.missing_knowledge ?? ((result.knowledge?.missing_knowledge as unknown[]) ?? [])} />
       <ListBlock title="Limitations" items={result.limitations} />
       <ListBlock title="Next Actions" items={result.next_actions} />
+
+      {result.domain_search && (
+        <div className="space-y-3 rounded-md border border-indigo-200 bg-indigo-50 p-3">
+          <h3 className="text-sm font-semibold text-indigo-950">Learned Domain Sources</h3>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <Field label="Action" value={titleCase(result.domain_search.action ?? "domain_search")} />
+            <Field label="Domain" value={result.domain_search.domain || "All learned domains"} />
+            <Field label="Results" value={String(result.domain_search.results_count ?? domainResults.length ?? learnedDomains.length)} />
+          </div>
+          {domainResults.length > 0 && (
+            <div className="grid gap-2">
+              {domainResults.map((source, index) => (
+                <div key={`${source.url ?? source.title ?? "source"}_${index}`} className="rounded-md border border-indigo-100 bg-white px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="break-words text-sm font-semibold text-slate-950">{source.title || source.url || source.domain || "Learned source"}</p>
+                    {source.domain && <Pill tone="blue">{source.domain}</Pill>}
+                    {typeof source.score === "number" && <Pill>{`score ${source.score}`}</Pill>}
+                  </div>
+                  {source.url && <p className="mt-1 break-words text-xs font-semibold text-indigo-700">{source.url}</p>}
+                  {source.snippet && <p className="mt-2 text-sm leading-6 text-slate-700">{source.snippet}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+          <ListBlock title="Learned Domains" items={learnedDomains.map((item) => `${item.domain ?? "unknown"} (${item.sources_count ?? 0} saved source chunks)`)} />
+          <ListBlock title="Missing Knowledge" items={result.domain_search.missing_knowledge} />
+        </div>
+      )}
 
       {result.security && (
         <div className="space-y-2 rounded-md border border-emerald-200 bg-emerald-50 p-3">
