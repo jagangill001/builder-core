@@ -31,6 +31,9 @@ try:
     from app.intelligence import build_intelligence_brief, get_supported_modes
     from app.knowledge_manager import KnowledgeManagerService
     from app.learning import LearningService
+    from app.learning_runner import LearningRunnerService
+    from app.learning_schedule import LearningScheduleService
+    from app.learning_url_packs import LearningUrlPackService
     from app.market_analyzer import MarketAnalyzerService
     from app.model_router import ModelRouterService
     from app.orchestrator import UnifiedOrchestrator
@@ -49,6 +52,7 @@ try:
     from app.safety import check_request_safety
     from app.self_improvement import SelfImprovementService
     from app.rate_limiter import RateLimiterService
+    from app.roadmap import RoadmapService
     from app.security_hardening import get_security_hardening_payload
     from app.security_monitor import extract_client_ip, summarize_headers_safely, estimate_geo_hint, SecurityMonitorService
     from app.seed_knowledge import SeedKnowledgeService
@@ -74,6 +78,9 @@ except ImportError:
     from intelligence import build_intelligence_brief, get_supported_modes
     from knowledge_manager import KnowledgeManagerService
     from learning import LearningService
+    from learning_runner import LearningRunnerService
+    from learning_schedule import LearningScheduleService
+    from learning_url_packs import LearningUrlPackService
     from market_analyzer import MarketAnalyzerService
     from model_router import ModelRouterService
     from orchestrator import UnifiedOrchestrator
@@ -92,6 +99,7 @@ except ImportError:
     from safety import check_request_safety
     from self_improvement import SelfImprovementService
     from rate_limiter import RateLimiterService
+    from roadmap import RoadmapService
     from security_hardening import get_security_hardening_payload
     from security_monitor import extract_client_ip, summarize_headers_safely, estimate_geo_hint, SecurityMonitorService
     from seed_knowledge import SeedKnowledgeService
@@ -147,6 +155,8 @@ assistant_service = ChatAssistantService(project_storage_service, learning_servi
 research_task_service = ResearchTaskService(project_storage_service, learning_service)
 self_improvement_service = SelfImprovementService(project_storage_service)
 web_ingest_service = WebIngestService(project_storage_service, private_search_service)
+learning_url_pack_service = LearningUrlPackService(project_storage_service, web_ingest_service)
+learning_schedule_service = LearningScheduleService(project_storage_service)
 document_ingest_service = DocumentIngestService(project_storage_service, private_search_service, learning_service)
 crawler_plan_service = CrawlerPlanService(project_storage_service, web_ingest_service)
 tool_registry_service = ToolRegistryService(project_storage_service)
@@ -154,9 +164,16 @@ agent_role_service = AgentRoleService()
 approval_system_service = ApprovalSystemService(project_storage_service)
 security_monitor_service = SecurityMonitorService(project_storage_service)
 rate_limiter_service = RateLimiterService()
+roadmap_service = RoadmapService()
 connector_registry_service = ConnectorRegistryService()
 account_agent_service = AccountAgentService(project_storage_service, private_search_service, connector_registry_service)
 app.state.project_storage = project_storage_service
+learning_runner_service = LearningRunnerService(
+    storage=project_storage_service,
+    packs=learning_url_pack_service,
+    web_ingest=web_ingest_service,
+    knowledge_manager=knowledge_manager_service,
+)
 os_core_service = BuilderCoreOSService(
     storage=project_storage_service,
     tool_registry=tool_registry_service,
@@ -195,6 +212,7 @@ orchestrator_service = UnifiedOrchestrator(
     approval_system=approval_system_service,
     rate_limiter=rate_limiter_service,
     knowledge_manager=knowledge_manager_service,
+    roadmap=roadmap_service,
 )
 
 SENSITIVE_RATE_LIMIT_PATHS = {
@@ -210,6 +228,9 @@ SENSITIVE_RATE_LIMIT_PATHS = {
     "/knowledge/add",
     "/knowledge/seed",
     "/knowledge/scan-project",
+    "/learning-url-packs/import",
+    "/learning-url-packs/seed",
+    "/learning-runs",
 }
 
 
@@ -448,6 +469,26 @@ class KnowledgeAddRequest(BaseModel):
 class KnowledgeSearchRequest(BaseModel):
     query: str
     limit: int = 10
+
+class LearningUrlSeedRequest(BaseModel):
+    confirm: bool = False
+
+class LearningRunCreateRequest(BaseModel):
+    category: Optional[str] = None
+    max_urls_per_run: int = 5
+    max_pages_per_domain_per_run: int = 2
+    timeout_seconds: int = 15
+    max_content_bytes: int = 1000000
+    daily_url_limit: int = 50
+
+class LearningScheduleRequest(BaseModel):
+    enabled: bool = False
+    mode: str = "manual"
+    allowed_hours: list[str] = Field(default_factory=lambda: ["02:00-04:00"])
+    timezone: str = "America/Toronto"
+    daily_url_limit: int = 50
+    max_urls_per_run: int = 5
+    categories: list[str] = Field(default_factory=list)
 
 class DocumentIngestRequest(BaseModel):
     title: str
@@ -2258,6 +2299,110 @@ def knowledge_get(knowledge_id: str):
     return item
 
 
+@app.post("/learning-url-packs/import", dependencies=[Depends(require_admin)])
+async def learning_url_pack_import(request: Request):
+    content_type = str(request.headers.get("content-type") or "")
+    if "application/json" in content_type:
+        payload = await request.json()
+    else:
+        body = (await request.body()).decode("utf-8", errors="ignore")
+        payload = {"format": "csv", "content": body, "confirm": request.query_params.get("confirm") == "true"}
+    return learning_url_pack_service.import_urls(payload)
+
+
+@app.post("/learning-url-packs/seed", dependencies=[Depends(require_admin)])
+def learning_url_pack_seed(payload: LearningUrlSeedRequest):
+    return learning_url_pack_service.seed_starter_packs(confirm=payload.confirm)
+
+
+@app.get("/learning-url-packs")
+def learning_url_packs(limit: int = 200):
+    return learning_url_pack_service.list_packs(limit=limit)
+
+
+@app.get("/learning-urls")
+def learning_urls(limit: int = 500, category: Optional[str] = None, status: Optional[str] = None):
+    return learning_url_pack_service.list_urls(limit=limit, category=category, status=status)
+
+
+@app.post("/learning-runs", dependencies=[Depends(require_admin)])
+def learning_run_create(payload: LearningRunCreateRequest):
+    return learning_runner_service.create_run(model_to_dict(payload))
+
+
+@app.get("/learning-runs")
+def learning_runs(limit: int = 50):
+    return {"ok": True, "items": learning_runner_service.list_runs(limit=limit)}
+
+
+@app.get("/learning-runs/status")
+def learning_runs_status():
+    return learning_runner_service.get_status()
+
+
+@app.get("/learning-runs/{run_id}")
+def learning_run_get(run_id: str):
+    item = learning_runner_service.get_run(run_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Learning run not found.")
+    return item
+
+
+@app.post("/learning-runs/{run_id}/start", dependencies=[Depends(require_admin)])
+def learning_run_start(run_id: str):
+    result = learning_runner_service.start_run(run_id)
+    if not result.get("ok") and result.get("error") == "Learning run not found.":
+        raise HTTPException(status_code=404, detail="Learning run not found.")
+    return result
+
+
+@app.post("/learning-runs/{run_id}/pause", dependencies=[Depends(require_admin)])
+def learning_run_pause(run_id: str):
+    return learning_runner_service.pause_run(run_id)
+
+
+@app.post("/learning-runs/{run_id}/resume", dependencies=[Depends(require_admin)])
+def learning_run_resume(run_id: str):
+    return learning_runner_service.resume_run(run_id)
+
+
+@app.post("/learning-runs/{run_id}/stop", dependencies=[Depends(require_admin)])
+def learning_run_stop(run_id: str):
+    return learning_runner_service.stop_run(run_id)
+
+
+@app.get("/learning-schedule")
+def learning_schedule_get():
+    return learning_schedule_service.get_settings()
+
+
+@app.post("/learning-schedule", dependencies=[Depends(require_admin)])
+def learning_schedule_save(payload: LearningScheduleRequest):
+    return learning_schedule_service.save_settings(model_to_dict(payload))
+
+
+@app.get("/learning-monitor")
+def learning_monitor():
+    schedule = learning_schedule_service.get_settings()
+    status = learning_runner_service.get_status()
+    return {
+        **status,
+        "daily_limit": schedule.get("daily_url_limit", status.get("daily_limit", 50)),
+        "background_enabled": False,
+        "schedule": schedule,
+    }
+
+
+@app.get("/roadmap")
+def roadmap():
+    return roadmap_service.get_roadmap()
+
+
+@app.get("/roadmap/next")
+def roadmap_next():
+    return roadmap_service.get_next()
+
+
 @app.post("/search/rebuild")
 def search_rebuild():
     return private_search_service.rebuild_index_from_storage()
@@ -2937,6 +3082,7 @@ def system_status():
                 "knowledge_add",
                 "knowledge_search",
                 "url_learning",
+                "roadmap",
             ],
         },
         "orchestrator_status": {

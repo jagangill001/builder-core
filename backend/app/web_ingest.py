@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import ipaddress
 import re
+from datetime import datetime, timezone
 from typing import Any
 from urllib import error as urlerror
 from urllib import parse as urlparse
@@ -24,11 +25,19 @@ class WebIngestService:
         self.storage = storage
         self.search = search
 
-    def ingest_url(self, url: str, source_note: str | None = None) -> dict[str, Any]:
+    def ingest_url(
+        self,
+        url: str,
+        source_note: str | None = None,
+        timeout_seconds: int = 8,
+        max_content_bytes: int = 50000,
+    ) -> dict[str, Any]:
         safety = self._validate_url(url)
         record_id = f"url_ingest_{uuid4().hex[:12]}"
+        retrieved_at = datetime.now(timezone.utc).isoformat()
 
         if not safety["allowed"]:
+            blocked_reason = safety["reason"]
             self.storage.save_record(
                 "url_ingest_records",
                 {
@@ -36,16 +45,27 @@ class WebIngestService:
                     "url": url,
                     "source_note": source_note,
                     "status": "blocked",
-                    "warnings": [safety["reason"], safety["safe_alternative"]],
+                    "warnings": [blocked_reason, safety["safe_alternative"]],
+                    "blocked_reason": blocked_reason,
+                    "failure_reason": blocked_reason,
+                    "retrieved_at": retrieved_at,
                 },
             )
             return {
+                "id": record_id,
                 "ok": False,
+                "learned": False,
+                "url": url,
+                "final_url": "",
+                "domain": "",
                 "document_id": None,
                 "title": "",
                 "text_chars": 0,
                 "chunks_created": 0,
-                "warnings": [safety["reason"], safety["safe_alternative"]],
+                "saved_to_private_search": False,
+                "warnings": [blocked_reason, safety["safe_alternative"]],
+                "blocked_reason": blocked_reason,
+                "failure_reason": blocked_reason,
             }
 
         try:
@@ -54,12 +74,14 @@ class WebIngestService:
                 headers={"User-Agent": "BuilderCoreSafeIngest/1.0"},
                 method="GET",
             )
-            with urlrequest.urlopen(request, timeout=8) as response:
+            with urlrequest.urlopen(request, timeout=max(1, int(timeout_seconds))) as response:
                 content_type = response.headers.get("Content-Type", "")
-                raw_bytes = response.read(50000)
+                final_url = response.geturl()
+                raw_bytes = response.read(max(1000, int(max_content_bytes)))
             text = raw_bytes.decode("utf-8", errors="ignore")
             cleaned_text = self._extract_text(text)
             title = self._extract_title(text) or url
+            domain = (urlparse.urlparse(final_url).hostname or urlparse.urlparse(url).hostname or "").lower()
 
             if not cleaned_text:
                 warnings = ["The page was fetched, but readable text could not be extracted safely."]
@@ -68,27 +90,39 @@ class WebIngestService:
                     {
                         "id": record_id,
                         "url": url,
+                        "final_url": final_url,
+                        "domain": domain,
                         "source_note": source_note,
                         "status": "failed",
                         "warnings": warnings,
+                        "failure_reason": warnings[0],
                         "content_type": content_type,
+                        "retrieved_at": retrieved_at,
                     },
                 )
                 return {
+                    "id": record_id,
                     "ok": False,
+                    "learned": False,
+                    "url": url,
+                    "final_url": final_url,
+                    "domain": domain,
                     "document_id": None,
                     "title": title,
                     "text_chars": 0,
                     "chunks_created": 0,
+                    "saved_to_private_search": False,
                     "warnings": warnings,
+                    "blocked_reason": None,
+                    "failure_reason": warnings[0],
                 }
 
             search_result = self.search.add_document_to_index(
                 title=title,
                 text=cleaned_text,
                 source_type="url_ingest",
-                url=url,
-                metadata={"source_note": source_note or "", "content_type": content_type},
+                url=final_url,
+                metadata={"source_note": source_note or "", "content_type": content_type, "domain": domain},
                 document_id=record_id,
             )
             self.storage.save_record(
@@ -97,23 +131,37 @@ class WebIngestService:
                     "id": record_id,
                     "document_id": record_id,
                     "url": url,
+                    "final_url": final_url,
+                    "domain": domain,
                     "title": title,
                     "text": cleaned_text[:50000],
                     "source_note": source_note,
                     "status": "completed",
                     "content_type": content_type,
+                    "text_chars": len(cleaned_text),
+                    "chunks_created": search_result["chunks_created"],
+                    "retrieved_at": retrieved_at,
                 },
             )
             return {
+                "id": record_id,
                 "ok": True,
+                "learned": True,
+                "url": url,
+                "final_url": final_url,
+                "domain": domain,
                 "document_id": record_id,
                 "title": title,
                 "text_chars": len(cleaned_text),
                 "chunks_created": search_result["chunks_created"],
+                "saved_to_private_search": True,
                 "warnings": [],
+                "blocked_reason": None,
+                "failure_reason": None,
             }
         except (urlerror.URLError, TimeoutError) as error:
-            warnings = [f"URL ingestion module is ready, but HTTP fetch dependency/config is not available or the request failed: {error}"]
+            failure_reason = f"URL fetch failed: {error}"
+            warnings = [failure_reason]
             self.storage.save_record(
                 "url_ingest_records",
                 {
@@ -122,15 +170,25 @@ class WebIngestService:
                     "source_note": source_note,
                     "status": "failed",
                     "warnings": warnings,
+                    "failure_reason": failure_reason,
+                    "retrieved_at": retrieved_at,
                 },
             )
             return {
+                "id": record_id,
                 "ok": False,
+                "learned": False,
+                "url": url,
+                "final_url": "",
+                "domain": "",
                 "document_id": None,
                 "title": "",
                 "text_chars": 0,
                 "chunks_created": 0,
+                "saved_to_private_search": False,
                 "warnings": warnings,
+                "blocked_reason": None,
+                "failure_reason": failure_reason,
             }
 
     def _validate_url(self, url: str) -> dict[str, Any]:

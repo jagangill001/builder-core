@@ -454,12 +454,17 @@ class AgentEngineService:
             "ok": bool(result.get("ok")),
             "document_id": result.get("document_id"),
             "title": result.get("title"),
+            "url": result.get("url") or url,
+            "final_url": result.get("final_url") or "",
+            "domain": result.get("domain") or "",
             "text_chars": result.get("text_chars", 0),
             "learned": learned,
             "chunks_created": result.get("chunks_created", 0),
             "saved_to_firestore": bool(self.storage.using_firestore and learned),
+            "saved_to_private_search": bool(result.get("saved_to_private_search")),
             "warnings": result.get("warnings", []),
             "blocked_reason": None if result.get("ok") else "; ".join(result.get("warnings", [])),
+            "failure_reason": result.get("failure_reason"),
         }
 
     def create_crawl_plan(self, seed_urls: list[str], topic: str, max_pages: int) -> dict[str, Any]:

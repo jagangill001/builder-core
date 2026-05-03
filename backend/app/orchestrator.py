@@ -60,6 +60,7 @@ class UnifiedOrchestrator:
         approval_system: Any | None = None,
         rate_limiter: Any | None = None,
         knowledge_manager: Any | None = None,
+        roadmap: Any | None = None,
     ) -> None:
         self.storage = storage
         self.learning = learning
@@ -77,6 +78,7 @@ class UnifiedOrchestrator:
         self.approval_system = approval_system
         self.rate_limiter = rate_limiter
         self.knowledge_manager = knowledge_manager
+        self.roadmap = roadmap
 
     def run_unified_workflow(self, message: str, mode: str = "auto", save_to_memory: bool = True) -> dict[str, Any]:
         safety = check_request_safety(message, category=mode)
@@ -87,6 +89,7 @@ class UnifiedOrchestrator:
         lessons = self.learning.get_lessons(8)
         latest_summary = self.storage.get_latest_summary()
         route = route_user_message(message, {"mode": mode})
+        working_message = str(route.get("normalized_message") or message)
 
         if route["workflow"] == "save_summary":
             return self._save_manual_summary(command_id, message, route, save_to_memory, created_at)
@@ -94,6 +97,8 @@ class UnifiedOrchestrator:
         if not safety["allowed"]:
             blocked = {
                 "command_id": command_id,
+                "original_message": message,
+                "normalized_message": working_message,
                 "reply": safety["reason"],
                 "detected_intents": route["intents"],
                 "workflow": "blocked",
@@ -122,6 +127,9 @@ class UnifiedOrchestrator:
                 {
                     "command_id": command_id,
                     "message": message,
+                    "original_message": message,
+                    "normalized_message": working_message,
+                    "normalization": route.get("normalization", {}),
                     "mode": mode,
                     "workflow": "blocked",
                     "reply": blocked["reply"],
@@ -129,6 +137,9 @@ class UnifiedOrchestrator:
                 },
             )
             return blocked
+
+        if route["workflow"] == "roadmap":
+            return self._run_roadmap_command(command_id, message, mode, route, save_to_memory, created_at)
 
         if route["workflow"] == "security_check":
             return self._run_security_command(command_id, message, mode, route, save_to_memory, created_at)
@@ -143,9 +154,9 @@ class UnifiedOrchestrator:
             return self._run_url_learning_command(command_id, message, mode, route, save_to_memory, created_at)
 
         if route["workflow"] == "agent_os" and self.agent_engine is not None:
-            return self._run_agent_os_command(command_id, message, mode, route, save_to_memory, created_at)
+            return self._run_agent_os_command(command_id, working_message, mode, route, save_to_memory, created_at)
 
-        search_result = self.private_search.search_private_index(message, limit=6)
+        search_result = self.private_search.search_private_index(working_message, limit=6)
         tools_used = ["safety_firewall", "command_router", "private_search", "model_router"]
         workflow = route["workflow"]
         research_result: dict[str, Any] = {}
@@ -162,21 +173,21 @@ class UnifiedOrchestrator:
 
         if workflow in {"research_only", "research_to_app_plan", "market_analysis"}:
             research_result = self.research_engine.run_internal_research(
-                topic=message,
-                goal=message,
+                topic=working_message,
+                goal=working_message,
                 category=route["primary_intent"],
             )
             tools_used.append("research_engine")
             progress_steps.append("Internal research engine summarized saved knowledge.")
 
         if workflow in {"market_analysis", "research_to_app_plan"}:
-            topic = self._extract_market_topic(message)
+            topic = self._extract_market_topic(working_message)
             market_result = self.market_analyzer.analyze_market(topic, research_result.get("sources", []))
             tools_used.append("market_analyzer")
             progress_steps.append("Market analyzer created a target-user and opportunity framework.")
 
         if workflow in {"app_builder", "research_to_app_plan"}:
-            topic = self._extract_market_topic(message)
+            topic = self._extract_market_topic(working_message)
             app_plan = self.app_planner.create_app_plan(topic, research_result or None, market_result or None)
             codex_prompt = app_plan.get("codex_prompt", "")
             tools_used.append("app_planner")
@@ -184,7 +195,7 @@ class UnifiedOrchestrator:
         elif workflow == "codex_prompt_only":
             project_context = get_project_context(self.storage.get_project_structure_summary())
             codex_prompt = build_codex_prompt(
-                command=message,
+                command=working_message,
                 project_context=project_context,
                 memory=memory + assistant_memory,
                 lessons=lessons,
@@ -211,7 +222,7 @@ class UnifiedOrchestrator:
             }
             limitations.append("Builder Core does not auto-create Google Cloud resources.")
 
-        if workflow == "research_to_app_plan" and "market" not in message.lower():
+        if workflow == "research_to_app_plan" and "market" not in working_message.lower():
             limitations.append(
                 "I can start with a general market-analysis app template. Tell me the exact market later and I will customize it."
             )
@@ -221,6 +232,7 @@ class UnifiedOrchestrator:
                 {
                     "task_id": command_id,
                     "command": message,
+                    "normalized_command": working_message,
                     "project_name": "Builder Core",
                     "prompt": codex_prompt,
                     "status": "prompt_ready",
@@ -229,7 +241,7 @@ class UnifiedOrchestrator:
             )
 
         reply = self._compose_reply(
-            message=message,
+            message=working_message,
             workflow=workflow,
             route=route,
             search_result=search_result,
@@ -248,6 +260,7 @@ class UnifiedOrchestrator:
                     "type": "command_chat",
                     "command_id": command_id,
                     "command": message,
+                    "normalized_command": working_message,
                     "note": f"Saved unified command result for workflow {workflow}.",
                     "workflow": workflow,
                     "next_actions": next_actions,
@@ -260,6 +273,9 @@ class UnifiedOrchestrator:
             {
                 "command_id": command_id,
                 "message": message,
+                "original_message": message,
+                "normalized_message": working_message,
+                "normalization": route.get("normalization", {}),
                 "mode": mode,
                 "workflow": workflow,
                 "detected_intents": route["intents"],
@@ -284,6 +300,8 @@ class UnifiedOrchestrator:
 
         return {
             "command_id": command_id,
+            "original_message": message,
+            "normalized_message": working_message,
             "reply": reply,
             "detected_intents": route["intents"],
             "workflow": workflow,
@@ -361,6 +379,7 @@ class UnifiedOrchestrator:
                     "type": "security_check",
                     "command_id": command_id,
                     "command": message,
+                    "normalized_command": route.get("normalized_message") or message,
                     "note": f"Security check completed. Highest severity: {highest}.",
                     "workflow": route["workflow"],
                 }
@@ -371,6 +390,9 @@ class UnifiedOrchestrator:
             {
                 "command_id": command_id,
                 "message": message,
+                "original_message": route.get("original_message") or message,
+                "normalized_message": route.get("normalized_message") or message,
+                "normalization": route.get("normalization", {}),
                 "mode": mode,
                 "workflow": route["workflow"],
                 "detected_intents": route["intents"],
@@ -380,6 +402,8 @@ class UnifiedOrchestrator:
         )
         return {
             "command_id": command_id,
+            "original_message": route.get("original_message") or message,
+            "normalized_message": route.get("normalized_message") or message,
             "reply": reply,
             "detected_intents": route["intents"],
             "workflow": route["workflow"],
@@ -415,6 +439,80 @@ class UnifiedOrchestrator:
             "created_at": created_at,
         }
 
+    def _run_roadmap_command(
+        self,
+        command_id: str,
+        message: str,
+        mode: str,
+        route: dict[str, Any],
+        save_to_memory: bool,
+        created_at: str,
+    ) -> dict[str, Any]:
+        roadmap = self.roadmap.get_roadmap() if self.roadmap is not None else {"ok": True, "items": []}
+        next_item = self.roadmap.get_next() if self.roadmap is not None else {"ok": True, "item": {}}
+        item = next_item.get("item") or {}
+        reply = (
+            f"Next Builder Core update: {item.get('title')} ({item.get('status')}). {item.get('notes')}"
+            if item
+            else "Builder Core roadmap is ready, but no next item is configured yet."
+        )
+        memory_saved = False
+        if save_to_memory:
+            self.storage.save_project_memory(
+                {
+                    "type": "roadmap_check",
+                    "command_id": command_id,
+                    "command": message,
+                    "normalized_command": route.get("normalized_message") or message,
+                    "note": reply,
+                    "workflow": route["workflow"],
+                }
+            )
+            memory_saved = True
+        self.storage.save_record(
+            "command_history",
+            {
+                "command_id": command_id,
+                "message": message,
+                "original_message": route.get("original_message") or message,
+                "normalized_message": route.get("normalized_message") or message,
+                "normalization": route.get("normalization", {}),
+                "mode": mode,
+                "workflow": route["workflow"],
+                "detected_intents": route["intents"],
+                "reply": reply,
+                "roadmap": roadmap,
+            },
+        )
+        return {
+            "command_id": command_id,
+            "original_message": route.get("original_message") or message,
+            "normalized_message": route.get("normalized_message") or message,
+            "reply": reply,
+            "detected_intents": route["intents"],
+            "workflow": route["workflow"],
+            "internal_tools_used": ["safety_firewall", "command_router", "roadmap"],
+            "progress": {
+                "status": "completed",
+                "steps": [
+                    "Normalized rough wording when needed.",
+                    "Loaded the Builder Core roadmap.",
+                    "Selected the next visible update.",
+                ],
+            },
+            "private_search": {"used": False, "results_count": 0, "top_sources": []},
+            "research": {},
+            "market_analysis": {},
+            "app_plan": {},
+            "codex_prompt": "",
+            "summary": {"roadmap": roadmap, "next": next_item},
+            "storage_used": "firestore" if self.storage.using_firestore else "local",
+            "memory_saved": memory_saved,
+            "next_actions": [item.get("notes") or "Keep the next update small and testable."],
+            "limitations": ["The roadmap is a small static foundation list in this pass."],
+            "created_at": created_at,
+        }
+
     def _run_knowledge_add_command(
         self,
         command_id: str,
@@ -426,7 +524,8 @@ class UnifiedOrchestrator:
     ) -> dict[str, Any]:
         if self.knowledge_manager is None:
             raise RuntimeError("Knowledge manager is not configured.")
-        note = self._extract_knowledge_note(message)
+        working_message = str(route.get("normalized_message") or message)
+        note = self._extract_knowledge_note(working_message)
         result = self.knowledge_manager.add_knowledge_entry(
             {
                 "title": self._knowledge_title(note),
@@ -443,6 +542,7 @@ class UnifiedOrchestrator:
                     "type": "knowledge_note",
                     "command_id": command_id,
                     "command": message,
+                    "normalized_command": working_message,
                     "note": note,
                     "knowledge_id": result.get("knowledge_id"),
                     "workflow": route["workflow"],
@@ -470,6 +570,9 @@ class UnifiedOrchestrator:
             {
                 "command_id": command_id,
                 "message": message,
+                "original_message": route.get("original_message") or message,
+                "normalized_message": working_message,
+                "normalization": route.get("normalization", {}),
                 "mode": mode,
                 "workflow": route["workflow"],
                 "detected_intents": route["intents"],
@@ -479,6 +582,8 @@ class UnifiedOrchestrator:
         )
         return {
             "command_id": command_id,
+            "original_message": route.get("original_message") or message,
+            "normalized_message": working_message,
             "reply": reply,
             "detected_intents": route["intents"],
             "workflow": route["workflow"],
@@ -519,7 +624,8 @@ class UnifiedOrchestrator:
     ) -> dict[str, Any]:
         if self.knowledge_manager is None:
             raise RuntimeError("Knowledge manager is not configured.")
-        query = self._extract_knowledge_query(message)
+        working_message = str(route.get("normalized_message") or message)
+        query = self._extract_knowledge_query(working_message)
         result = self.knowledge_manager.search_knowledge(query=query, limit=8)
         sources = result.get("sources_used", [])
         facts = [item.get("summary") or item.get("preview") or item.get("title") for item in result.get("results", [])[:5]]
@@ -542,6 +648,7 @@ class UnifiedOrchestrator:
                     "type": "knowledge_search",
                     "command_id": command_id,
                     "command": message,
+                    "normalized_command": working_message,
                     "note": f"Knowledge search completed for: {query}",
                     "workflow": route["workflow"],
                     "sources_used": sources,
@@ -553,6 +660,9 @@ class UnifiedOrchestrator:
             {
                 "command_id": command_id,
                 "message": message,
+                "original_message": route.get("original_message") or message,
+                "normalized_message": working_message,
+                "normalization": route.get("normalization", {}),
                 "mode": mode,
                 "workflow": route["workflow"],
                 "detected_intents": route["intents"],
@@ -562,6 +672,8 @@ class UnifiedOrchestrator:
         )
         return {
             "command_id": command_id,
+            "original_message": route.get("original_message") or message,
+            "normalized_message": working_message,
             "reply": reply,
             "detected_intents": route["intents"],
             "workflow": route["workflow"],
@@ -600,10 +712,11 @@ class UnifiedOrchestrator:
         save_to_memory: bool,
         created_at: str,
     ) -> dict[str, Any]:
-        url = self._extract_first_url(message)
+        working_message = str(route.get("normalized_message") or message)
+        url = self._extract_first_url(working_message)
         if not url:
             raise HTTPException(status_code=400, detail="No URL found in message.")
-        learned = self.agent_engine.learn_url(url=url, topic=message, reason="command_chat") if self.agent_engine else {}
+        learned = self.agent_engine.learn_url(url=url, topic=working_message, reason="command_chat") if self.agent_engine else {}
         knowledge_result = (
             self.knowledge_manager.add_url_ingest_result(learned, url=url, topic=message)
             if self.knowledge_manager is not None and learned.get("learned")
@@ -622,6 +735,7 @@ class UnifiedOrchestrator:
                     "type": "url_learning",
                     "command_id": command_id,
                     "command": message,
+                    "normalized_command": working_message,
                     "note": f"URL learning attempted for {url}. learned={learned.get('learned')}",
                     "workflow": route["workflow"],
                 }
@@ -643,6 +757,9 @@ class UnifiedOrchestrator:
             {
                 "command_id": command_id,
                 "message": message,
+                "original_message": route.get("original_message") or message,
+                "normalized_message": working_message,
+                "normalization": route.get("normalization", {}),
                 "mode": mode,
                 "workflow": route["workflow"],
                 "detected_intents": route["intents"],
@@ -652,6 +769,8 @@ class UnifiedOrchestrator:
         )
         return {
             "command_id": command_id,
+            "original_message": route.get("original_message") or message,
+            "normalized_message": working_message,
             "reply": reply,
             "detected_intents": route["intents"],
             "workflow": route["workflow"],

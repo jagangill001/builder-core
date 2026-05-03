@@ -1,5 +1,38 @@
 # Builder Core
 
+## Current Stabilization Pass - 2026-05-03
+Repo used: `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
+
+This pass inspected the current dirty repo state, kept the existing admin-auth and knowledge work, and stabilized the unfinished learning URL pack/runner/schedule files instead of adding a large new feature.
+
+What was fixed:
+- Backend imports now include working learning URL pack, learning run, learning schedule, message normalizer, and roadmap modules.
+- `/roadmap` and `/roadmap/next` now return a small static roadmap and are visible in the frontend status panels.
+- `/command` now preserves `original_message` and uses `normalized_message` for rough inputs such as `reserch`, `serch`, `knowlege`, `learm`, `rember`, `secuirty`, and `udpates`.
+- URL ingest responses now include clear `failure_reason`, final URL, domain, text/chunk counts, and private-search save status.
+- Public URL learning remains one page only and bounded; learning URL pack runs are manual, limited, and do not start background jobs.
+
+Endpoints verified locally:
+- `GET /system/status`, `/os/status`, `/platform/status`, `/storage/status`, `/agent/status`, `/search/status`, `/knowledge/status`, `/knowledge`, `/roadmap`, `/roadmap/next`
+- `POST /command`, `/agent/run`, `/search/query`, `/knowledge/add`, `/knowledge/search`
+- `POST /storage/test` and `POST /knowledge/seed` returned clear `403` locally because `ADMIN_API_KEY` is not configured
+- With approved network access, `POST /agent/learn-url` learned `https://example.com` and `POST /search/ingest-url` learned `https://www.iana.org/domains/example`
+
+Local test commands:
+```powershell
+cd "C:\Users\Jagan gill\OneDrive\Desktop\builder-core\backend"
+.\venv\Scripts\python.exe -m compileall app
+
+cd "C:\Users\Jagan gill\OneDrive\Desktop\builder-core\frontend"
+npm run build
+```
+
+Deploy:
+- Commit and push to `main`.
+- Let the existing GitHub Actions and Cloud Run flow deploy.
+- Live-test `/system/status`, `/storage/status`, `/storage/test` with `X-Admin-Key`, `/knowledge/status`, `/agent/learn-url`, and `/search/ingest-url`.
+- Manual setup still needed: set `ADMIN_API_KEY` in Cloud Run and verify Firestore permissions on the live service account.
+
 Builder Core is now a unified internal-tools command chat for planning, private search, research, market analysis, app planning, manual Codex prompt building, memory, learning, and cloud-ready storage.
 
 ## Builder Core OS Vision

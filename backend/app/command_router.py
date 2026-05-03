@@ -3,9 +3,16 @@ from __future__ import annotations
 import re
 from typing import Any
 
+try:
+    from app.message_normalizer import normalize_message
+except ImportError:
+    from message_normalizer import normalize_message
+
 
 def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
-    lowered = (message or "").lower()
+    normalization = normalize_message(message)
+    normalized_message = str(normalization.get("normalized_message") or message or "")
+    lowered = normalized_message.lower()
     mode_hint = str(context.get("mode") or "auto").strip().lower()
     intents: list[str] = []
 
@@ -38,7 +45,7 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         intents.append("law_research")
     if any(token in lowered for token in ["exam", "study plan", "syllabus", "revision"]):
         intents.append("exam_planning")
-    url_found = bool(re.search(r"https?://[^\s<>\"]+", message or ""))
+    url_found = bool(re.search(r"https?://[^\s<>\"]+", normalized_message or ""))
     memory_prefixes = [
         "remember this:",
         "learn this:",
@@ -127,6 +134,8 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         intents.append("finance_analysis_support")
     if any(token in lowered for token in ["engineering plan", "engineering planner", "architecture plan"]):
         intents.append("engineering_planning")
+    if any(token in lowered for token in ["roadmap", "next update", "next updates", "what are next updates", "what are next update"]):
+        intents.append("roadmap_request")
 
     mode_intent_map = {
         "coding": "coding",
@@ -174,6 +183,8 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         workflow = "knowledge_add"
     elif "knowledge_search" in unique_intents:
         workflow = "knowledge_search"
+    elif "roadmap_request" in unique_intents:
+        workflow = "roadmap"
     elif any(intent in unique_intents for intent in os_agent_intents):
         workflow = "agent_os"
     elif "research" in unique_intents and "market_analysis" in unique_intents and "app_builder" in unique_intents:
@@ -208,6 +219,8 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         primary_intent = "knowledge_search"
     elif "url_learning" in unique_intents:
         primary_intent = "url_learning"
+    elif "roadmap_request" in unique_intents:
+        primary_intent = "roadmap_request"
     elif "market_analysis" in unique_intents:
         primary_intent = "market_analysis"
     elif "app_builder" in unique_intents:
@@ -227,4 +240,7 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         "workflow": workflow,
         "confidence": "high" if workflow in {"security_check", "knowledge_add", "knowledge_search", "url_learning"} else "medium",
         "actions": actions,
+        "original_message": normalization.get("original_message", message),
+        "normalized_message": normalized_message,
+        "normalization": normalization,
     }

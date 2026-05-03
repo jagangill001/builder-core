@@ -1,5 +1,43 @@
 # Builder Core Progress Summary
 
+## Current Stabilization Pass - 2026-05-03
+- Repo folder used: `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
+- Starting git status: dirty `main` branch with modified backend URL/knowledge/storage files and untracked learning URL pack, runner, and schedule modules.
+- Fixed unfinished work by keeping the small learning modules connected, adding a message normalizer, adding a small roadmap module, and wiring the frontend to the roadmap endpoints.
+- Did not add a large feature or remove the working admin auth, knowledge, Firestore-ready storage, private search, or main chat flows.
+
+Files changed in this pass:
+- `backend/app/agent_engine.py`
+- `backend/app/command_router.py`
+- `backend/app/knowledge_manager.py`
+- `backend/app/learning_runner.py`
+- `backend/app/learning_schedule.py`
+- `backend/app/learning_url_packs.py`
+- `backend/app/main.py`
+- `backend/app/message_normalizer.py`
+- `backend/app/orchestrator.py`
+- `backend/app/roadmap.py`
+- `backend/app/storage.py`
+- `backend/app/web_ingest.py`
+- `frontend/src/app/page.tsx`
+- `README.md`
+- `COMMAND_CENTER.md`
+- `PROJECT_PROGRESS.md`
+
+Local verification completed:
+- Backend compile: `.\venv\Scripts\python.exe -m compileall app`
+- Frontend build: `npm run build`
+- Route import/list check: no duplicate method/path registrations
+- Smoke checks returned `200` for core status, command, agent, search, knowledge, URL learning, and roadmap endpoints.
+- Protected endpoints returned clear `403` locally because `ADMIN_API_KEY` is not configured.
+- Network-approved URL checks learned `https://example.com` and `https://www.iana.org/domains/example`.
+
+Still needs live testing:
+- Cloud Run `ADMIN_API_KEY` setup.
+- Live Firestore write/read through `POST /storage/test` with `X-Admin-Key`.
+- Live public URL learning from the deployed backend.
+- GitHub Actions / Cloud Run deployment after push.
+
 This is the fastest handoff file before the next Builder Core upgrade.
 
 ## Latest Codex Work Summary

@@ -1,5 +1,35 @@
 # Builder Core Command Center
 
+## Current Stabilization Pass - 2026-05-03
+Repo used: `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
+
+Current command-center status:
+- Main chat remains `POST /command`.
+- Advanced panels stay collapsed by default.
+- Admin-only panels return clear `401` or `403` when `X-Admin-Key` is missing, rejected, or not configured.
+- The frontend now also checks `/roadmap` and `/roadmap/next`.
+
+Current working command examples:
+- `reserch trucking market and make app` normalizes to research plus app planning.
+- `serch my knowlege for builder core os` normalizes to knowledge search.
+- `learm this https://example.com` normalizes to one-page URL learning.
+- `rember this builder core use firestore` normalizes to a knowledge save.
+- `check secuirty is system protected` normalizes to defensive security status.
+- `what are next udpates` normalizes to the roadmap workflow.
+
+Smoke-tested local endpoints:
+- Core: `/system/status`, `/os/status`, `/platform/status`, `/storage/status`, `/command`
+- Agent/search: `/agent/status`, `/agent/run`, `/search/status`, `/search/query`
+- Knowledge: `/knowledge/status`, `/knowledge/add`, `/knowledge/search`, `/knowledge`
+- Public URL learning: `/agent/learn-url`, `/search/ingest-url`
+- Roadmap: `/roadmap`, `/roadmap/next`
+
+Manual setup and live testing still needed:
+- Set `ADMIN_API_KEY` in Cloud Run.
+- Verify Firestore live with `/storage/test` using `X-Admin-Key`.
+- Verify public URL learning from the deployed backend.
+- Check GitHub Actions and Cloud Run deployment after push.
+
 ## Builder Core OS Command Center
 `POST /command` is now the main Builder Core OS brain surface. It still runs safety checks first, then routes to internal tools such as private search, research, market analysis, app planning, account-agent search, URL learning, crawler planning, security reporting, and agent roles.
 

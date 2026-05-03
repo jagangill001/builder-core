@@ -82,6 +82,8 @@ type StatusBundle = {
   hardening?: AnyRecord;
   knowledge?: AnyRecord;
   knowledgeSearch?: AnyRecord;
+  roadmap?: AnyRecord;
+  roadmapNext?: AnyRecord;
   protectedErrors?: Record<string, string>;
   tools?: AnyRecord;
   search?: AnyRecord;
@@ -332,6 +334,8 @@ export default function Home() {
         storage,
         model,
         knowledge,
+        roadmap,
+        roadmapNext,
       ] = await Promise.all([
         requestJson<AnyRecord>("/system/status"),
         requestJson<AnyRecord>("/os/status"),
@@ -342,6 +346,8 @@ export default function Home() {
         requestJson<AnyRecord>("/storage/status"),
         requestJson<AnyRecord>("/assistant/model-status"),
         requestJson<AnyRecord>("/knowledge/status"),
+        requestJson<AnyRecord>("/roadmap"),
+        requestJson<AnyRecord>("/roadmap/next"),
       ]);
       const [
         tasks,
@@ -370,7 +376,7 @@ export default function Home() {
       Object.entries({ tasks, approvals, account, connectors, securityReport, hardening, tools, memory, learning, selfImprovement }).forEach(([key, value]) => {
         if (typeof value === "object" && value !== null && "error" in value) protectedErrors[key] = String((value as AnyRecord).error);
       });
-      setStatuses({ system, os, platform, roles, tasks, approvals, account, connectors, security, securityReport, hardening, tools, search, storage, model, memory, learning, selfImprovement, knowledge, protectedErrors });
+      setStatuses({ system, os, platform, roles, tasks, approvals, account, connectors, security, securityReport, hardening, tools, search, storage, model, memory, learning, selfImprovement, knowledge, roadmap, roadmapNext, protectedErrors });
     } catch (error) {
       setStatusError(error instanceof Error ? error.message : "Status refresh failed");
     }
@@ -735,6 +741,7 @@ export default function Home() {
           <StatusPanel title="Account Agent / Connectors" value={{ account: statuses.account, connectors: statuses.connectors }} />
           <StatusPanel title="Security Center" value={{ status: statuses.security, report: statuses.securityReport, hardening: statuses.hardening }} fields={[["Events", String(security.events_count ?? 0)], ["Rate Limiter", String(security.rate_limiter_enabled ?? false)], ["Highest", String(statuses.securityReport?.highest_severity ?? "low")]]} />
           <StatusPanel title="Knowledge Base" value={{ status: statuses.knowledge, search: statuses.knowledgeSearch }} fields={[["Entries", String(statuses.knowledge?.total_entries ?? 0)], ["Storage", String(statuses.knowledge?.storage_used ?? "unknown")], ["Seeded", String((statuses.knowledge?.knowledge_seed_status as AnyRecord | undefined)?.seeded ?? false)]]} />
+          <StatusPanel title="Roadmap" value={{ roadmap: statuses.roadmap, next: statuses.roadmapNext }} fields={[["Next", String((statuses.roadmapNext?.item as AnyRecord | undefined)?.title ?? "unknown")], ["Status", String((statuses.roadmapNext?.item as AnyRecord | undefined)?.status ?? "unknown")]]} />
           <StatusPanel title="Tool Registry" value={statuses.tools} />
           <StatusPanel title="Private Search" value={statuses.search} />
           <StatusPanel title="Storage Status" value={statuses.storage} />

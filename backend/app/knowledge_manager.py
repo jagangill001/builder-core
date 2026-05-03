@@ -282,7 +282,7 @@ class KnowledgeManagerService:
                 "source_type": "public_url",
                 "category": self.classify_knowledge(f"{topic or ''} {content}"),
                 "tags": self.tag_knowledge(f"{topic or ''} {content}"),
-                "source_url": url,
+                "source_url": ingest_result.get("final_url") or url,
                 "confidence": "medium" if content else "low",
             }
         )
