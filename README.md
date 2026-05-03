@@ -2,6 +2,88 @@
 
 Builder Core is now a unified internal-tools command chat for planning, private search, research, market analysis, app planning, manual Codex prompt building, memory, learning, and cloud-ready storage.
 
+## Builder Core OS Vision
+Builder Core is growing into Builder Core OS: a local-first internal agent platform and virtual company operating system. The current system is a foundation-stage OS layer, not AGI, not human consciousness, and not a trained chatbot. It uses internal tools, private search, memory, safe URL learning, defensive security monitoring, agent roles, approvals, and storage adapters.
+
+The architecture is intentionally layered:
+- plain Python core logic where possible
+- storage behind local JSON and Firestore adapters
+- model access behind the model router
+- runtime detection behind the platform adapter
+- URL learning behind safe ingest modules
+- high-risk actions behind permission and approval checks
+
+## Builder Core OS Framework
+Current backend OS endpoints:
+- `GET /os/status`
+- `GET /platform/status`
+- `GET /agents/roles`
+- `GET /agents/roles/{agent_id}`
+- `POST /agents/tasks`
+- `GET /agents/tasks`
+- `GET /approvals`
+- `POST /approvals/request`
+- `GET /security/status`
+- `GET /security/events`
+- `GET /security/report`
+- `GET /security/hardening`
+- `GET /account-agent/status`
+- `POST /account-agent/search`
+- `GET /connectors`
+- `POST /agent/run`
+- `GET /agent/status`
+- `GET /agent/history`
+- `POST /agent/learn-url`
+- `POST /agent/crawl-plan`
+
+## Portability Roadmap
+Builder Core OS does not claim to run on every old or future machine today. The roadmap is graceful degradation:
+1. Cloud Run plus Firestore
+2. Local server mode
+3. SQLite or local file mode
+4. Android-ready wrapper
+5. Low-memory mode
+6. Local model adapter
+7. Hardware or simulator adapters
+8. Certified real-world integrations only after safety and legal review
+
+## Agent Roles And Approvals
+Virtual employee roles now include CEO, operations, research, developer, market, sales, support, teacher, cybersecurity, finance/trading analyst, legal research assistant, medical info assistant, engineering planner, firewall defense, incident response, and simulation safety. Medical, legal, trading, vehicle, aircraft, defense, customer-payment, deployment, account, and external cybersecurity actions are decision-support only unless the approval system allows a specific safe action.
+
+Blocked by default:
+- malware
+- credential theft
+- hack-back
+- offensive exploitation
+- private scraping
+- dark web access
+- paywall/login/CAPTCHA bypass
+- doxxing
+- autonomous weapon, vehicle, aircraft, live-trading, or medical-treatment control
+
+## Defensive Security
+The defensive security monitor logs suspicious paths, injection-looking query strings, suspicious user agents, high-severity secret/config probing, repeated errors, and rate-limit events. It redacts sensitive headers and stores events in `security_events`.
+
+IP metadata is limited. Builder Core records the best available client IP from `X-Forwarded-For`, `X-Real-IP`, `Forwarded`, or the request client host. Header IPs can be spoofed unless a trusted proxy configuration is enforced. Geo lookup is not configured, so location is not exact and does not identify a person.
+
+## Account Agent And Connectors
+The account agent is read-only first. It can search connected internal sources now:
+- Firestore/local memory
+- private search
+- uploaded or pasted documents
+- safe URL ingest records
+
+Future-ready only:
+- Google Drive
+- Gmail
+- YouTube transcript
+- browser session
+
+These future connectors are not faked and do not ask for passwords.
+
+## No-API Learning
+Builder Core can learn from one user-provided safe public URL at a time through `POST /agent/learn-url`. It blocks localhost, private IPs, `.onion`, non-http schemes, login/paywall bypass, and uncontrolled crawling. The mini crawler endpoint creates a plan only.
+
 ## Repo Folder Used
 - `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
 

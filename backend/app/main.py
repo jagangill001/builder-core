@@ -7,17 +7,24 @@ from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import Column, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 try:
     from app.app_planner import AppPlannerService
+    from app.account_agent import AccountAgentService
+    from app.agent_engine import AgentEngineService
+    from app.agent_roles import AgentRoleService
+    from app.agent_tasks import AgentTaskService
+    from app.approval_system import ApprovalSystemService
     from app.chat_assistant import ASSISTANT_MODES, ChatAssistantService
     from app.bridge import BridgeService
     from app.command_router import route_user_message
+    from app.connectors import ConnectorRegistryService
     from app.crawler_plan import CrawlerPlanService
     from app.document_ingest import DocumentIngestService
     from app.intelligence import build_intelligence_brief, get_supported_modes
@@ -25,6 +32,8 @@ try:
     from app.market_analyzer import MarketAnalyzerService
     from app.model_router import ModelRouterService
     from app.orchestrator import UnifiedOrchestrator
+    from app.os_core import BuilderCoreOSService
+    from app.platform_adapter import get_platform_status
     from app.private_search import PrivateSearchService
     from app.prompt_builder import (
         build_acceptance_checks,
@@ -37,6 +46,9 @@ try:
     from app.research_tasks import RESEARCH_CATEGORIES, ResearchTaskService, SUPPORTED_SOURCES
     from app.safety import check_request_safety
     from app.self_improvement import SelfImprovementService
+    from app.rate_limiter import RateLimiterService
+    from app.security_hardening import get_security_hardening_payload
+    from app.security_monitor import extract_client_ip, summarize_headers_safely, estimate_geo_hint, SecurityMonitorService
     from app.services import AutomationTaskService, FileStorageService
     from app.storage import ProjectStorageService
     from app.tasks import BackendTaskRunner
@@ -44,9 +56,15 @@ try:
     from app.web_ingest import WebIngestService
 except ImportError:
     from app_planner import AppPlannerService
+    from account_agent import AccountAgentService
+    from agent_engine import AgentEngineService
+    from agent_roles import AgentRoleService
+    from agent_tasks import AgentTaskService
+    from approval_system import ApprovalSystemService
     from chat_assistant import ASSISTANT_MODES, ChatAssistantService
     from bridge import BridgeService
     from command_router import route_user_message
+    from connectors import ConnectorRegistryService
     from crawler_plan import CrawlerPlanService
     from document_ingest import DocumentIngestService
     from intelligence import build_intelligence_brief, get_supported_modes
@@ -54,6 +72,8 @@ except ImportError:
     from market_analyzer import MarketAnalyzerService
     from model_router import ModelRouterService
     from orchestrator import UnifiedOrchestrator
+    from os_core import BuilderCoreOSService
+    from platform_adapter import get_platform_status
     from private_search import PrivateSearchService
     from prompt_builder import (
         build_acceptance_checks,
@@ -66,6 +86,9 @@ except ImportError:
     from research_tasks import RESEARCH_CATEGORIES, ResearchTaskService, SUPPORTED_SOURCES
     from safety import check_request_safety
     from self_improvement import SelfImprovementService
+    from rate_limiter import RateLimiterService
+    from security_hardening import get_security_hardening_payload
+    from security_monitor import extract_client_ip, summarize_headers_safely, estimate_geo_hint, SecurityMonitorService
     from services import AutomationTaskService, FileStorageService
     from storage import ProjectStorageService
     from tasks import BackendTaskRunner
@@ -119,6 +142,32 @@ web_ingest_service = WebIngestService(project_storage_service, private_search_se
 document_ingest_service = DocumentIngestService(project_storage_service, private_search_service, learning_service)
 crawler_plan_service = CrawlerPlanService(project_storage_service, web_ingest_service)
 tool_registry_service = ToolRegistryService(project_storage_service)
+agent_role_service = AgentRoleService()
+approval_system_service = ApprovalSystemService(project_storage_service)
+security_monitor_service = SecurityMonitorService(project_storage_service)
+rate_limiter_service = RateLimiterService()
+connector_registry_service = ConnectorRegistryService()
+account_agent_service = AccountAgentService(project_storage_service, private_search_service, connector_registry_service)
+os_core_service = BuilderCoreOSService(
+    storage=project_storage_service,
+    tool_registry=tool_registry_service,
+    model_router=model_router_service,
+    platform_status_provider=get_platform_status,
+    security_monitor=security_monitor_service,
+)
+agent_task_service = AgentTaskService(project_storage_service, agent_role_service)
+agent_engine_service = AgentEngineService(
+    storage=project_storage_service,
+    private_search=private_search_service,
+    research_engine=research_engine_service,
+    market_analyzer=market_analyzer_service,
+    app_planner=app_planner_service,
+    web_ingest=web_ingest_service,
+    crawler_plan=crawler_plan_service,
+    roles=agent_role_service,
+    security_monitor=security_monitor_service,
+    account_agent=account_agent_service,
+)
 orchestrator_service = UnifiedOrchestrator(
     storage=project_storage_service,
     learning=learning_service,
@@ -130,7 +179,86 @@ orchestrator_service = UnifiedOrchestrator(
     app_planner=app_planner_service,
     self_improvement=self_improvement_service,
     tool_registry=tool_registry_service,
+    agent_engine=agent_engine_service,
+    security_monitor=security_monitor_service,
+    account_agent=account_agent_service,
+    approval_system=approval_system_service,
 )
+
+SENSITIVE_RATE_LIMIT_PATHS = {
+    "/command",
+    "/agent/run",
+    "/storage/test",
+    "/search/ingest-url",
+    "/documents/ingest-text",
+    "/prompts/codex",
+    "/assistant/chat",
+    "/agents/tasks",
+    "/approvals/request",
+}
+
+
+def is_sensitive_rate_limited_path(path: str) -> bool:
+    return any(path == item or path.startswith(f"{item}/") for item in SENSITIVE_RATE_LIMIT_PATHS)
+
+
+@app.middleware("http")
+async def builder_core_security_middleware(request: Request, call_next):
+    path = str(request.url.path)
+    ip_address = extract_client_ip(request)
+    detection = security_monitor_service.detect_suspicious_request(request)
+
+    if detection.get("suspicious"):
+        security_monitor_service.record_security_event(detection)
+
+    if is_sensitive_rate_limited_path(path):
+        limit_result = rate_limiter_service.check_rate_limit(ip_address, path)
+        if limit_result.get("limited"):
+            security_monitor_service.record_security_event(
+                {
+                    "event_type": "rate_limit",
+                    "severity": "medium",
+                    "ip_address": ip_address,
+                    "user_agent": request.headers.get("user-agent", ""),
+                    "path": path,
+                    "method": request.method,
+                    "reason": "Rate limit exceeded for a sensitive endpoint.",
+                    "headers_summary": summarize_headers_safely(request),
+                    "geo_hint": estimate_geo_hint(ip_address),
+                }
+            )
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "ok": False,
+                    "detail": "Too Many Requests",
+                    "rate_limit": limit_result,
+                },
+                headers={"Retry-After": str(limit_result.get("retry_after_seconds", 60))},
+            )
+
+    try:
+        response = await call_next(request)
+    except Exception as error:
+        security_monitor_service.record_security_event(
+            {
+                "event_type": "system_error",
+                "severity": "medium",
+                "ip_address": ip_address,
+                "user_agent": request.headers.get("user-agent", ""),
+                "path": path,
+                "method": request.method,
+                "reason": f"Unhandled request error: {type(error).__name__}",
+                "headers_summary": summarize_headers_safely(request),
+                "geo_hint": estimate_geo_hint(ip_address),
+            }
+        )
+        raise
+
+    if response.status_code in {404, 500}:
+        security_monitor_service.record_response_status(request, response.status_code)
+
+    return response
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
@@ -306,12 +434,47 @@ class UrlIngestRequest(BaseModel):
 
 class CrawlerPlanRequest(BaseModel):
     seed_urls: list[str] = Field(default_factory=list)
+    topic: Optional[str] = "general"
     max_pages: int = 5
 
 class CommandRequest(BaseModel):
     message: str
     mode: str = "auto"
     save_to_memory: bool = True
+
+class AgentTaskCreateRequest(BaseModel):
+    agent_id: str = "research_agent"
+    user_goal: str
+    run_now: bool = False
+
+class ApprovalCreateRequest(BaseModel):
+    action_type: str
+    description: str
+    risk_level: Optional[str] = None
+    requested_by_agent: Optional[str] = "system"
+
+class ApprovalRejectRequest(BaseModel):
+    reason: Optional[str] = None
+
+class AccountAgentSearchRequest(BaseModel):
+    query: str
+    sources: list[str] = Field(default_factory=lambda: ["firestore_memory", "private_search"])
+    save_to_memory: bool = False
+
+class AgentRunRequest(BaseModel):
+    message: str
+    mode: str = "auto"
+    save_to_memory: bool = True
+
+class AgentLearnUrlRequest(BaseModel):
+    url: str
+    topic: Optional[str] = None
+    reason: Optional[str] = None
+
+class AgentCrawlPlanRequest(BaseModel):
+    seed_urls: list[str] = Field(default_factory=list)
+    topic: str = "general"
+    max_pages: int = 5
 
 class StorageFileCreate(BaseModel):
     filename: str
@@ -1764,6 +1927,212 @@ def storage_test():
     return project_storage_service.run_storage_test()
 
 
+@app.get("/platform/status")
+def platform_status():
+    status = get_platform_status()
+    project_storage_service.save_record("platform_status", status)
+    return status
+
+
+@app.get("/os/status")
+def os_status():
+    return os_core_service.get_os_status()
+
+
+@app.get("/agents/roles")
+def agents_roles():
+    roles = agent_role_service.list_roles()
+    for role in roles:
+        project_storage_service.save_record("agent_roles", role)
+    return {
+        "ok": True,
+        "items": roles,
+        "count": len(roles),
+        "warnings": [
+            "High-risk role outputs are decision-support only.",
+            "Medical, legal, trading, vehicle, aircraft, defense, and external cybersecurity actions require human approval or remain blocked.",
+        ],
+    }
+
+
+@app.get("/agents/roles/{agent_id}")
+def agent_role(agent_id: str):
+    role = agent_role_service.get_role(agent_id)
+    if role is None:
+        raise HTTPException(status_code=404, detail="Agent role not found.")
+    project_storage_service.save_record("agent_roles", role)
+    return role
+
+
+@app.post("/agents/tasks")
+def create_agent_task(payload: AgentTaskCreateRequest):
+    goal = payload.user_goal.strip()
+    if not goal:
+        raise HTTPException(status_code=400, detail="Agent task goal is empty.")
+    return agent_task_service.create_agent_task(
+        agent_id=payload.agent_id,
+        user_goal=goal,
+        run_now=payload.run_now,
+    )
+
+
+@app.get("/agents/tasks")
+def list_agent_tasks(limit: int = 50):
+    return {
+        "ok": True,
+        "items": agent_task_service.list_agent_tasks(limit=limit),
+    }
+
+
+@app.get("/agents/tasks/{task_id}")
+def get_agent_task(task_id: str):
+    item = agent_task_service.get_agent_task(task_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Agent task not found.")
+    return item
+
+
+@app.post("/approvals/request")
+def request_approval(payload: ApprovalCreateRequest):
+    if not payload.action_type.strip():
+        raise HTTPException(status_code=400, detail="Approval action type is empty.")
+    if not payload.description.strip():
+        raise HTTPException(status_code=400, detail="Approval description is empty.")
+    return approval_system_service.request_approval(
+        action_type=payload.action_type,
+        description=payload.description,
+        requested_by_agent=payload.requested_by_agent or "system",
+        risk_level=payload.risk_level,
+    )
+
+
+@app.post("/approvals/{approval_id}/approve")
+def approve_request(approval_id: str):
+    item = approval_system_service.approve(approval_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Approval not found.")
+    return item
+
+
+@app.post("/approvals/{approval_id}/reject")
+def reject_request(approval_id: str, payload: ApprovalRejectRequest | None = None):
+    item = approval_system_service.reject(approval_id, reason=(payload.reason if payload else "") or "")
+    if item is None:
+        raise HTTPException(status_code=404, detail="Approval not found.")
+    return item
+
+
+@app.get("/approvals")
+def list_approvals(limit: int = 50, status: Optional[str] = None):
+    return {
+        "ok": True,
+        "items": approval_system_service.list_approvals(limit=limit, status=status),
+        "pending_count": approval_system_service.count_pending(),
+    }
+
+
+@app.get("/security/status")
+def security_status():
+    summary = security_monitor_service.get_security_summary()
+    return {
+        **summary,
+        "rate_limiter_enabled": rate_limiter_service.enabled,
+        "rate_limit_status": rate_limiter_service.get_rate_limit_status(),
+    }
+
+
+@app.get("/security/events")
+def security_events(limit: int = 50):
+    return {
+        "ok": True,
+        "items": security_monitor_service.list_security_events(limit=limit),
+    }
+
+
+@app.get("/security/report")
+def security_report():
+    return security_monitor_service.create_incident_report()
+
+
+@app.get("/security/hardening")
+def security_hardening():
+    return get_security_hardening_payload()
+
+
+@app.get("/security/rate-limit")
+def security_rate_limit_status():
+    return rate_limiter_service.get_rate_limit_status()
+
+
+@app.get("/connectors")
+def connectors():
+    status = connector_registry_service.get_status()
+    for item in status.get("items", []):
+        project_storage_service.save_record("connectors", item)
+    return status
+
+
+@app.get("/account-agent/status")
+def account_agent_status():
+    return account_agent_service.get_account_agent_status()
+
+
+@app.post("/account-agent/search")
+def account_agent_search(payload: AccountAgentSearchRequest):
+    query = payload.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Account-agent query is empty.")
+    return account_agent_service.run_account_search(
+        query=query,
+        sources=payload.sources,
+        save_to_memory=payload.save_to_memory,
+    )
+
+
+@app.get("/agent/status")
+def agent_status():
+    return agent_engine_service.get_status()
+
+
+@app.post("/agent/run")
+def run_agent(payload: AgentRunRequest):
+    message = payload.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Agent message is empty.")
+    return agent_engine_service.run_agent(
+        message=message,
+        mode=payload.mode or "auto",
+        save_to_memory=bool(payload.save_to_memory),
+    )
+
+
+@app.get("/agent/history")
+def agent_history(limit: int = 50):
+    return {
+        "ok": True,
+        "items": agent_engine_service.get_history(limit=limit),
+    }
+
+
+@app.post("/agent/learn-url")
+def agent_learn_url(payload: AgentLearnUrlRequest):
+    url = payload.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is empty.")
+    return agent_engine_service.learn_url(url=url, topic=payload.topic, reason=payload.reason)
+
+
+@app.post("/agent/crawl-plan")
+def agent_crawl_plan(payload: AgentCrawlPlanRequest):
+    if not payload.seed_urls:
+        raise HTTPException(status_code=400, detail="At least one seed URL is required.")
+    return agent_engine_service.create_crawl_plan(
+        seed_urls=payload.seed_urls,
+        topic=payload.topic or "general",
+        max_pages=payload.max_pages,
+    )
+
+
 @app.post("/search/add")
 def search_add(payload: SearchAddRequest):
     safety = check_request_safety(payload.text, category=payload.source_type)
@@ -1832,7 +2201,11 @@ def search_ingest_url(payload: UrlIngestRequest):
 def crawler_plan(payload: CrawlerPlanRequest):
     if not payload.seed_urls:
         raise HTTPException(status_code=400, detail="At least one seed URL is required.")
-    return crawler_plan_service.create_crawl_plan(seed_urls=payload.seed_urls, max_pages=payload.max_pages)
+    return crawler_plan_service.create_crawl_plan(
+        seed_urls=payload.seed_urls,
+        max_pages=payload.max_pages,
+        topic=payload.topic or "general",
+    )
 
 
 @app.post("/command")
@@ -2375,11 +2748,38 @@ def system_status():
     bridge_status = bridge_service.build_bridge_status_payload()
     search_status_payload = private_search_service.get_search_status()
     tool_status = tool_registry_service.get_tool_status()
+    os_status_payload = os_core_service.get_os_status()
+    platform_status_payload = get_platform_status()
+    agent_status_payload = agent_engine_service.get_status()
+    security_status_payload = security_monitor_service.get_security_summary()
+    connector_status_payload = connector_registry_service.get_status()
+    account_agent_status_payload = account_agent_service.get_account_agent_status()
+    recent_security_events = security_monitor_service.list_security_events(limit=100)
+    high_severity_count = len([event for event in recent_security_events if event.get("severity") in {"high", "critical"}])
     public_urls = bridge_service.get_public_urls()
 
     return {
         "status": "ok",
         "service": "Builder Core",
+        "os_status": os_status_payload,
+        "platform_status": platform_status_payload,
+        "agent_status": agent_status_payload,
+        "agent_roles_count": agent_role_service.count_roles(),
+        "pending_approvals_count": approval_system_service.count_pending(),
+        "security_monitor_enabled": True,
+        "rate_limiter_enabled": rate_limiter_service.enabled,
+        "recent_security_event_count": len(recent_security_events),
+        "high_severity_security_event_count": high_severity_count,
+        "account_agent_status": account_agent_status_payload,
+        "connector_status": connector_status_payload,
+        "warnings": list(
+            dict.fromkeys(
+                (storage_status_payload.get("warnings") or [])
+                + (platform_status_payload.get("warnings") or [])
+                + (model_status.get("warnings") or [])
+                + security_status_payload.get("warnings", [])
+            )
+        ),
         "manual_codex_mode": True,
         "intelligence_center_enabled": True,
         "assistant_enabled": True,
@@ -2434,7 +2834,18 @@ def system_status():
         },
         "internal_tool_registry_status": tool_status,
         "storage_status": storage_status_payload,
+        "firestore_status": {
+            "enabled": storage_status_payload.get("firestore_enabled"),
+            "using_firestore": storage_status_payload.get("using_firestore"),
+            "using_fallback": storage_status_payload.get("using_fallback"),
+            "warnings": storage_status_payload.get("warnings", []),
+        },
         "search_status": search_status_payload,
+        "knowledge_base_count": search_status_payload.get("knowledge_entries", 0),
+        "security_status": security_status_payload,
+        "rate_limit_status": rate_limiter_service.get_rate_limit_status(),
+        "agent_tasks_count": len(agent_task_service.list_agent_tasks(limit=200)),
+        "approvals_count": len(approval_system_service.list_approvals(limit=200)),
         "frontend_url": public_urls.get("frontend"),
         "backend_url": public_urls.get("backend"),
         "latest_summary_available": project_storage_service.get_latest_summary() is not None,

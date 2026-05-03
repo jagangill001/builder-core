@@ -32,6 +32,19 @@ COLLECTION_NAMES = [
     "document_ingest",
     "url_ingest_records",
     "crawler_plans",
+    "agent_roles",
+    "agent_tasks",
+    "agent_runs",
+    "agent_plans",
+    "agent_steps",
+    "agent_memory",
+    "approvals",
+    "security_events",
+    "rate_limit_events",
+    "account_agent_audit_logs",
+    "connectors",
+    "platform_status",
+    "os_status",
     "intelligence_history",
     "bridge_status_history",
     "project_structure_summaries",
@@ -61,6 +74,19 @@ COLLECTION_LIMITS = {
     "document_ingest": 300,
     "url_ingest_records": 300,
     "crawler_plans": 120,
+    "agent_roles": 80,
+    "agent_tasks": 300,
+    "agent_runs": 300,
+    "agent_plans": 300,
+    "agent_steps": 600,
+    "agent_memory": 300,
+    "approvals": 300,
+    "security_events": 1000,
+    "rate_limit_events": 500,
+    "account_agent_audit_logs": 500,
+    "connectors": 80,
+    "platform_status": 80,
+    "os_status": 80,
     "intelligence_history": 200,
     "bridge_status_history": 80,
     "project_structure_summaries": 40,
@@ -74,9 +100,17 @@ def utc_now_iso() -> str:
 
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    temp_path.replace(path)
+    serialized = json.dumps(payload, indent=2)
+    temp_path = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
+    temp_path.write_text(serialized, encoding="utf-8")
+    try:
+        temp_path.replace(path)
+    except PermissionError:
+        path.write_text(serialized, encoding="utf-8")
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def default_payload() -> dict[str, Any]:
@@ -120,6 +154,12 @@ def pick_record_id(record: dict[str, Any]) -> str:
         "tool_id",
         "url_ingest_id",
         "plan_id",
+        "agent_id",
+        "approval_id",
+        "event_id",
+        "run_id",
+        "account_agent_id",
+        "connector_id",
     )
     for key in candidate_keys:
         value = record.get(key)

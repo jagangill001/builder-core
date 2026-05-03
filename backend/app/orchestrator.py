@@ -49,6 +49,10 @@ class UnifiedOrchestrator:
         app_planner: AppPlannerService,
         self_improvement: SelfImprovementService,
         tool_registry: ToolRegistryService,
+        agent_engine: Any | None = None,
+        security_monitor: Any | None = None,
+        account_agent: Any | None = None,
+        approval_system: Any | None = None,
     ) -> None:
         self.storage = storage
         self.learning = learning
@@ -60,6 +64,10 @@ class UnifiedOrchestrator:
         self.app_planner = app_planner
         self.self_improvement = self_improvement
         self.tool_registry = tool_registry
+        self.agent_engine = agent_engine
+        self.security_monitor = security_monitor
+        self.account_agent = account_agent
+        self.approval_system = approval_system
 
     def run_unified_workflow(self, message: str, mode: str = "auto", save_to_memory: bool = True) -> dict[str, Any]:
         safety = check_request_safety(message, category=mode)
@@ -112,6 +120,9 @@ class UnifiedOrchestrator:
                 },
             )
             return blocked
+
+        if route["workflow"] == "agent_os" and self.agent_engine is not None:
+            return self._run_agent_os_command(command_id, message, mode, route, save_to_memory, created_at)
 
         search_result = self.private_search.search_private_index(message, limit=6)
         tools_used = ["safety_firewall", "command_router", "private_search", "model_router"]
@@ -397,6 +408,79 @@ class UnifiedOrchestrator:
             "memory_saved": True,
             "next_actions": [extracted.get("next_recommendation") or "Review the saved lesson and choose the next safe task."],
             "limitations": ["Builder Core still relies on the user to paste the Codex summary manually."],
+            "created_at": created_at,
+        }
+
+    def _run_agent_os_command(
+        self,
+        command_id: str,
+        message: str,
+        mode: str,
+        route: dict[str, Any],
+        save_to_memory: bool,
+        created_at: str,
+    ) -> dict[str, Any]:
+        agent_result = self.agent_engine.run_agent(message=message, mode=mode, save_to_memory=save_to_memory)
+        reply = agent_result.get("answer") or "Builder Core OS agent workflow completed."
+        tools_used = ["safety_firewall", "command_router", "agent_engine"] + list(agent_result.get("tools_used") or [])
+        progress_steps = [
+            "Safety firewall checked the request.",
+            "Command router selected Builder Core OS agent workflow.",
+        ]
+        for step in agent_result.get("plan", {}).get("steps", []):
+            action = str(step.get("action") or "").strip()
+            if action:
+                progress_steps.append(action)
+
+        self.storage.save_record(
+            "command_history",
+            {
+                "command_id": command_id,
+                "message": message,
+                "mode": mode,
+                "workflow": "agent_os",
+                "detected_intents": route.get("intents", []),
+                "selected_agent_role": agent_result.get("selected_agent_role"),
+                "reply": reply,
+            },
+        )
+
+        return {
+            "command_id": command_id,
+            "reply": reply,
+            "selected_agent_role": agent_result.get("selected_agent_role"),
+            "detected_intents": route.get("intents", []),
+            "workflow": "agent_os",
+            "internal_tools_used": list(dict.fromkeys(tools_used)),
+            "progress": {
+                "status": "completed",
+                "steps": progress_steps,
+                "agent_plan": agent_result.get("plan"),
+            },
+            "private_search": agent_result.get("result", {}).get("outputs", {}).get(
+                "private_search",
+                {"used": False, "results_count": 0, "top_sources": []},
+            ),
+            "research": agent_result.get("result", {}).get("outputs", {}).get("research", {}),
+            "market_analysis": agent_result.get("result", {}).get("outputs", {}).get("market_analysis", {}),
+            "app_plan": agent_result.get("result", {}).get("outputs", {}).get("app_plan", {}),
+            "codex_prompt": "",
+            "summary": {
+                "message": reply,
+                "agent_run_id": agent_result.get("agent_run_id"),
+                "approvals_needed": agent_result.get("approvals_needed", []),
+                "security": agent_result.get("result", {}).get("outputs", {}).get("security", {}),
+                "learn_url": agent_result.get("result", {}).get("outputs", {}).get("learn_url", {}),
+                "crawler_plan": agent_result.get("result", {}).get("outputs", {}).get("crawler_plan", {}),
+            },
+            "storage_used": agent_result.get("storage_used") or ("firestore" if self.storage.using_firestore else "local"),
+            "memory_saved": agent_result.get("memory_saved", False),
+            "next_actions": agent_result.get("next_actions", []),
+            "limitations": agent_result.get("limitations", []),
+            "approvals_needed": agent_result.get("approvals_needed", []),
+            "security_warnings": agent_result.get("security_warnings", []),
+            "knowledge_sources_used": agent_result.get("knowledge_sources_used", []),
+            "confidence": agent_result.get("confidence", "medium"),
             "created_at": created_at,
         }
 

@@ -30,6 +30,9 @@ class SelfImprovementService:
 
         entry = {
             "category": str(chat_or_task.get("category") or "chat"),
+            "user_goal": chat_or_task.get("user_goal") or user_message,
+            "selected_agent": chat_or_task.get("selected_agent"),
+            "tools_used": chat_or_task.get("tools_used", []),
             "user_message": user_message,
             "assistant_reply": assistant_reply,
             "what_worked": (
@@ -42,6 +45,9 @@ class SelfImprovementService:
             "repeated_user_preferences": repeated_preferences,
             "project_mistake": what_failed or "No recurring project mistake was detected in this note.",
             "project_lesson": self._build_project_lesson(status, suggestions),
+            "missing_knowledge": chat_or_task.get("missing_knowledge", []),
+            "security_warnings": chat_or_task.get("security_warnings", []),
+            "storage_used": chat_or_task.get("storage_used"),
             "next_recommended_improvement": self.suggest_next_project_upgrade(),
             "created_at": utc_now_iso(),
         }

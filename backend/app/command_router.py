@@ -23,6 +23,10 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         intents.append("summary_save")
     if any(token in lowered for token in ["research", "investigate", "study", "analyze", "analyse"]):
         intents.append("research")
+    if any(token in lowered for token in ["act as", "agent role", "ceo agent", "research agent", "teacher agent", "cybersecurity agent"]):
+        intents.append("agent_role_request")
+    if any(token in lowered for token in ["business", "profit", "virtual company", "company employees"]):
+        intents.append("business_planning")
     if any(token in lowered for token in ["market", "competitor", "industry", "trend", "dispatch", "trucking"]):
         intents.append("market_analysis")
     if any(token in lowered for token in ["build app", "create app", "app idea", "mvp", "build an app"]):
@@ -44,14 +48,32 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
         intents.append("cloud_storage_setup")
     if any(token in lowered for token in ["search", "find in memory", "private search"]):
         intents.append("private_search")
+    if any(token in lowered for token in ["account agent", "authorized sources", "search my memory", "my sources"]):
+        intents.append("account_agent_search")
     if any(token in lowered for token in ["ingest document", "save document", "document text"]):
         intents.append("document_ingest")
-    if any(token in lowered for token in ["ingest url", "save url", "crawl page", "fetch page"]):
+    if any(token in lowered for token in ["ingest url", "save url", "crawl page", "fetch page", "learn this url", "learn url"]):
         intents.append("url_ingest")
     if any(token in lowered for token in ["crawl", "crawler", "max pages", "seed urls"]):
         intents.append("crawler_plan")
     if any(token in lowered for token in ["code", "backend", "frontend", "route", "typescript", "python"]):
         intents.append("coding")
+    if any(token in lowered for token in ["check security", "protect builder core", "protect system", "under attack", "security report"]):
+        intents.append("security_check")
+    if any(token in lowered for token in ["attack detection", "am i under attack"]):
+        intents.append("attack_detection")
+    if any(token in lowered for token in ["firewall", "harden firewall", "hardening"]):
+        intents.append("firewall_hardening")
+    if "incident report" in lowered:
+        intents.append("incident_report")
+    if any(token in lowered for token in ["teach me", "teacher agent", "learn python", "study python"]):
+        intents.append("teaching")
+    if any(token in lowered for token in ["medical", "diagnosis", "treatment"]):
+        intents.append("medical_info_support")
+    if any(token in lowered for token in ["finance", "trading", "investment"]):
+        intents.append("finance_analysis_support")
+    if any(token in lowered for token in ["engineering plan", "engineering planner", "architecture plan"]):
+        intents.append("engineering_planning")
 
     mode_intent_map = {
         "coding": "coding",
@@ -72,8 +94,26 @@ def route_user_message(message: str, context: dict[str, Any]) -> dict[str, Any]:
     unique_intents = list(dict.fromkeys(intents))
 
     workflow = "normal_chat"
+    os_agent_intents = {
+        "agent_role_request",
+        "business_planning",
+        "security_check",
+        "attack_detection",
+        "firewall_hardening",
+        "incident_report",
+        "account_agent_search",
+        "teaching",
+        "medical_info_support",
+        "finance_analysis_support",
+        "engineering_planning",
+        "url_ingest",
+        "crawler_plan",
+    }
+
     if "summary_save" in unique_intents:
         workflow = "save_summary"
+    elif any(intent in unique_intents for intent in os_agent_intents):
+        workflow = "agent_os"
     elif "research" in unique_intents and "market_analysis" in unique_intents and "app_builder" in unique_intents:
         workflow = "research_to_app_plan"
     elif "market_analysis" in unique_intents and "app_builder" in unique_intents:

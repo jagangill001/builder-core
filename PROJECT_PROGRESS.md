@@ -2,6 +2,80 @@
 
 This is the fastest handoff file before the next Builder Core upgrade.
 
+## Latest Codex Work Summary
+- Date/time: `2026-05-02T21:56:14.5447037-04:00`
+- Repo folder used: `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
+- Builder Core OS framework added: foundation-stage OS status, platform adapter, agent roles, agent tasks, approvals, permissions, defensive security, rate limiting, account agent, connector registry, and OS UI.
+- Platform adapter added: detects `cloud_run`, `linux`, `windows`, or `unknown`; reports `cloud`, `local`, `low_memory`, `offline_ready`, or `unknown`; reports Python version, storage mode, degradation plan, disabled unsafe capabilities, and future portability notes.
+- Agent roles added: CEO, operations manager, research, developer, market, sales, customer support, teacher, cybersecurity, finance/trading analyst, legal research assistant, medical info assistant, engineering planner, firewall defense, incident response, and simulation safety.
+- Agent tasks added: create, list, get, run-now option, save steps, record allowed internal tools, mark high-risk roles as approval-required.
+- Approvals added: request, approve, reject, and list approval records for high-risk actions.
+- Defensive security added: suspicious request detector, event logger, redacted header summaries, safe IP extraction, approximate geo placeholder, incident reports, and hardening checklists.
+- Rate limiter added: in-memory sensitive-endpoint rate limit with 429 response and logged security event.
+- Account agent added: read-only-first internal search across Firestore/local memory, private search, documents, pasted notes, and safe URL ingests.
+- Connector registry added: internal connectors available now and Gmail/Drive/YouTube/browser future-ready only.
+- Frontend OS UI added: one Builder Core OS chat, mode selector, save-to-memory checkbox, response metadata display, Codex prompt copy, and collapsed OS/security/account/storage/search/model/memory panels.
+
+## Latest Files Changed
+- `backend/app/account_agent.py`
+- `backend/app/action_permissions.py`
+- `backend/app/agent_engine.py`
+- `backend/app/agent_roles.py`
+- `backend/app/agent_tasks.py`
+- `backend/app/approval_system.py`
+- `backend/app/command_router.py`
+- `backend/app/connectors.py`
+- `backend/app/crawler_plan.py`
+- `backend/app/main.py`
+- `backend/app/orchestrator.py`
+- `backend/app/os_core.py`
+- `backend/app/platform_adapter.py`
+- `backend/app/rate_limiter.py`
+- `backend/app/security_hardening.py`
+- `backend/app/security_monitor.py`
+- `backend/app/self_improvement.py`
+- `backend/app/storage.py`
+- `backend/app/tool_registry.py`
+- `backend/.env.example`
+- `frontend/src/app/page.tsx`
+- `README.md`
+- `COMMAND_CENTER.md`
+- `PROJECT_PROGRESS.md`
+
+## What Works Now
+- `/os/status`, `/platform/status`, `/agents/roles`, `/agents/tasks`, `/approvals`, `/security/status`, `/security/events`, `/security/report`, `/security/hardening`, `/account-agent/status`, `/connectors`, `/account-agent/search`, `/agent/status`, `/agent/run`, `/agent/history`, `/agent/learn-url`, `/agent/crawl-plan`
+- `/command` can route OS-style requests such as CEO agent planning, security checks, firewall hardening, account-agent search, teaching, safe URL learning, and crawler planning.
+- Suspicious paths such as `/.env`, `/.git`, `/wp-admin`, and `/phpmyadmin` should log security events without crashing the app.
+- Private search remains saved-knowledge-only; URL learning is single safe public page only.
+
+## Acceptance Check Result
+- Backend import check passed with the project venv.
+- Python AST check passed for changed backend modules.
+- Local HTTP acceptance sweep passed for the requested OS, platform, agents, approvals, security, account-agent, connector, agent, command, storage, search, and document-ingest endpoints.
+- Suspicious request probes returned normal 404 responses and produced a security report with logged events.
+- `npm run build` passed for the frontend. Next.js reported only a workspace-root warning caused by multiple lockfiles.
+
+## Future-Ready Only
+- Gmail, Google Drive, browser session, and YouTube transcript connectors
+- SQLite adapter
+- local model adapter beyond the existing optional local HTTP path
+- safe crawler execution with robots.txt, allowlists, rate limits, jobs, and user approval
+- authenticated admin dashboard
+- Cloud Armor/API Gateway/Redis-backed production rate limiting
+- hardware/simulator adapters
+
+## Blocked For Safety
+- hack-back, malware, credential theft, offensive exploitation, dark web access, paywall/login/CAPTCHA bypass, private scraping, hidden surveillance, doxxing, exact attacker identity/location claims, autonomous weapon/vehicle/aircraft control, live trading, and medical-treatment control.
+
+## Firestore / Storage Notes
+- Storage collections expanded to include OS, agent, approval, security, connector, account-agent, rate-limit, and platform collections.
+- Firestore is used only when `STORAGE_MODE=firestore`, `FIRESTORE_ENABLED=true`, and `GCP_PROJECT_ID` is set.
+- Local JSON fallback remains available.
+- Storage test result in local acceptance returned HTTP 200 using the local fallback environment. The previous known live result was `storage_used=firestore`, `saved=true`, `read_back=true`; do not treat that as a fresh live Firestore run.
+
+## Next Recommended Step
+Run the backend acceptance endpoints and `npm run build`, then deploy the backend and frontend after reviewing the security and approval behavior on live Cloud Run.
+
 ## Repo Folder Used
 - `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
 

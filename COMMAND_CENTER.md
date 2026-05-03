@@ -1,5 +1,70 @@
 # Builder Core Command Center
 
+## Builder Core OS Command Center
+`POST /command` is now the main Builder Core OS brain surface. It still runs safety checks first, then routes to internal tools such as private search, research, market analysis, app planning, account-agent search, URL learning, crawler planning, security reporting, and agent roles.
+
+New OS intents include:
+- normal chat
+- agent role request
+- business planning
+- market analysis
+- app builder
+- Codex prompt
+- private search
+- document ingest
+- safe URL ingest
+- crawler plan
+- security check
+- attack detection
+- firewall hardening
+- incident report
+- account-agent search
+- teaching
+- legal research support
+- medical information support
+- finance analysis support
+- engineering planning
+- self-improvement
+- storage status
+
+The command response may include selected agent role, main answer, plan steps, tools used, approvals needed, security warnings, knowledge sources, confidence, limitations, memory saved, storage used, Codex prompt, and next actions.
+
+## Approval And Permission Policy
+Allowed internally:
+- search memory and private index
+- save memory when requested
+- ingest pasted notes
+- ingest one user-provided safe public URL
+- create internal tasks
+- generate plans, Codex prompts, and incident reports
+
+Requires confirmation:
+- email, public posting, trades, financial decisions, legal filings, medical recommendations, customer refunds, deployment, GitHub PRs, cloud changes, IP blocking, data deletion, account actions, and security-policy changes
+
+Blocked:
+- hacking, malware, credential theft, login/CAPTCHA/paywall bypass, dark web access, doxxing, hidden surveillance, private scraping, and unsafe autonomous physical control
+
+## Security Center
+Use:
+- `GET /security/status`
+- `GET /security/events`
+- `GET /security/report`
+- `GET /security/hardening`
+- `GET /security/rate-limit`
+
+The security monitor is defensive only. It logs suspicious traffic, rate limits sensitive endpoints, redacts secrets, and recommends hardening. It does not hack back or claim exact attacker identity/location.
+
+## Account Agent
+Use:
+- `GET /account-agent/status`
+- `POST /account-agent/search`
+- `GET /connectors`
+
+The account agent searches connected internal sources only. Gmail, Drive, YouTube transcript, and browser-session connectors are future-ready but not connected.
+
+## Portability
+The platform adapter reports cloud/local/low-memory/offline-ready signals and a degradation plan. Firestore is used only when configured; local JSON fallback remains available. Future SQLite, local model, mobile wrapper, and hardware/simulator adapters should stay behind adapter boundaries.
+
 ## Repo Folder Used
 - `C:\Users\Jagan gill\OneDrive\Desktop\builder-core`
 

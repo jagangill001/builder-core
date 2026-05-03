@@ -27,7 +27,7 @@ class CrawlerPlanService:
             "Future crawls should rate-limit requests and save summaries plus source links only.",
         ]
 
-    def create_crawl_plan(self, seed_urls: list[str], max_pages: int) -> dict[str, Any]:
+    def create_crawl_plan(self, seed_urls: list[str], max_pages: int, topic: str | None = None) -> dict[str, Any]:
         valid_urls: list[str] = []
         warnings: list[str] = []
 
@@ -38,17 +38,32 @@ class CrawlerPlanService:
             else:
                 warnings.append(f"{url}: {safety['reason']}")
 
+        plan_id = f"crawler_plan_{uuid4().hex[:12]}"
+        allowed = bool(valid_urls) and not any("private" in warning.lower() or "onion" in warning.lower() for warning in warnings)
         plan = {
-            "id": f"crawler_plan_{uuid4().hex[:12]}",
+            "id": plan_id,
+            "plan_id": plan_id,
+            "allowed": allowed,
             "seed_urls": valid_urls,
+            "topic": topic or "general",
             "max_pages": max(1, min(max_pages, 25)),
             "status": "planned",
+            "safety_rules": self.explain_crawl_limits(),
             "limits": self.explain_crawl_limits(),
             "warnings": warnings,
             "steps": [
                 "Validate public URLs and robots rules first.",
                 "Fetch a small number of public pages with a visible rate limit.",
                 "Save summaries and source links into Builder Core private search only.",
+                "Run execution only after explicit user approval and safe executor setup.",
+            ],
+            "future_execution_requirements": [
+                "robots.txt respect",
+                "rate limits",
+                "allowlist domains",
+                "max pages",
+                "Cloud Run Jobs",
+                "Cloud Scheduler only after user approval",
             ],
         }
         self.storage.save_record("crawler_plans", plan)
