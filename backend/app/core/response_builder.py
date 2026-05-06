@@ -1,11 +1,18 @@
-from __future__ import annotations
+﻿from __future__ import annotations
+
+from typing import Any
 
 from app.core.agent_registry import select_agent
 from app.core.security_firewall import FirewallDecision
 from app.models.command_models import CommandIntent, FinalResult
 
 
-def build_final_result(intent: CommandIntent, decision: FirewallDecision) -> FinalResult:
+def build_final_result(
+    intent: CommandIntent,
+    decision: FirewallDecision,
+    intelligence_result: dict[str, Any] | None = None,
+    approval_request: dict[str, Any] | None = None,
+) -> FinalResult:
     agent = select_agent(intent)
 
     if decision.blocked:
@@ -19,18 +26,39 @@ def build_final_result(intent: CommandIntent, decision: FirewallDecision) -> Fin
             recommended_next_step=decision.recommended_next_step,
         )
 
+    if intelligence_result is not None:
+        return FinalResult(
+            type=intent,
+            summary=str(intelligence_result.get("summary") or "Live search is not connected yet."),
+            selected_agent=agent.name,
+            risk_level=decision.risk_level,
+            approval_required=decision.approval_required,
+            blocked=False,
+            recommended_next_step=str(intelligence_result.get("recommended_next_step") or decision.recommended_next_step),
+            approval_request=approval_request,
+            sources=list(intelligence_result.get("sources", [])),
+            facts=list(intelligence_result.get("facts", [])),
+            claims=list(intelligence_result.get("claims", [])),
+            timeline=dict(intelligence_result.get("timeline") or {}),
+            manipulation_risk=dict(intelligence_result.get("manipulation_risk") or {}),
+            future_scenarios=list(intelligence_result.get("future_scenarios", [])),
+            confidence=str(intelligence_result.get("confidence") or "low"),
+            missing_data=[str(item) for item in intelligence_result.get("missing_data", [])],
+        )
+
     if decision.approval_required:
         return FinalResult(
             type=intent,
             summary=(
                 f"{_intent_label(intent)} request received. {decision.reason} "
-                "Builder Core did not execute the action and prepared only a safe planning response."
+                "Builder Core created an approval record and did not execute the action."
             ),
             selected_agent=agent.name,
             risk_level=decision.risk_level,
             approval_required=True,
             blocked=False,
             recommended_next_step=decision.recommended_next_step,
+            approval_request=approval_request,
         )
 
     summary, next_step = _safe_result_text(intent)
@@ -53,7 +81,7 @@ def _safe_result_text(intent: CommandIntent) -> tuple[str, str]:
         )
     if intent == "research":
         return (
-            "This is a research task. Live internet search is not connected yet, so Builder Core can only prepare a research plan and source-checking approach.",
+            "This is a research task. Live search is not connected yet, so Builder Core can only prepare a research plan and source-checking approach.",
             "Verify claims with real sources outside Builder Core until live search is connected.",
         )
     if intent == "security":

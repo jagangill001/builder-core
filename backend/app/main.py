@@ -12,13 +12,29 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 try:
+    from app.core.approval_store import create_approval_request as create_core_approval_request
+    from app.core.approval_store import decide_approval as decide_core_approval
+    from app.core.approval_store import list_pending_approvals as list_core_pending_approvals
     from app.core.audit_log import read_recent_audit_entries as read_core_audit_entries
     from app.core.command_router import route_command as route_core_command
+    from app.core.task_status_store import get_task_status as get_core_task_status
+    from app.intelligence.research_response_builder import build_research_response as build_core_research_response
+    from app.models.command_models import ApprovalCreateRequest as CoreApprovalCreateRequest
+    from app.models.command_models import ApprovalDecisionRequest as CoreApprovalDecisionRequest
     from app.models.command_models import CommandRequest as CoreCommandRequest
+    from app.models.command_models import IntelligenceAnalyzeRequest as CoreIntelligenceAnalyzeRequest
 except ImportError:
+    from core.approval_store import create_approval_request as create_core_approval_request
+    from core.approval_store import decide_approval as decide_core_approval
+    from core.approval_store import list_pending_approvals as list_core_pending_approvals
     from core.audit_log import read_recent_audit_entries as read_core_audit_entries
     from core.command_router import route_command as route_core_command
+    from core.task_status_store import get_task_status as get_core_task_status
+    from intelligence.research_response_builder import build_research_response as build_core_research_response
+    from models.command_models import ApprovalCreateRequest as CoreApprovalCreateRequest
+    from models.command_models import ApprovalDecisionRequest as CoreApprovalDecisionRequest
     from models.command_models import CommandRequest as CoreCommandRequest
+    from models.command_models import IntelligenceAnalyzeRequest as CoreIntelligenceAnalyzeRequest
 from sqlalchemy import Column, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -2461,6 +2477,37 @@ def audit_recent(limit: int = 20):
     }
 
 
+@app.post("/approvals")
+def create_phase_2_approval(payload: CoreApprovalCreateRequest):
+    return create_core_approval_request(
+        command_id=payload.command_id,
+        action=payload.action,
+        reason=payload.reason,
+        risk_level=payload.risk_level,
+    )
+
+
+@app.get("/approvals/pending")
+def pending_phase_2_approvals():
+    return {"items": list_core_pending_approvals()}
+
+
+@app.post("/approvals/{approval_id}/decision")
+def decide_phase_2_approval(approval_id: str, payload: CoreApprovalDecisionRequest):
+    try:
+        record = decide_core_approval(approval_id, payload.decision, payload.note)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if record is None:
+        raise HTTPException(status_code=404, detail="Approval request not found.")
+    return record
+
+
+@app.post("/intelligence/analyze")
+def analyze_intelligence(payload: CoreIntelligenceAnalyzeRequest):
+    return build_core_research_response(payload.query)
+
+
 @app.post("/research/tasks")
 def create_research_task(payload: ResearchTaskCreateRequest):
     topic = payload.topic.strip()
@@ -2587,6 +2634,10 @@ def list_tasks(limit: int = 20):
 
 @app.get("/tasks/{task_id}")
 def get_task(task_id: str):
+    phase_2_status = get_core_task_status(task_id)
+    if phase_2_status is not None:
+        return phase_2_status
+
     item = automation_task_service.get_task(task_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Task not found.")
@@ -3005,11 +3056,19 @@ def system_status():
         "status": "ok",
         "service": "Builder Core",
         "service_id": "builder-core",
-        "phase": "phase_1_core_command_system",
+        "phase": "phase_2_live_intelligence_approval_foundation",
         "live_search_connected": False,
         "codex_direct_connection": False,
         "security_firewall": True,
         "audit_log": True,
+        "approval_workflow": True,
+        "phase_2_live_intelligence_approval_foundation": {
+            "enabled": True,
+            "approval_records_only": True,
+            "live_search_connected": False,
+            "long_running_task_status": True,
+            "intelligence_endpoint": "/intelligence/analyze",
+        },
         "phase_1_core_command_system": {
             "enabled": True,
             "command_endpoint": "/command",
@@ -3021,6 +3080,7 @@ def system_status():
         "agent_status": agent_status_payload,
         "agent_roles_count": agent_role_service.count_roles(),
         "pending_approvals_count": approval_system_service.count_pending(),
+        "phase_2_pending_approvals_count": len(list_core_pending_approvals()),
         "admin_auth_configured": auth_status_payload["admin_auth_configured"],
         "protected_endpoints_enabled": auth_status_payload["protected_endpoints_enabled"],
         "auth_status": auth_status_payload,
@@ -3151,5 +3211,6 @@ import uvicorn
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
 
 

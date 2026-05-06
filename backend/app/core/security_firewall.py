@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 
@@ -29,22 +29,30 @@ BLOCKED_PATTERNS: tuple[tuple[str, str], ...] = (
     ("hide admin key in frontend", "Secrets must never be hidden in frontend code."),
     ("put admin key in frontend", "Secrets must never be placed in frontend code."),
     ("api key in frontend", "Secrets must never be placed in frontend code."),
-    ("create fake news", "Fake news creation is not allowed."),
-    ("write fake news", "Fake news creation is not allowed."),
-    ("generate fake news", "Fake news creation is not allowed."),
+    ("create fake news", "Creating misinformation or fake news is not allowed."),
+    ("write fake news", "Creating misinformation or fake news is not allowed."),
+    ("generate fake news", "Creating misinformation or fake news is not allowed."),
+    ("create misinformation", "Creating misinformation is not allowed."),
+    ("create disinformation", "Creating disinformation is not allowed."),
+    ("generate misinformation", "Creating misinformation is not allowed."),
+    ("generate disinformation", "Creating disinformation is not allowed."),
     ("propaganda campaign", "Propaganda campaigns are not allowed."),
+    ("create propaganda", "Creating propaganda is not allowed."),
     ("voter manipulation", "Voter manipulation is not allowed."),
     ("manipulate voters", "Voter manipulation is not allowed."),
     ("control election", "Election control or manipulation is not allowed."),
     ("control election results", "Election control or manipulation is not allowed."),
     ("change election results", "Election control or manipulation is not allowed."),
     ("rig election", "Election control or manipulation is not allowed."),
+    ("secret influence operation", "Secret influence operations are not allowed."),
+    ("secretly influence", "Secret influence operations are not allowed."),
     ("casino outcome", "Controlling gambling outcomes is not allowed."),
     ("gambling outcome", "Controlling gambling outcomes is not allowed."),
     ("bot amplification", "Bot amplification is not allowed."),
     ("fake engagement", "Fake engagement campaigns are not allowed."),
     ("fake viral comments", "Fake engagement campaigns are not allowed."),
     ("change people's mood", "Secret public mood manipulation is not allowed."),
+    ("manipulate public mood", "Secret public mood manipulation is not allowed."),
     ("secret public mood", "Secret public mood manipulation is not allowed."),
     ("unsafe medical decision", "Unsafe medical decisions are not allowed."),
     ("unsafe legal decision", "Unsafe legal decisions are not allowed."),
@@ -70,7 +78,10 @@ APPROVAL_PATTERNS: tuple[tuple[str, str, RiskLevel], ...] = (
     ("spend money", "Spending money requires human approval.", "high"),
     ("pay for", "Spending money requires human approval.", "high"),
     ("budget decision", "Budget decisions require human approval.", "medium"),
+    ("public policy recommendation", "Public policy recommendations that affect real action require human approval.", "medium"),
+    ("recommend policy", "Public policy recommendations that affect real action require human approval.", "medium"),
     ("business-critical", "Business-critical decisions require human approval.", "high"),
+    ("business critical", "Business-critical decisions require human approval.", "high"),
     ("buy stock", "Finance-related actions require human approval.", "high"),
     ("sell stock", "Finance-related actions require human approval.", "high"),
     ("transfer money", "Finance-related actions require human approval.", "high"),
@@ -89,6 +100,21 @@ HIGH_RISK_ANALYSIS_TERMS: tuple[str, ...] = (
     "government",
 )
 
+SAFE_RESEARCH_TERMS: tuple[str, ...] = (
+    "fact check",
+    "fact-check",
+    "is this true",
+    "verify this",
+    "misinformation detection",
+    "source comparison",
+    "timeline",
+    "what happened before",
+    "what happened after",
+    "public-risk analysis",
+    "public risk analysis",
+    "prevention planning",
+)
+
 
 def check_risk(message: str, intent: CommandIntent) -> FirewallDecision:
     normalized = _normalize(message)
@@ -102,7 +128,7 @@ def check_risk(message: str, intent: CommandIntent) -> FirewallDecision:
                 reason=reason,
                 recommended_next_step=(
                     "Use Builder Core for safe education, compliance planning, risk review, "
-                    "or defensive analysis instead."
+                    "misinformation detection, or defensive analysis instead."
                 ),
             )
 
@@ -115,17 +141,26 @@ def check_risk(message: str, intent: CommandIntent) -> FirewallDecision:
                 reason=reason,
                 recommended_next_step=(
                     "Review the safe plan, confirm scope and rollback steps, then give explicit "
-                    "human approval before any real-world action."
+                    "human approval before any real-world action. Approval records do not execute actions yet."
                 ),
             )
 
-    if intent == "research" and ("fake" in normalized or "misinformation" in normalized):
+    if any(term in normalized for term in SAFE_RESEARCH_TERMS):
+        return FirewallDecision(
+            risk_level="low",
+            approval_required=False,
+            blocked=False,
+            reason="Safe analysis request detected. No real-world action will be executed.",
+            recommended_next_step="Use the evidence structure for neutral analysis and verify with real sources when live search is connected.",
+        )
+
+    if intent == "research" and any(term in normalized for term in ["fake", "misinformation", "disinformation", "propaganda"]):
         return FirewallDecision(
             risk_level="medium",
             approval_required=False,
             blocked=False,
-            reason="Misinformation analysis is allowed as research planning, but live search is not connected.",
-            recommended_next_step="Prepare source checks and verify claims with real sources outside Builder Core.",
+            reason="Misinformation analysis is allowed as source-checking and risk analysis, but live search is not connected.",
+            recommended_next_step="Prepare source checks and verify claims with real sources outside Builder Core until live search is connected.",
         )
 
     if intent == "decision_analysis" and any(term in normalized for term in HIGH_RISK_ANALYSIS_TERMS):
@@ -134,7 +169,7 @@ def check_risk(message: str, intent: CommandIntent) -> FirewallDecision:
             approval_required=False,
             blocked=False,
             reason="High-impact decision topics are limited to education, planning, and risk analysis.",
-            recommended_next_step="Use the result as analysis only, then involve qualified humans before action.",
+            recommended_next_step="Use the result as analysis only, then involve responsible humans before action.",
         )
 
     return FirewallDecision(

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from app.models.command_models import AgentDefinition, CommandIntent
 
@@ -173,7 +173,7 @@ INTENT_TO_AGENT: dict[CommandIntent, str] = {
     "business": "business_agent",
     "teaching": "tutor_agent",
     "customer_service": "general_assistant_agent",
-    "decision_analysis": "business_agent",
+    "decision_analysis": "research_agent",
     "general": "general_assistant_agent",
 }
 
@@ -188,3 +188,4 @@ def select_agent(intent: CommandIntent) -> AgentDefinition:
 
 def list_agents() -> list[AgentDefinition]:
     return list(AGENTS.values())
+

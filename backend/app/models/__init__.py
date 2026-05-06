@@ -1,10 +1,13 @@
-from app.models.command_models import (
+﻿from app.models.command_models import (
     AgentDefinition,
+    ApprovalCreateRequest,
+    ApprovalDecisionRequest,
     AuditEntry,
     CommandIntent,
     CommandRequest,
     CommandResponse,
     FinalResult,
+    IntelligenceAnalyzeRequest,
     ProcessStep,
     RiskLevel,
     SystemStatus,
@@ -12,11 +15,14 @@ from app.models.command_models import (
 
 __all__ = [
     "AgentDefinition",
+    "ApprovalCreateRequest",
+    "ApprovalDecisionRequest",
     "AuditEntry",
     "CommandIntent",
     "CommandRequest",
     "CommandResponse",
     "FinalResult",
+    "IntelligenceAnalyzeRequest",
     "ProcessStep",
     "RiskLevel",
     "SystemStatus",
