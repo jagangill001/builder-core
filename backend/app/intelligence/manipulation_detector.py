@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any
 
@@ -26,12 +26,12 @@ def detect_manipulation(text: str, sources: list[dict[str, Any]] | None = None) 
             return {
                 "level": "medium",
                 "signals": signals,
-                "explanation": "The user-provided text contains possible manipulation signals, but live search is not connected yet, so Builder Core cannot verify real-world context.",
+                "explanation": "The user-provided text contains possible manipulation signals, but live internet/search is not connected yet, so Builder Core cannot verify real-world context.",
             }
         return {
             "level": "unknown",
             "signals": [],
-            "explanation": "Live search is not connected yet, so real manipulation analysis cannot be completed.",
+            "explanation": "Live internet/search is not connected yet, so real manipulation analysis cannot be completed.",
         }
 
     return {

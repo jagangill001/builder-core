@@ -1,23 +1,20 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-import os
 from typing import Any
 
-LIVE_SEARCH_NOT_CONNECTED = "Live search is not connected yet."
+from app.connectors.search_connector import LIVE_INTERNET_NOT_CONNECTED, get_search_status
+
+LIVE_SEARCH_NOT_CONNECTED = LIVE_INTERNET_NOT_CONNECTED
 
 
 class LiveSourceCollector:
-    def __init__(self) -> None:
-        self.provider = os.getenv("LIVE_SEARCH_PROVIDER", "").strip() or None
-        self.api_key_configured = bool(os.getenv("LIVE_SEARCH_API_KEY", "").strip())
-        self.endpoint = os.getenv("LIVE_SEARCH_ENDPOINT", "").strip() or None
-
     def collect(self, query: str) -> dict[str, Any]:
+        search_status = get_search_status(query)
         return {
-            "connected": False,
-            "provider": None,
-            "sources": [],
-            "message": LIVE_SEARCH_NOT_CONNECTED,
+            "connected": bool(search_status.get("connected")),
+            "provider": search_status.get("provider"),
+            "sources": list(search_status.get("results", [])),
+            "message": str(search_status.get("message") or LIVE_SEARCH_NOT_CONNECTED),
             "query": query.strip(),
         }
 

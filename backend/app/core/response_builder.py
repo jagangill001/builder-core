@@ -1,10 +1,12 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any
 
 from app.core.agent_registry import select_agent
 from app.core.security_firewall import FirewallDecision
 from app.models.command_models import CommandIntent, FinalResult
+
+LIVE_INTERNET_NOT_CONNECTED = "Live internet/search is not connected yet."
 
 
 def build_final_result(
@@ -29,7 +31,7 @@ def build_final_result(
     if intelligence_result is not None:
         return FinalResult(
             type=intent,
-            summary=str(intelligence_result.get("summary") or "Live search is not connected yet."),
+            summary=str(intelligence_result.get("summary") or LIVE_INTERNET_NOT_CONNECTED),
             selected_agent=agent.name,
             risk_level=decision.risk_level,
             approval_required=decision.approval_required,
@@ -81,8 +83,8 @@ def _safe_result_text(intent: CommandIntent) -> tuple[str, str]:
         )
     if intent == "research":
         return (
-            "This is a research task. Live search is not connected yet, so Builder Core can only prepare a research plan and source-checking approach.",
-            "Verify claims with real sources outside Builder Core until live search is connected.",
+            "This is a research task. Live internet/search is not connected yet, so Builder Core can only prepare a research plan and source-checking approach.",
+            "Verify claims with real sources outside Builder Core until live internet/search is connected.",
         )
     if intent == "security":
         return (

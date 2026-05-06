@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -6,11 +6,11 @@ from uuid import uuid4
 from app.core.agent_registry import select_agent
 from app.core.approval_store import create_approval_request
 from app.core.audit_log import append_audit_entry
-from app.core.response_builder import build_final_result
+from app.core.response_builder import LIVE_INTERNET_NOT_CONNECTED, build_final_result
 from app.core.security_firewall import FirewallDecision, check_risk
 from app.core.task_status_store import save_task_status
 from app.intelligence.research_response_builder import build_research_response
-from app.models.command_models import CommandIntent, CommandRequest, CommandResponse, ProcessStep
+from app.models.command_models import CommandIntent, CommandRequest, CommandResponse, FinalResult, ProcessStep
 
 
 INTENT_KEYWORDS: tuple[tuple[CommandIntent, tuple[str, ...]], ...] = (
@@ -203,6 +203,7 @@ def route_command(payload: CommandRequest) -> CommandResponse:
         intelligence_result=intelligence_result,
         approval_request=approval_request,
         needs_clarification=needs_clarification,
+        final_result=final_result,
     )
     save_task_status(task_status)
 
@@ -258,7 +259,7 @@ def _build_process_steps(
             ProcessStep(
                 name="Preparing intelligence structure",
                 status="completed",
-                summary="Live search connected" if live_search_connected else "Live search is not connected yet.",
+                summary="Live internet/search connected" if live_search_connected else LIVE_INTERNET_NOT_CONNECTED,
             )
         )
 
@@ -303,6 +304,7 @@ def _build_task_status(
     intelligence_result: dict | None,
     approval_request: dict | None,
     needs_clarification: bool,
+    final_result: FinalResult,
 ) -> dict:
     now = datetime.now(UTC).isoformat()
     current_status = "completed"
@@ -316,6 +318,7 @@ def _build_task_status(
         current_status = "research_not_connected"
 
     steps = [
+        {"code": "received", "status": "received", "summary": "Command received by backend.", "at": now},
         {"code": "understanding", "status": "completed", "summary": f"Detected {intent.replace('_', ' ')} task", "at": now},
         {"code": "security_check", "status": "blocked" if decision.blocked else "completed", "summary": decision.reason, "at": now},
         {"code": "agent_selected", "status": "completed", "summary": selected_agent, "at": now},
@@ -323,7 +326,7 @@ def _build_task_status(
     if approval_request:
         steps.append({"code": "waiting_for_approval", "status": "waiting_for_approval", "summary": approval_request["approval_id"], "at": now})
     if intelligence_result is not None and not intelligence_result.get("live_search_connected"):
-        steps.append({"code": "research_not_connected", "status": "research_not_connected", "summary": "Live search is not connected yet.", "at": now})
+        steps.append({"code": "research_not_connected", "status": "research_not_connected", "summary": LIVE_INTERNET_NOT_CONNECTED, "at": now})
     steps.append({"code": current_status, "status": current_status, "summary": "No fake progress percentages are used.", "at": now})
 
     return {
@@ -338,6 +341,7 @@ def _build_task_status(
         "created_at": now,
         "updated_at": now,
         "steps": steps,
+        "final_result": _model_to_dict(final_result),
     }
 
 
@@ -378,6 +382,8 @@ def _approval_action_for(message: str, intent: CommandIntent) -> str:
         return "secret_or_admin_key_change"
     if "spend" in normalized or "budget" in normalized or "finance" in normalized:
         return "finance_or_budget_action"
+    if "sandbox" in normalized:
+        return "sandbox_execution_review"
     return f"{intent}_approval"
 
 

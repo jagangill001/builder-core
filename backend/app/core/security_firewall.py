@@ -1,8 +1,17 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 
 from app.models.command_models import CommandIntent, RiskLevel
+
+
+GOVERNANCE_RULES = [
+    "No secret manipulation or exposure, especially in frontend code.",
+    "No fake evidence, fake citations, misinformation, disinformation, or hidden influence operations.",
+    "No unsafe autonomous real-world action; risky actions require explicit human approval records first.",
+    "Separate facts, claims, analysis, and predictions so uncertainty stays visible.",
+    "Keep every command auditable through task status and audit log records.",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +75,7 @@ APPROVAL_PATTERNS: tuple[tuple[str, str, RiskLevel], ...] = (
     ("deploy", "Real deployments require human approval.", "high"),
     ("production", "Production changes require human approval.", "high"),
     ("cloud security", "Cloud security changes require human approval.", "high"),
+    ("cloud settings", "Cloud setting changes require human approval.", "high"),
     ("firewall change", "Firewall changes require human approval.", "high"),
     ("change firewall", "Firewall changes require human approval.", "high"),
     ("secret", "Secret/admin key changes require human approval.", "high"),
@@ -87,6 +97,8 @@ APPROVAL_PATTERNS: tuple[tuple[str, str, RiskLevel], ...] = (
     ("transfer money", "Finance-related actions require human approval.", "high"),
     ("file lawsuit", "Legal actions require human approval.", "high"),
     ("submit government", "Government actions require human approval.", "high"),
+    ("execute sandbox", "Sandbox execution beyond record creation requires human approval.", "medium"),
+    ("run sandbox", "Sandbox execution beyond record creation requires human approval.", "medium"),
 )
 
 HIGH_RISK_ANALYSIS_TERMS: tuple[str, ...] = (
@@ -151,7 +163,7 @@ def check_risk(message: str, intent: CommandIntent) -> FirewallDecision:
             approval_required=False,
             blocked=False,
             reason="Safe analysis request detected. No real-world action will be executed.",
-            recommended_next_step="Use the evidence structure for neutral analysis and verify with real sources when live search is connected.",
+            recommended_next_step="Use the evidence structure for neutral analysis and verify with real sources when live internet/search is connected.",
         )
 
     if intent == "research" and any(term in normalized for term in ["fake", "misinformation", "disinformation", "propaganda"]):
@@ -159,8 +171,8 @@ def check_risk(message: str, intent: CommandIntent) -> FirewallDecision:
             risk_level="medium",
             approval_required=False,
             blocked=False,
-            reason="Misinformation analysis is allowed as source-checking and risk analysis, but live search is not connected.",
-            recommended_next_step="Prepare source checks and verify claims with real sources outside Builder Core until live search is connected.",
+            reason="Misinformation analysis is allowed as source-checking and risk analysis, but live internet/search is not connected.",
+            recommended_next_step="Prepare source checks and verify claims with real sources outside Builder Core until live internet/search is connected.",
         )
 
     if intent == "decision_analysis" and any(term in normalized for term in HIGH_RISK_ANALYSIS_TERMS):

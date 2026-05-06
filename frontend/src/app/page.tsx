@@ -1,12 +1,15 @@
-﻿"use client";
+"use client";
 
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 
 const API_BASE = (
   process.env.NEXT_PUBLIC_API_BASE_URL ??
   process.env.NEXT_PUBLIC_API_URL ??
-  "https://builder-core-599596796788.us-central1.run.app"
+  "http://127.0.0.1:8000"
 ).replace(/\/$/, "");
+
+const BACKEND_ERROR = "Could not connect to Builder Core backend. Check NEXT_PUBLIC_API_BASE_URL and backend deployment.";
+const LIVE_SEARCH_MISSING = "Live internet/search is not connected yet.";
 
 type ProcessStatus = "pending" | "running" | "completed" | "blocked" | "failed";
 
@@ -72,14 +75,33 @@ type CommandResponse = {
 };
 
 type SystemStatus = {
-  status: string;
-  service: string;
-  phase: string;
-  live_search_connected: boolean;
-  codex_direct_connection: boolean;
-  security_firewall: boolean;
-  audit_log: boolean;
+  status?: string;
+  service?: string;
+  phase?: string;
+  live_search_connected?: boolean;
+  codex_direct_connection?: boolean;
+  security_firewall?: boolean;
+  audit_log?: boolean;
   approval_workflow?: boolean;
+};
+
+type ConnectivityStatus = {
+  backend?: string;
+  frontend_expected_api_url?: string;
+  cloud_storage_configured?: boolean;
+  live_search_connected?: boolean;
+  codex_direct_connection?: boolean;
+  deployment_executor_connected?: boolean;
+  storage_mode?: string;
+  warnings?: string[];
+};
+
+type StorageStatus = {
+  storage_mode?: string;
+  cloud_storage_configured?: boolean;
+  bucket_name?: string | null;
+  local_fallback?: boolean;
+  message?: string;
 };
 
 const EMPTY_STEPS: ProcessStep[] = [
@@ -91,19 +113,15 @@ const EMPTY_STEPS: ProcessStep[] = [
 ];
 
 function statusClasses(status: ProcessStatus | string | undefined) {
-  if (status === "completed") {
-    return "border-emerald-200 bg-emerald-50 text-emerald-800";
-  }
-  if (status === "blocked" || status === "failed") {
-    return "border-red-200 bg-red-50 text-red-800";
-  }
+  if (status === "completed") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (status === "blocked" || status === "failed") return "border-red-200 bg-red-50 text-red-800";
   if (status === "running" || status === "waiting_for_approval" || status === "research_not_connected") {
     return "border-blue-200 bg-blue-50 text-blue-800";
   }
   return "border-zinc-200 bg-zinc-100 text-zinc-600";
 }
 
-function booleanText(value: boolean) {
+function booleanText(value: boolean | undefined) {
   return value ? "Yes" : "No";
 }
 
@@ -180,31 +198,50 @@ export default function Home() {
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
   const [error, setError] = useState("");
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [connectivity, setConnectivity] = useState<ConnectivityStatus | null>(null);
+  const [storageStatus, setStorageStatus] = useState<StorageStatus | null>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/system/status`)
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data: SystemStatus | null) => setSystemStatus(data))
-      .catch(() => setSystemStatus(null));
+    let cancelled = false;
+    async function loadStatus() {
+      try {
+        const [connectivityResponse, systemResponse, storageResponse] = await Promise.all([
+          fetch(`${API_BASE}/connectivity/status`),
+          fetch(`${API_BASE}/system/status`),
+          fetch(`${API_BASE}/storage/status`),
+        ]);
+        if (cancelled) return;
+        setConnectivity(connectivityResponse.ok ? await connectivityResponse.json() : null);
+        setSystemStatus(systemResponse.ok ? await systemResponse.json() : null);
+        setStorageStatus(storageResponse.ok ? await storageResponse.json() : null);
+      } catch {
+        if (!cancelled) {
+          setConnectivity(null);
+          setSystemStatus(null);
+          setStorageStatus(null);
+          setError(BACKEND_ERROR);
+        }
+      }
+    }
+    loadStatus();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const statusLine = useMemo(() => {
-    if (!systemStatus) {
-      return "Backend status unavailable";
-    }
-
-    const search = systemStatus.live_search_connected ? "live search connected" : "live search not connected";
-    const codex = systemStatus.codex_direct_connection ? "Codex connected" : "Codex not directly connected";
-    const approvals = systemStatus.approval_workflow ? "approval records enabled" : "approval records unavailable";
-    return `${systemStatus.status} / ${search} / ${codex} / ${approvals}`;
-  }, [systemStatus]);
+    if (!connectivity && !systemStatus) return "Backend status unavailable";
+    const backend = connectivity?.backend ?? systemStatus?.status ?? "unknown";
+    const storage = storageStatus?.storage_mode ?? connectivity?.storage_mode ?? "unknown storage";
+    const search = connectivity?.live_search_connected ? "live search connected" : "live search not connected";
+    const codex = connectivity?.codex_direct_connection ? "Codex connected" : "Codex not directly connected";
+    return `${backend} / ${storage} storage / ${search} / ${codex}`;
+  }, [connectivity, storageStatus, systemStatus]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const cleanMessage = message.trim();
-    if (!cleanMessage || submitting) {
-      return;
-    }
+    if (!cleanMessage || submitting) return;
 
     setSubmitting(true);
     setError("");
@@ -222,9 +259,7 @@ export default function Home() {
         body: JSON.stringify({ message: cleanMessage }),
       });
 
-      if (!response.ok) {
-        throw new Error("Command request failed");
-      }
+      if (!response.ok) throw new Error("Command request failed");
 
       const data: CommandResponse = await response.json();
       setResult(data);
@@ -233,12 +268,9 @@ export default function Home() {
       setMessage("");
 
       const taskResponse = await fetch(`${API_BASE}/tasks/${data.command_id}`);
-      if (taskResponse.ok) {
-        const statusData: TaskStatus = await taskResponse.json();
-        setTaskStatus(statusData);
-      }
+      if (taskResponse.ok) setTaskStatus(await taskResponse.json());
     } catch {
-      setError("Builder Core could not reach the backend command endpoint.");
+      setError(BACKEND_ERROR);
       setSteps([
         { name: "Understanding request", status: "failed", summary: "Backend command endpoint unavailable" },
         { name: "Checking security", status: "pending", summary: "Not run" },
@@ -252,23 +284,39 @@ export default function Home() {
   }
 
   const final = result?.final_result;
-  const liveSearchMissing = final?.missing_data?.some((item) => item.toLowerCase().includes("live search"));
+  const liveSearchMissing = Boolean(
+    final?.summary?.includes(LIVE_SEARCH_MISSING) ||
+      final?.missing_data?.some((item) => item.toLowerCase().includes("live search")) ||
+      connectivity?.warnings?.some((item) => item.includes(LIVE_SEARCH_MISSING)),
+  );
 
   return (
     <main className="min-h-screen bg-zinc-50 px-4 py-6 text-zinc-950 sm:px-6">
       <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-5xl flex-col gap-5">
         <header className="flex flex-col gap-2 border-b border-zinc-200 pb-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-wide text-blue-700">Builder Core</p>
-            <h1 className="text-2xl font-semibold tracking-normal">Live Intelligence + Approval Foundation</h1>
+            <p className="text-sm font-semibold uppercase text-blue-700">Builder Core</p>
+            <h1 className="text-2xl font-semibold tracking-normal">Production Connection Foundation</h1>
           </div>
           <p className="text-sm text-zinc-600">{statusLine}</p>
         </header>
 
+        <section className="grid gap-2 rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="Backend" value={connectivity?.backend ?? "unavailable"} />
+            <Field label="API URL" value={API_BASE} />
+            <Field label="Storage" value={`${storageStatus?.storage_mode ?? connectivity?.storage_mode ?? "unknown"}${storageStatus?.local_fallback ? " fallback" : ""}`} />
+          </div>
+          {storageStatus?.message ? <p className="text-sm text-zinc-600">{storageStatus.message}</p> : null}
+          {connectivity?.warnings?.map((warning) => (
+            <p key={warning} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">
+              {warning}
+            </p>
+          ))}
+        </section>
+
         <form onSubmit={handleSubmit} className="grid gap-3 rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
-          <label htmlFor="builder-command" className="text-sm font-medium text-zinc-700">
-            Command
-          </label>
+          <label htmlFor="builder-command" className="text-sm font-medium text-zinc-700">Command</label>
           <textarea
             id="builder-command"
             value={message}
@@ -323,7 +371,7 @@ export default function Home() {
             <div className="grid gap-4">
               {liveSearchMissing ? (
                 <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">
-                  Live search is not connected yet.
+                  {LIVE_SEARCH_MISSING}
                 </p>
               ) : null}
 

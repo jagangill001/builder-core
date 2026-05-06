@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,11 +18,15 @@ try:
     from app.core.audit_log import read_recent_audit_entries as read_core_audit_entries
     from app.core.command_router import route_command as route_core_command
     from app.core.task_status_store import get_task_status as get_core_task_status
+    from app.connectors.search_connector import get_search_status as get_live_search_status
     from app.intelligence.research_response_builder import build_research_response as build_core_research_response
     from app.models.command_models import ApprovalCreateRequest as CoreApprovalCreateRequest
     from app.models.command_models import ApprovalDecisionRequest as CoreApprovalDecisionRequest
     from app.models.command_models import CommandRequest as CoreCommandRequest
     from app.models.command_models import IntelligenceAnalyzeRequest as CoreIntelligenceAnalyzeRequest
+    from app.models.command_models import SandboxRunRequest as CoreSandboxRunRequest
+    from app.sandbox.sandbox_manager import create_sandbox_record
+    from app.storage.storage_backend import get_storage_status as get_phase3_storage_status
 except ImportError:
     from core.approval_store import create_approval_request as create_core_approval_request
     from core.approval_store import decide_approval as decide_core_approval
@@ -30,11 +34,15 @@ except ImportError:
     from core.audit_log import read_recent_audit_entries as read_core_audit_entries
     from core.command_router import route_command as route_core_command
     from core.task_status_store import get_task_status as get_core_task_status
+    from connectors.search_connector import get_search_status as get_live_search_status
     from intelligence.research_response_builder import build_research_response as build_core_research_response
     from models.command_models import ApprovalCreateRequest as CoreApprovalCreateRequest
     from models.command_models import ApprovalDecisionRequest as CoreApprovalDecisionRequest
     from models.command_models import CommandRequest as CoreCommandRequest
     from models.command_models import IntelligenceAnalyzeRequest as CoreIntelligenceAnalyzeRequest
+    from models.command_models import SandboxRunRequest as CoreSandboxRunRequest
+    from sandbox.sandbox_manager import create_sandbox_record
+    from storage.storage_backend import get_storage_status as get_phase3_storage_status
 from sqlalchemy import Column, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -133,15 +141,39 @@ except ImportError:
     from tool_registry import ToolRegistryService
     from web_ingest import WebIngestService
 
+DEFAULT_LOCAL_FRONTEND_ORIGINS = (
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
+)
+DEFAULT_DEPLOYED_FRONTEND_ORIGIN = "https://builder-core-frontend-599596796788.us-central1.run.app"
+
+
+def get_backend_cors_origins() -> list[str]:
+    configured = os.getenv("BACKEND_CORS_ORIGINS", "").strip()
+    origins = [item.strip().rstrip("/") for item in configured.split(",") if item.strip()]
+    origins.extend(DEFAULT_LOCAL_FRONTEND_ORIGINS)
+    for env_name in ("FRONTEND_URL", "FRONTEND_PUBLIC_URL"):
+        value = os.getenv(env_name, "").strip().rstrip("/")
+        if value:
+            origins.append(value)
+    origins.append(DEFAULT_DEPLOYED_FRONTEND_ORIGIN)
+    return list(dict.fromkeys(origins))
+
+
+def get_frontend_expected_api_url() -> str:
+    return (
+        os.getenv("NEXT_PUBLIC_API_BASE_URL")
+        or os.getenv("NEXT_PUBLIC_API_URL")
+        or os.getenv("BACKEND_PUBLIC_URL")
+        or "https://builder-core-599596796788.us-central1.run.app"
+    ).strip().rstrip("/")
+
+
 app = FastAPI(title="Builder Core")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:3000",
-        "http://localhost:3000",
-        "https://builder-core-frontend-599596796788.us-central1.run.app",
-    ],
+    allow_origins=get_backend_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -249,6 +281,7 @@ SENSITIVE_RATE_LIMIT_PATHS = {
     "/assistant/chat",
     "/agents/tasks",
     "/approvals/request",
+    "/sandbox/run",
     "/knowledge/add",
     "/knowledge/seed",
     "/knowledge/scan-project",
@@ -2009,9 +2042,35 @@ def get_tools():
     }
 
 
+@app.get("/connectivity/status")
+def connectivity_status():
+    phase3_storage = get_phase3_storage_status()
+    live_search = get_live_search_status()
+    warnings = []
+    if phase3_storage.get("local_fallback"):
+        warnings.append("Cloud storage is not configured yet.")
+    if not live_search.get("connected"):
+        warnings.append("Live internet/search is not connected yet.")
+    return {
+        "backend": "ok",
+        "frontend_expected_api_url": get_frontend_expected_api_url(),
+        "cloud_storage_configured": bool(phase3_storage.get("cloud_storage_configured")),
+        "live_search_connected": bool(live_search.get("connected")),
+        "codex_direct_connection": False,
+        "deployment_executor_connected": False,
+        "storage_mode": phase3_storage.get("storage_mode"),
+        "warnings": list(dict.fromkeys(warnings + phase3_storage.get("warnings", []))),
+    }
+
+
 @app.get("/storage/status")
 def storage_status():
-    return project_storage_service.health_check()
+    phase3_storage = get_phase3_storage_status()
+    return {
+        **phase3_storage,
+        "legacy_storage_backend": project_storage_service.storage_backend,
+        "legacy_storage_message": project_storage_service.storage_message,
+    }
 
 
 @app.post("/storage/test", dependencies=[Depends(require_admin)])
@@ -2506,6 +2565,15 @@ def decide_phase_2_approval(approval_id: str, payload: CoreApprovalDecisionReque
 @app.post("/intelligence/analyze")
 def analyze_intelligence(payload: CoreIntelligenceAnalyzeRequest):
     return build_core_research_response(payload.query)
+
+
+@app.post("/sandbox/run")
+def sandbox_run(payload: CoreSandboxRunRequest):
+    return create_sandbox_record(
+        command_id=payload.command_id,
+        sandbox_type=payload.sandbox_type,
+        description=payload.description,
+    )
 
 
 @app.post("/research/tasks")
@@ -3036,6 +3104,8 @@ def github_status():
 @app.get("/system/status")
 def system_status():
     storage_status_payload = project_storage_service.health_check()
+    phase3_storage_status = get_phase3_storage_status()
+    live_search_connector_status = get_live_search_status()
     model_status = model_router_service.get_active_model_status()
     bridge_status = bridge_service.build_bridge_status_payload()
     search_status_payload = private_search_service.get_search_status()
@@ -3056,16 +3126,30 @@ def system_status():
         "status": "ok",
         "service": "Builder Core",
         "service_id": "builder-core",
-        "phase": "phase_2_live_intelligence_approval_foundation",
-        "live_search_connected": False,
+        "phase": "phase_3_production_connection_cloud_storage_sandbox_foundation",
+        "live_search_connected": bool(live_search_connector_status.get("connected")),
+        "search_provider": live_search_connector_status.get("provider"),
         "codex_direct_connection": False,
         "security_firewall": True,
         "audit_log": True,
         "approval_workflow": True,
+        "cloud_storage_configured": bool(phase3_storage_status.get("cloud_storage_configured")),
+        "deployment_executor_connected": False,
+        "phase_3_production_connection_cloud_storage_sandbox_foundation": {
+            "enabled": True,
+            "frontend_backend_connection": True,
+            "connectivity_endpoint": "/connectivity/status",
+            "storage_endpoint": "/storage/status",
+            "sandbox_endpoint": "/sandbox/run",
+            "storage_mode": phase3_storage_status.get("storage_mode"),
+            "cloud_storage_configured": bool(phase3_storage_status.get("cloud_storage_configured")),
+            "sandbox_execution_connected": False,
+            "internet_search_connected": bool(live_search_connector_status.get("connected")),
+        },
         "phase_2_live_intelligence_approval_foundation": {
             "enabled": True,
             "approval_records_only": True,
-            "live_search_connected": False,
+            "live_search_connected": bool(live_search_connector_status.get("connected")),
             "long_running_task_status": True,
             "intelligence_endpoint": "/intelligence/analyze",
         },
@@ -3132,7 +3216,7 @@ def system_status():
         "memory_storage_backend": project_storage_service.storage_backend,
         "memory_storage_message": project_storage_service.storage_message,
         "storage_mode_requested": project_storage_service.storage_mode_requested,
-        "storage_mode": storage_status_payload.get("storage_mode"),
+        "storage_mode": phase3_storage_status.get("storage_mode"),
         "firestore_enabled": storage_status_payload.get("firestore_enabled"),
         "using_firestore": storage_status_payload.get("using_firestore"),
         "using_fallback": storage_status_payload.get("using_fallback"),
@@ -3177,6 +3261,7 @@ def system_status():
         },
         "internal_tool_registry_status": tool_status,
         "storage_status": storage_status_payload,
+        "phase_3_storage_status": phase3_storage_status,
         "firestore_status": {
             "enabled": storage_status_payload.get("firestore_enabled"),
             "using_firestore": storage_status_payload.get("using_firestore"),
@@ -3184,6 +3269,7 @@ def system_status():
             "warnings": storage_status_payload.get("warnings", []),
         },
         "search_status": search_status_payload,
+        "live_search_connector_status": live_search_connector_status,
         "knowledge_base_count": knowledge_status_payload.get("total_entries", search_status_payload.get("knowledge_entries", 0)),
         "security_status": security_status_payload,
         "rate_limit_status": rate_limiter_service.get_rate_limit_status(),

@@ -1,4 +1,4 @@
-﻿venv/
+venv/
 backend/venv/
 frontend/node_modules/
 
@@ -9,3 +9,5 @@ node_modules/
 __pycache__/
 *.log
 backend/runtime_data/
+backend/data/*
+!backend/data/.gitkeep

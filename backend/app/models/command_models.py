@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Literal
 
@@ -19,6 +19,7 @@ CommandIntent = Literal[
 RiskLevel = Literal["low", "medium", "high", "blocked"]
 ProcessStatus = Literal["pending", "running", "completed", "blocked", "failed"]
 ApprovalDecision = Literal["approved", "rejected"]
+SandboxType = Literal["code_test", "simulation", "security_check", "connector_test"]
 
 
 class CommandRequest(BaseModel):
@@ -104,3 +105,9 @@ class ApprovalDecisionRequest(BaseModel):
 
 class IntelligenceAnalyzeRequest(BaseModel):
     query: str = Field(min_length=1, max_length=8000)
+
+
+class SandboxRunRequest(BaseModel):
+    command_id: str | None = None
+    sandbox_type: SandboxType = "simulation"
+    description: str = Field(min_length=1, max_length=4000)

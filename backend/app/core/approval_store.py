@@ -1,13 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "runtime_data"
-APPROVALS_PATH = DATA_DIR / "approval_requests.json"
+from app.storage.storage_backend import read_json, read_recent_jsonl, save_json, save_jsonl
 
 
 def create_approval_request(*, command_id: str, action: str, reason: str, risk_level: str) -> dict[str, Any]:
@@ -23,14 +20,13 @@ def create_approval_request(*, command_id: str, action: str, reason: str, risk_l
         "updated_at": now,
         "decision_note": None,
     }
-    records = _read_records()
-    records.append(record)
-    _write_records(records)
+    _save_record(record)
     return record
 
 
 def list_pending_approvals() -> list[dict[str, Any]]:
-    return [record for record in _read_records() if record.get("status") == "pending"]
+    records = _dedupe_latest(read_recent_jsonl("approvals", 500))
+    return [record for record in records if record.get("status") == "pending"]
 
 
 def decide_approval(approval_id: str, decision: str, note: str | None = None) -> dict[str, Any] | None:
@@ -38,36 +34,35 @@ def decide_approval(approval_id: str, decision: str, note: str | None = None) ->
     if normalized_decision not in {"approved", "rejected"}:
         raise ValueError("Decision must be approved or rejected.")
 
-    records = _read_records()
-    updated_record: dict[str, Any] | None = None
-    for record in records:
-        if record.get("approval_id") == approval_id:
-            record["status"] = normalized_decision
-            record["decision_note"] = note.strip() if note else None
-            record["updated_at"] = _timestamp()
-            updated_record = record
-            break
-
-    if updated_record is None:
+    record = read_json("approvals", approval_id)
+    if record is None:
+        for candidate in _dedupe_latest(read_recent_jsonl("approvals", 500)):
+            if candidate.get("approval_id") == approval_id:
+                record = candidate
+                break
+    if record is None:
         return None
 
-    _write_records(records)
-    return updated_record
+    record["status"] = normalized_decision
+    record["decision_note"] = note.strip() if note else None
+    record["updated_at"] = _timestamp()
+    _save_record(record)
+    return record
 
 
-def _read_records() -> list[dict[str, Any]]:
-    if not APPROVALS_PATH.exists():
-        return []
-    try:
-        data = json.loads(APPROVALS_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
-    return data if isinstance(data, list) else []
+def _save_record(record: dict[str, Any]) -> None:
+    approval_id = str(record.get("approval_id") or "approval_missing")
+    save_json("approvals", approval_id, record)
+    save_jsonl("approvals", record)
 
 
-def _write_records(records: list[dict[str, Any]]) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    APPROVALS_PATH.write_text(json.dumps(records, indent=2, ensure_ascii=False), encoding="utf-8")
+def _dedupe_latest(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for record in records:
+        approval_id = str(record.get("approval_id") or "")
+        if approval_id and approval_id not in latest:
+            latest[approval_id] = record
+    return list(latest.values())
 
 
 def _timestamp() -> str:

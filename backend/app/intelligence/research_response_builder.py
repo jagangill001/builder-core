@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any
 
@@ -6,6 +6,7 @@ from app.intelligence.evidence_verifier import verify_evidence
 from app.intelligence.live_source_collector import LIVE_SEARCH_NOT_CONNECTED, collect_live_sources
 from app.intelligence.manipulation_detector import detect_manipulation
 from app.intelligence.timeline_engine import build_timeline
+from app.storage.storage_backend import save_jsonl
 
 
 def build_research_response(query: str) -> dict[str, Any]:
@@ -27,10 +28,12 @@ def build_research_response(query: str) -> dict[str, Any]:
             f"{LIVE_SEARCH_NOT_CONNECTED} Builder Core can prepare the analysis structure "
             "but cannot verify real-world claims without sources."
         )
+    elif not sources:
+        summary = "Live internet/search is connected, but no sources were returned for this query. Builder Core did not invent evidence."
     else:
-        summary = "Builder Core prepared an evidence-based research structure from connected sources."
+        summary = "Builder Core prepared an evidence-based research structure from connected internet/search sources."
 
-    return {
+    result = {
         "query": clean_query,
         "live_search_connected": bool(collection.get("connected")),
         "sources": sources,
@@ -49,6 +52,8 @@ def build_research_response(query: str) -> dict[str, Any]:
         "summary": summary,
         "recommended_next_step": "Connect a real live-search provider, then verify claims against primary and reputable secondary sources.",
     }
+    save_jsonl("intelligence_reports", result)
+    return result
 
 
 def _unique_strings(items: list[Any]) -> list[str]:
