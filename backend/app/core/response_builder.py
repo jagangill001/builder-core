@@ -1,0 +1,96 @@
+from __future__ import annotations
+
+from app.core.agent_registry import select_agent
+from app.core.security_firewall import FirewallDecision
+from app.models.command_models import CommandIntent, FinalResult
+
+
+def build_final_result(intent: CommandIntent, decision: FirewallDecision) -> FinalResult:
+    agent = select_agent(intent)
+
+    if decision.blocked:
+        return FinalResult(
+            type=intent,
+            summary=f"Builder Core cannot help with that action. {decision.reason}",
+            selected_agent=agent.name,
+            risk_level="blocked",
+            approval_required=False,
+            blocked=True,
+            recommended_next_step=decision.recommended_next_step,
+        )
+
+    if decision.approval_required:
+        return FinalResult(
+            type=intent,
+            summary=(
+                f"{_intent_label(intent)} request received. {decision.reason} "
+                "Builder Core did not execute the action and prepared only a safe planning response."
+            ),
+            selected_agent=agent.name,
+            risk_level=decision.risk_level,
+            approval_required=True,
+            blocked=False,
+            recommended_next_step=decision.recommended_next_step,
+        )
+
+    summary, next_step = _safe_result_text(intent)
+    return FinalResult(
+        type=intent,
+        summary=summary,
+        selected_agent=agent.name,
+        risk_level=decision.risk_level,
+        approval_required=False,
+        blocked=False,
+        recommended_next_step=next_step,
+    )
+
+
+def _safe_result_text(intent: CommandIntent) -> tuple[str, str]:
+    if intent == "coding":
+        return (
+            "This is a coding task. Builder Core prepared safe instructions for the coding agent.",
+            "Use Codex to inspect the relevant files and create a real fix.",
+        )
+    if intent == "research":
+        return (
+            "This is a research task. Live internet search is not connected yet, so Builder Core can only prepare a research plan and source-checking approach.",
+            "Verify claims with real sources outside Builder Core until live search is connected.",
+        )
+    if intent == "security":
+        return (
+            "This is a security task. Builder Core can explain risks and prepare safe defensive review steps.",
+            "Review the security concern without exposing secrets or bypassing controls.",
+        )
+    if intent == "cloud":
+        return (
+            "This is a cloud task. Builder Core can prepare deployment guidance, but real cloud actions require approval.",
+            "Review environment, secrets, rollback, and cost impact before approving any cloud action.",
+        )
+    if intent == "business":
+        return (
+            "This is a business planning task. Builder Core prepared a safe analysis response.",
+            "Use the result for planning and involve a human before business-critical decisions.",
+        )
+    if intent == "teaching":
+        return (
+            "This is a teaching task. Builder Core prepared an educational explanation path.",
+            "Continue with a step-by-step explanation or ask for examples.",
+        )
+    if intent == "customer_service":
+        return (
+            "This is a customer service task. Builder Core can prepare draft guidance, but it will not send messages without approval.",
+            "Review the draft or plan before any customer-facing action.",
+        )
+    if intent == "decision_analysis":
+        return (
+            "This is a decision analysis task. Builder Core prepared a safe planning and risk-analysis response.",
+            "Use the analysis as support only and involve responsible humans before action.",
+        )
+    return (
+        "This is a general safe request. Builder Core prepared an assistant-style response.",
+        "Continue with safe planning, explanation, or analysis.",
+    )
+
+
+def _intent_label(intent: CommandIntent) -> str:
+    return intent.replace("_", " ")

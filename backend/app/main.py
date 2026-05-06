@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +11,14 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+try:
+    from app.core.audit_log import read_recent_audit_entries as read_core_audit_entries
+    from app.core.command_router import route_command as route_core_command
+    from app.models.command_models import CommandRequest as CoreCommandRequest
+except ImportError:
+    from core.audit_log import read_recent_audit_entries as read_core_audit_entries
+    from core.command_router import route_command as route_core_command
+    from models.command_models import CommandRequest as CoreCommandRequest
 from sqlalchemy import Column, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -2440,15 +2448,17 @@ def crawler_plan(payload: CrawlerPlanRequest):
 
 
 @app.post("/command")
-def command(payload: CommandRequest):
-    message = payload.message.strip()
-    if not message:
-        raise HTTPException(status_code=400, detail="Command message is empty.")
-    return orchestrator_service.run_unified_workflow(
-        message=message,
-        mode=payload.mode or "auto",
-        save_to_memory=bool(payload.save_to_memory),
-    )
+def command(payload: CoreCommandRequest):
+    return route_core_command(payload)
+
+
+@app.get("/audit/recent")
+def audit_recent(limit: int = 20):
+    bounded_limit = max(1, min(int(limit), 100))
+    return {
+        "limit": bounded_limit,
+        "items": read_core_audit_entries(limit=bounded_limit),
+    }
 
 
 @app.post("/research/tasks")
@@ -2994,6 +3004,18 @@ def system_status():
     return {
         "status": "ok",
         "service": "Builder Core",
+        "service_id": "builder-core",
+        "phase": "phase_1_core_command_system",
+        "live_search_connected": False,
+        "codex_direct_connection": False,
+        "security_firewall": True,
+        "audit_log": True,
+        "phase_1_core_command_system": {
+            "enabled": True,
+            "command_endpoint": "/command",
+            "audit_endpoint": "/audit/recent",
+            "nist_ai_rmf_style_controls": ["govern", "map", "measure", "manage"],
+        },
         "os_status": os_status_payload,
         "platform_status": platform_status_payload,
         "agent_status": agent_status_payload,
@@ -3129,3 +3151,5 @@ import uvicorn
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
+
