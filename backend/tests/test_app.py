@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -9,7 +11,15 @@ from app.main import app
 
 class PhaseThreeFoundationTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.previous_live_search_provider = os.environ.get("LIVE_SEARCH_PROVIDER")
+        os.environ["LIVE_SEARCH_PROVIDER"] = "disabled"
         self.client = TestClient(app)
+
+    def tearDown(self) -> None:
+        if self.previous_live_search_provider is None:
+            os.environ.pop("LIVE_SEARCH_PROVIDER", None)
+        else:
+            os.environ["LIVE_SEARCH_PROVIDER"] = self.previous_live_search_provider
 
     def test_root_status(self) -> None:
         response = self.client.get("/")
@@ -42,6 +52,31 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertFalse(body["live_search_connected"])
         self.assertFalse(body["codex_direct_connection"])
         self.assertFalse(body["deployment_executor_connected"])
+
+
+    def test_duckduckgo_connector_returns_real_source_shape_when_provider_returns_results(self) -> None:
+        from app.connectors.search_connector import SearchConnector
+
+        with patch.dict(os.environ, {"LIVE_SEARCH_PROVIDER": "duckduckgo"}):
+            with patch.object(
+                SearchConnector,
+                "_duckduckgo",
+                return_value=[
+                    {
+                        "title": "Builder Core",
+                        "url": "https://example.com/builder-core",
+                        "summary": "Real provider result shape for test.",
+                        "source_type": "duckduckgo_web_result",
+                        "provider": "duckduckgo",
+                    }
+                ],
+            ):
+                result = SearchConnector().search("Builder Core")
+
+        self.assertTrue(result["connected"])
+        self.assertEqual(result["provider"], "duckduckgo")
+        self.assertEqual(result["results"][0]["source_type"], "duckduckgo_web_result")
+        self.assertEqual(result["results"][0]["url"], "https://example.com/builder-core")
 
     def test_storage_status_returns_local_mode_without_cloud_env(self) -> None:
         response = self.client.get("/storage/status")

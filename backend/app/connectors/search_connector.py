@@ -9,11 +9,13 @@ from urllib import request as urlrequest
 
 LIVE_INTERNET_NOT_CONNECTED = "Live internet/search is not connected yet."
 SEARCH_PROVIDER_FAILED = "Live internet/search provider is configured but could not be reached."
+DISABLED_PROVIDERS = {"", "none", "off", "false", "disabled", "not_connected"}
 
 
 class SearchConnector:
     def __init__(self) -> None:
-        self.provider = (os.getenv("LIVE_SEARCH_PROVIDER", "").strip().lower() or None)
+        provider = os.getenv("LIVE_SEARCH_PROVIDER", "duckduckgo").strip().lower()
+        self.provider = None if provider in DISABLED_PROVIDERS else provider
         self.api_key = os.getenv("LIVE_SEARCH_API_KEY", "").strip()
         self.endpoint = os.getenv("LIVE_SEARCH_ENDPOINT", "").strip() or None
 
@@ -83,6 +85,35 @@ class SearchConnector:
         return False
 
     def _duckduckgo(self, query: str) -> list[dict[str, Any]]:
+        package_results = self._duckduckgo_package(query)
+        if package_results:
+            return package_results
+        return self._duckduckgo_instant_answer(query)
+
+    def _duckduckgo_package(self, query: str) -> list[dict[str, Any]]:
+        try:
+            from ddgs import DDGS
+        except Exception:
+            return []
+
+        with DDGS(timeout=8) as ddgs:
+            raw_results = list(ddgs.text(query, max_results=8))
+        results: list[dict[str, Any]] = []
+        for item in raw_results:
+            if not isinstance(item, dict):
+                continue
+            results.append(
+                {
+                    "title": str(item.get("title") or ""),
+                    "url": str(item.get("href") or item.get("url") or ""),
+                    "summary": str(item.get("body") or item.get("summary") or item.get("snippet") or ""),
+                    "source_type": "duckduckgo_web_result",
+                    "provider": "duckduckgo",
+                }
+            )
+        return _dedupe_sources(results)[:8]
+
+    def _duckduckgo_instant_answer(self, query: str) -> list[dict[str, Any]]:
         endpoint = self.endpoint or "https://api.duckduckgo.com/"
         payload = self._get_json(endpoint, {"q": query, "format": "json", "no_html": "1", "skip_disambig": "1"}, {})
         results: list[dict[str, Any]] = []
