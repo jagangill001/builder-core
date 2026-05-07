@@ -3,13 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from app.brain.answer_brain import build_brain_answer
 from app.core.agent_registry import select_agent
 from app.core.approval_store import create_approval_request
 from app.core.audit_log import append_audit_entry
 from app.core.response_builder import LIVE_INTERNET_NOT_CONNECTED, build_final_result
 from app.core.security_firewall import FirewallDecision, check_risk
 from app.core.task_status_store import save_task_status
-from app.intelligence.research_response_builder import build_research_response
 from app.models.command_models import CommandIntent, CommandRequest, CommandResponse, FinalResult, ProcessStep
 
 
@@ -159,12 +159,9 @@ def route_command(payload: CommandRequest) -> CommandResponse:
     intent = classify_intent(message)
     decision = check_risk(message, intent)
     agent = select_agent(intent)
-    needs_clarification = not bool(message)
+    blank_message = not bool(message)
+    needs_clarification = blank_message
     questions = ["What would you like Builder Core to do?"] if needs_clarification else []
-
-    intelligence_result = None
-    if message and should_use_live_search(message, intent) and not decision.blocked:
-        intelligence_result = build_research_response(message)
 
     approval_request = None
     if message and decision.approval_required and not decision.blocked:
@@ -175,6 +172,13 @@ def route_command(payload: CommandRequest) -> CommandResponse:
             risk_level=decision.risk_level,
         )
 
+    intelligence_result = None
+    if message and not decision.blocked and not approval_request:
+        intelligence_result = build_brain_answer(message, intent, payload.history)
+        if intelligence_result.get("needs_clarification"):
+            needs_clarification = True
+            questions = [str(item) for item in intelligence_result.get("questions", []) if str(item).strip()]
+
     final_result = build_final_result(
         intent=intent,
         decision=decision,
@@ -182,8 +186,9 @@ def route_command(payload: CommandRequest) -> CommandResponse:
         approval_request=approval_request,
     )
 
-    if needs_clarification:
+    if blank_message:
         final_result.summary = "Builder Core needs a real command before it can classify and route the request."
+        final_result.answer = final_result.summary
         final_result.recommended_next_step = "Enter a clear command or question."
 
     process_steps = _build_process_steps(
@@ -254,23 +259,50 @@ def _build_process_steps(
     ]
 
     if intelligence_result is not None:
+        answer_mode = str(intelligence_result.get("answer_mode") or "answer")
+        live_lookup_attempted = _live_lookup_attempted(intelligence_result)
         live_search_connected = bool(intelligence_result.get("search_connected") or intelligence_result.get("live_search_connected"))
-        steps.append(
-            ProcessStep(
-                name="Searching DuckDuckGo",
-                status="completed",
-                summary="Search completed" if live_search_connected else LIVE_INTERNET_NOT_CONNECTED,
+        if answer_mode == "clarify":
+            steps.append(
+                ProcessStep(
+                    name="Asking follow-up",
+                    status="completed",
+                    summary="Asked for the missing context needed to answer safely.",
+                )
             )
-        )
-        sources = list(intelligence_result.get("sources") or [])
-        opened_count = len([source for source in sources if isinstance(source, dict) and source.get("opened")])
-        steps.append(
-            ProcessStep(
-                name="Reading allowed sources",
-                status="completed",
-                summary=f"Opened {opened_count} allowed source page(s)" if sources else "No source pages available to open",
+        elif live_lookup_attempted:
+            steps.append(
+                ProcessStep(
+                    name="Searching DuckDuckGo",
+                    status="completed",
+                    summary="Search completed" if live_search_connected else LIVE_INTERNET_NOT_CONNECTED,
+                )
             )
-        )
+            sources = list(intelligence_result.get("sources") or [])
+            opened_count = len([source for source in sources if isinstance(source, dict) and source.get("opened")])
+            steps.append(
+                ProcessStep(
+                    name="Reading allowed sources",
+                    status="completed",
+                    summary=f"Opened {opened_count} allowed source page(s)" if sources else "No source pages available to open",
+                )
+            )
+        else:
+            steps.append(
+                ProcessStep(
+                    name="Answering directly",
+                    status="completed",
+                    summary=f"Used {answer_mode.replace('_', ' ')} without live search.",
+                )
+            )
+        if intelligence_result.get("memory_recalled"):
+            steps.append(
+                ProcessStep(
+                    name="Recalling safe memory",
+                    status="completed",
+                    summary="Relevant safe memory checked before answering.",
+                )
+            )
         steps.append(
             ProcessStep(
                 name="Saving safe memory",
@@ -330,7 +362,9 @@ def _build_task_status(
         current_status = "blocked"
     elif approval_request:
         current_status = "waiting_for_approval"
-    elif intelligence_result is not None and not (intelligence_result.get("search_connected") or intelligence_result.get("live_search_connected")):
+    elif intelligence_result is not None and _live_lookup_attempted(intelligence_result) and not (
+        intelligence_result.get("search_connected") or intelligence_result.get("live_search_connected")
+    ):
         current_status = "search_unavailable"
 
     steps = [
@@ -342,10 +376,14 @@ def _build_task_status(
     if approval_request:
         steps.append({"code": "waiting_for_approval", "status": "waiting_for_approval", "summary": approval_request["approval_id"], "at": now})
     if intelligence_result is not None:
-        if intelligence_result.get("search_connected") or intelligence_result.get("live_search_connected"):
+        if intelligence_result.get("answer_mode") == "clarify":
+            steps.append({"code": "needs_clarification", "status": "needs_clarification", "summary": "Builder Core asked a follow-up question.", "at": now})
+        elif intelligence_result.get("search_connected") or intelligence_result.get("live_search_connected"):
             steps.append({"code": "search_answer", "status": "completed", "summary": "DuckDuckGo search answer prepared.", "at": now})
-        else:
+        elif _live_lookup_attempted(intelligence_result):
             steps.append({"code": "search_unavailable", "status": "search_unavailable", "summary": LIVE_INTERNET_NOT_CONNECTED, "at": now})
+        else:
+            steps.append({"code": "direct_answer", "status": "completed", "summary": "Direct chatbot answer prepared without live search.", "at": now})
     steps.append({"code": current_status, "status": current_status, "summary": "No fake progress percentages are used.", "at": now})
 
     return {
@@ -452,6 +490,13 @@ def should_use_live_search(message: str, intent: CommandIntent) -> bool:
         return True
 
     return False
+
+
+def _live_lookup_attempted(intelligence_result: dict | None) -> bool:
+    if not intelligence_result:
+        return False
+    mode = str(intelligence_result.get("answer_mode") or "")
+    return mode in {"live_search", "weather", "news"} or bool(intelligence_result.get("used_live_search"))
 
 
 def _normalize(message: str) -> str:

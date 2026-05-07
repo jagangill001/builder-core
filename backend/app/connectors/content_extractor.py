@@ -15,6 +15,8 @@ BOILERPLATE_PHRASES = {
     "appearance",
     "personal tools",
     "move to sidebar",
+    "sidebar",
+    "edit",
     "hide",
     "search search",
     "read edit view history",

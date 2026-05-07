@@ -24,6 +24,7 @@ SandboxType = Literal["code_test", "simulation", "security_check", "connector_te
 
 class CommandRequest(BaseModel):
     message: str = Field(default="", max_length=8000)
+    history: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ProcessStep(BaseModel):

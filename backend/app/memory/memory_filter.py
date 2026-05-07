@@ -12,11 +12,22 @@ SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
 BLOCKED_MEMORY_TERMS = {
     "password",
     "api key",
+    "api_key",
+    "api-key",
     "secret key",
+    "secret_key",
+    "secret-key",
     "admin key",
+    "admin_key",
+    "admin-key",
     "private profile",
+    "token",
     "access token",
+    "access_token",
+    "access-token",
     "refresh token",
+    "refresh_token",
+    "refresh-token",
 }
 
 

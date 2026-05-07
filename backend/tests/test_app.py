@@ -32,9 +32,10 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["status"], "ok")
-        self.assertEqual(body["phase"], "phase_4_live_search_answer_engine_safe_memory_foundation")
+        self.assertEqual(body["phase"], "phase_5_better_answer_brain")
         self.assertFalse(body["live_search_connected"])
         self.assertIn("phase_4_live_search_answer_engine_safe_memory_foundation", body)
+        self.assertIn("phase_5_better_answer_brain", body)
         self.assertFalse(body["codex_direct_connection"])
         self.assertFalse(body["deployment_executor_connected"])
         self.assertTrue(body["security_firewall"])
@@ -187,16 +188,17 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertEqual(result["selected_agent"], "research_agent")
         self.assertIn("DuckDuckGo search is not available right now", result["summary"])
         self.assertEqual(result["sources"], [])
-        self.assertEqual(result["timeline"]["event_count"], 0)
+        self.assertEqual(result.get("timeline") or {}, {})
 
-    def test_command_question_routes_to_search_answer(self) -> None:
-        data = self._command_with_search("What is FastAPI?")
+    def test_command_stable_question_answers_directly(self) -> None:
+        data = self._command("What is FastAPI?")
         result = data["final_result"]
         self.assertFalse(result["blocked"])
-        self.assertTrue(result["search_connected"])
-        self.assertEqual(result["sources"][0]["url"], "https://example.com/fastapi")
+        self.assertFalse(result["search_connected"])
+        self.assertEqual(result["sources"], [])
         self.assertIn("FastAPI", result["answer"])
-        self.assertTrue(result["memory_saved"])
+        self.assertNotIn("prepared an assistant-style response", result["answer"])
+        self.assertIn("Python web framework", result["answer"])
 
     def test_command_latest_docs_routes_to_search_answer(self) -> None:
         data = self._command_with_search("Check latest Google Cloud Run docs")
@@ -205,6 +207,40 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertTrue(result["search_connected"])
         self.assertIsInstance(result["sources"], list)
         self.assertNotIn("invent", result["answer"].lower())
+
+    def test_command_current_government_uses_search_and_answers_directly(self) -> None:
+        data = self._command_with_canada_search("current government in Canada")
+        result = data["final_result"]
+        self.assertFalse(result["blocked"])
+        self.assertTrue(result["search_connected"])
+        self.assertGreaterEqual(len(result["sources"]), 1)
+        self.assertEqual(
+            result["answer"],
+            "The current federal government of Canada is led by Prime Minister Mark Carney and the Liberal Party.",
+        )
+        self.assertNotIn("Based on DuckDuckGo results", result["answer"])
+
+    def test_command_weather_uses_fallback_without_inventing_weather(self) -> None:
+        data = self._command("weather today in India")
+        result = data["final_result"]
+        self.assertFalse(result["blocked"])
+        self.assertFalse(result["search_connected"])
+        self.assertIn("Weather connector is not configured", result["answer"])
+        self.assertIn("DuckDuckGo search is not available right now", result["answer"])
+        self.assertEqual(result["sources"], [])
+
+    def test_command_latest_news_uses_news_fallback_or_honest_failure(self) -> None:
+        data = self._command("latest news in Canada")
+        result = data["final_result"]
+        self.assertFalse(result["blocked"])
+        self.assertIn("News connector is not configured", result["answer"])
+        self.assertTrue(result["sources"] or "DuckDuckGo search is not available right now" in result["answer"])
+
+    def test_command_ambiguous_without_history_asks_followup(self) -> None:
+        data = self._command("fix it")
+        self.assertTrue(data["needs_clarification"])
+        self.assertEqual(data["questions"], ["Which part do you want me to fix?"])
+        self.assertIn("Which part", data["final_result"]["answer"])
 
     def test_intelligence_analysis_uses_search_when_available(self) -> None:
         with self._mock_search_results():
@@ -313,6 +349,35 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertTrue(any("FastAPI" in item.get("topic", "") for item in body["items"]))
 
+    def test_command_recalls_safe_memory_without_recalling_secrets(self) -> None:
+        from app.memory.memory_store import save_safe_memory
+
+        safe_result = save_safe_memory(
+            {
+                "memory_type": "project_fact",
+                "topic": "FastAPI recall test",
+                "summary": "FastAPI recall memory says FastAPI is used for API services.",
+                "sources": [],
+                "confidence": "medium",
+            }
+        )
+        secret_result = save_safe_memory(
+            {
+                "memory_type": "project_fact",
+                "topic": "FastAPI secret recall test",
+                "summary": "api_key=super-secret-token should never be recalled.",
+                "sources": [],
+                "confidence": "medium",
+            }
+        )
+
+        self.assertTrue(safe_result["saved"])
+        self.assertFalse(secret_result["saved"])
+        data = self._command("What is FastAPI?")
+        facts = data["final_result"]["facts"]
+        self.assertTrue(any(item.get("type") == "memory_recall" for item in facts))
+        self.assertFalse(any("super-secret-token" in item.get("text", "") for item in facts))
+
     def test_sandbox_run_creates_non_executing_record(self) -> None:
         response = self.client.post(
             "/sandbox/run",
@@ -399,6 +464,46 @@ class PhaseThreeFoundationTests(unittest.TestCase):
     def _command_with_search(self, message: str) -> dict:
         with self._mock_search_results():
             return self._command(message)
+
+    def _command_with_canada_search(self, message: str) -> dict:
+        with patch("app.research.search_answer_engine.SearchConnector") as connector:
+            connector.return_value.search.return_value = {
+                "connected": True,
+                "provider": "duckduckgo",
+                "query": message,
+                "message": "Search completed",
+                "results": [
+                    {
+                        "title": "Canada - Wikipedia",
+                        "url": "https://en.wikipedia.org/wiki/Canada",
+                        "snippet": "Canada has a federal parliamentary system.",
+                        "source_domain": "en.wikipedia.org",
+                    },
+                    {
+                        "title": "Prime Minister of Canada",
+                        "url": "https://www.pm.gc.ca/en",
+                        "snippet": "Prime Minister Mark Carney leads the Liberal Party government.",
+                        "source_domain": "pm.gc.ca",
+                    },
+                    {
+                        "title": "Canada politics report",
+                        "url": "https://www.cbc.ca/news/politics/example",
+                        "snippet": "The Liberal Party forms the federal government.",
+                        "source_domain": "cbc.ca",
+                    },
+                ],
+            }
+            with patch(
+                "app.research.search_answer_engine.fetch_allowed_page",
+                return_value={
+                    "opened": True,
+                    "url": "https://www.pm.gc.ca/en",
+                    "title": "Prime Minister of Canada",
+                    "text": "Prime Minister Mark Carney leads the Liberal Party government.",
+                    "warning": "",
+                },
+            ):
+                return self._command(message)
 
     def _mock_search_results(self):
         return patch.multiple(

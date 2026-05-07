@@ -474,6 +474,10 @@ export default function Home() {
       text: "Searching and preparing answer...",
       loading: true,
     };
+    const history = chat
+      .filter((item) => !item.loading)
+      .slice(-8)
+      .map((item) => ({ role: item.role, content: item.text }));
 
     setChat((current) => [...current, userMessage, loadingMessage]);
     setMessage("");
@@ -483,7 +487,7 @@ export default function Home() {
       const { baseUrl, data } = await fetchJsonFromAny<CommandResponse>("/command", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: cleanMessage }),
+        body: JSON.stringify({ message: cleanMessage, history }),
       });
       setActiveApiBase(baseUrl);
       let taskStatus = data.task_status ?? null;

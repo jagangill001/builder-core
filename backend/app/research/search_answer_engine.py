@@ -17,6 +17,14 @@ PRIMARY_SOURCE_DOMAINS = {
     "gg.ca",
     "elections.ca",
 }
+OFFICIAL_SOURCE_DOMAINS = {
+    "fastapi.tiangolo.com",
+    "docs.python.org",
+    "cloud.google.com",
+    "developers.google.com",
+    "github.com",
+    "openai.com",
+}
 REPUTABLE_NEWS_DOMAINS = {
     "cbc.ca",
     "ctvnews.ca",
@@ -26,7 +34,9 @@ REPUTABLE_NEWS_DOMAINS = {
     "bbc.com",
     "thecanadianpressnews.ca",
 }
+ACADEMIC_SOURCE_DOMAINS = {"edu", "ac.uk", "arxiv.org", "nih.gov", "ncbi.nlm.nih.gov"}
 WIKIPEDIA_DOMAINS = {"wikipedia.org", "en.wikipedia.org"}
+LOW_PRIORITY_DOMAINS = {"blogspot.com", "medium.com", "substack.com"}
 
 
 def build_search_answer(query: str, *, save_memory: bool = True) -> dict[str, Any]:
@@ -157,11 +167,17 @@ def _source_priority(domain: str) -> int:
     clean_domain = domain.lower().removeprefix("www.")
     if _domain_matches(clean_domain, PRIMARY_SOURCE_DOMAINS):
         return 0
-    if _domain_matches(clean_domain, REPUTABLE_NEWS_DOMAINS):
+    if _domain_matches(clean_domain, OFFICIAL_SOURCE_DOMAINS) or clean_domain.endswith(".gov") or clean_domain.endswith(".gc.ca"):
         return 1
-    if _domain_matches(clean_domain, WIKIPEDIA_DOMAINS):
+    if _domain_matches(clean_domain, REPUTABLE_NEWS_DOMAINS):
+        return 2
+    if _domain_matches(clean_domain, ACADEMIC_SOURCE_DOMAINS) or clean_domain.endswith(".edu"):
         return 3
-    return 2
+    if _domain_matches(clean_domain, WIKIPEDIA_DOMAINS):
+        return 5
+    if _domain_matches(clean_domain, LOW_PRIORITY_DOMAINS) or "blog" in clean_domain:
+        return 6
+    return 4
 
 
 def _domain_matches(domain: str, candidates: set[str]) -> bool:
@@ -359,6 +375,10 @@ def _clean_evidence_text(text: str) -> str:
         "Navigation",
         "Appearance",
         "Personal tools",
+        "Edit",
+        "sidebar",
+        "search search",
+        "move to sidebar",
     )
     for phrase in boilerplate:
         clean = clean.replace(phrase, " ")
