@@ -3,25 +3,44 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 
 const PROD_BACKEND_URL = "https://builder-core-599596796788.us-central1.run.app";
+const LOCAL_BACKEND_URL = "http://127.0.0.1:8000";
+const REQUEST_TIMEOUT_MS = 30000;
 
-function resolveApiBase() {
+function configuredApiBase() {
   const configured =
     process.env.NEXT_PUBLIC_API_BASE_URL ??
     process.env.NEXT_PUBLIC_API_URL;
 
-  if (configured) return configured.replace(/\/$/, "");
-
-  if (typeof window !== "undefined") {
-    const host = window.location.hostname;
-    if (host.includes("run.app") || host.includes("builder-core-frontend")) {
-      return PROD_BACKEND_URL;
-    }
-  }
-
-  return "http://127.0.0.1:8000";
+  return configured ? configured.replace(/\/$/, "") : "";
 }
 
-const API_BASE = resolveApiBase();
+function isLocalFrontend() {
+  if (typeof window === "undefined") return false;
+  return window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost";
+}
+
+function isProductionFrontend() {
+  if (typeof window === "undefined") return false;
+  const host = window.location.hostname;
+  return host.includes("run.app") || host.includes("builder-core-frontend");
+}
+
+function apiBaseCandidates() {
+  const candidates: string[] = [];
+  const configured = configuredApiBase();
+
+  if (isLocalFrontend()) candidates.push(LOCAL_BACKEND_URL);
+  if (configured) candidates.push(configured);
+  if (isProductionFrontend()) candidates.push(PROD_BACKEND_URL);
+
+  candidates.push(PROD_BACKEND_URL, LOCAL_BACKEND_URL);
+  return Array.from(new Set(candidates.map((item) => item.replace(/\/$/, ""))));
+}
+
+function resolveApiBase() {
+  return apiBaseCandidates()[0] ?? LOCAL_BACKEND_URL;
+}
+
 const BACKEND_ERROR = "Could not connect to Builder Core backend.";
 
 type ProcessStep = {
@@ -142,6 +161,34 @@ type ChatMessage = {
 };
 
 type DetailSection = "sources" | "process" | "facts" | "warnings" | "memory";
+
+async function fetchJsonFromBase<T>(baseUrl: string, path: string, init?: RequestInit): Promise<T> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${baseUrl}${path}`, {
+      ...init,
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+    return (await response.json()) as T;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function fetchJsonFromAny<T>(path: string, init?: RequestInit) {
+  let lastError: unknown = null;
+  for (const baseUrl of apiBaseCandidates()) {
+    try {
+      const data = await fetchJsonFromBase<T>(baseUrl, path, init);
+      return { baseUrl, data };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error("No backend available");
+}
 
 function makeId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -368,27 +415,33 @@ export default function Home() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [connectivity, setConnectivity] = useState<ConnectivityStatus | null>(null);
   const [storageStatus, setStorageStatus] = useState<StorageStatus | null>(null);
+  const [activeApiBase, setActiveApiBase] = useState(resolveApiBase());
   const [showSystemDetails, setShowSystemDetails] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     async function loadStatus() {
-      try {
-        const [connectivityResponse, systemResponse, storageResponse] = await Promise.all([
-          fetch(`${API_BASE}/connectivity/status`),
-          fetch(`${API_BASE}/system/status`),
-          fetch(`${API_BASE}/storage/status`),
-        ]);
-        if (cancelled) return;
-        setConnectivity(connectivityResponse.ok ? await connectivityResponse.json() : null);
-        setSystemStatus(systemResponse.ok ? await systemResponse.json() : null);
-        setStorageStatus(storageResponse.ok ? await storageResponse.json() : null);
-      } catch {
-        if (!cancelled) {
-          setConnectivity(null);
-          setSystemStatus(null);
-          setStorageStatus(null);
+      for (const baseUrl of apiBaseCandidates()) {
+        try {
+          const [connectivityData, systemData, storageData] = await Promise.all([
+            fetchJsonFromBase<ConnectivityStatus>(baseUrl, "/connectivity/status"),
+            fetchJsonFromBase<SystemStatus>(baseUrl, "/system/status"),
+            fetchJsonFromBase<StorageStatus>(baseUrl, "/storage/status"),
+          ]);
+          if (cancelled) return;
+          setActiveApiBase(baseUrl);
+          setConnectivity(connectivityData);
+          setSystemStatus(systemData);
+          setStorageStatus(storageData);
+          return;
+        } catch {
+          if (cancelled) return;
         }
+      }
+      if (!cancelled) {
+        setConnectivity(null);
+        setSystemStatus(null);
+        setStorageStatus(null);
       }
     }
     loadStatus();
@@ -427,19 +480,16 @@ export default function Home() {
     setSubmitting(true);
 
     try {
-      const response = await fetch(`${API_BASE}/command`, {
+      const { baseUrl, data } = await fetchJsonFromAny<CommandResponse>("/command", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: cleanMessage }),
       });
-
-      if (!response.ok) throw new Error("Command request failed");
-
-      const data: CommandResponse = await response.json();
+      setActiveApiBase(baseUrl);
       let taskStatus = data.task_status ?? null;
       try {
-        const taskResponse = await fetch(`${API_BASE}/tasks/${data.command_id}`);
-        if (taskResponse.ok) taskStatus = await taskResponse.json();
+        const taskResponse = await fetchJsonFromBase<TaskStatus>(baseUrl, `/tasks/${data.command_id}`);
+        taskStatus = taskResponse;
       } catch {
         taskStatus = data.task_status ?? null;
       }
@@ -504,7 +554,7 @@ export default function Home() {
 
           {showSystemDetails ? (
             <dl className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              <Field label="API URL" value={API_BASE} />
+              <Field label="API URL" value={activeApiBase} />
               <Field label="Backend" value={connectivity?.backend ?? systemStatus?.status ?? "unavailable"} />
               <Field label="Search provider" value={connectivity?.search_provider ?? systemStatus?.search_provider ?? "duckduckgo"} />
               <Field label="Search message" value={connectivity?.live_search_message ?? systemStatus?.live_search_message ?? "unknown"} />
