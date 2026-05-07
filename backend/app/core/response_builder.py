@@ -6,7 +6,7 @@ from app.core.agent_registry import select_agent
 from app.core.security_firewall import FirewallDecision
 from app.models.command_models import CommandIntent, FinalResult
 
-LIVE_INTERNET_NOT_CONNECTED = "Live internet/search is not connected yet."
+LIVE_INTERNET_NOT_CONNECTED = "DuckDuckGo search is not available right now."
 
 
 def build_final_result(
@@ -29,9 +29,10 @@ def build_final_result(
         )
 
     if intelligence_result is not None:
+        answer = str(intelligence_result.get("answer") or intelligence_result.get("summary") or LIVE_INTERNET_NOT_CONNECTED)
         return FinalResult(
             type=intent,
-            summary=str(intelligence_result.get("summary") or LIVE_INTERNET_NOT_CONNECTED),
+            summary=answer,
             selected_agent=agent.name,
             risk_level=decision.risk_level,
             approval_required=decision.approval_required,
@@ -41,11 +42,16 @@ def build_final_result(
             sources=list(intelligence_result.get("sources", [])),
             facts=list(intelligence_result.get("facts", [])),
             claims=list(intelligence_result.get("claims", [])),
+            unknowns=list(intelligence_result.get("unknowns", [])),
             timeline=dict(intelligence_result.get("timeline") or {}),
             manipulation_risk=dict(intelligence_result.get("manipulation_risk") or {}),
             future_scenarios=list(intelligence_result.get("future_scenarios", [])),
             confidence=str(intelligence_result.get("confidence") or "low"),
             missing_data=[str(item) for item in intelligence_result.get("missing_data", [])],
+            answer=answer,
+            search_connected=bool(intelligence_result.get("search_connected") or intelligence_result.get("live_search_connected")),
+            warnings=[str(item) for item in intelligence_result.get("warnings", [])],
+            memory_saved=bool(intelligence_result.get("memory_saved")),
         )
 
     if decision.approval_required:
@@ -83,8 +89,8 @@ def _safe_result_text(intent: CommandIntent) -> tuple[str, str]:
         )
     if intent == "research":
         return (
-            "This is a research task. Live internet/search is not connected yet, so Builder Core can only prepare a research plan and source-checking approach.",
-            "Verify claims with real sources outside Builder Core until live internet/search is connected.",
+            "This is a research task. DuckDuckGo search is not available right now, so Builder Core can only prepare a research plan and source-checking approach.",
+            "Verify claims with real sources outside Builder Core until DuckDuckGo search is available.",
         )
     if intent == "security":
         return (

@@ -36,10 +36,7 @@ def verify_evidence(query: str, sources: list[dict[str, Any]] | None = None) -> 
             "missing_data": ["Verified sources"],
         }
 
-    claims = [
-        classify_claim(str(source.get("title") or source.get("summary") or query), safe_sources)
-        for source in safe_sources
-    ]
+    claims = [classify_claim(str(source.get("title") or source.get("snippet") or source.get("summary") or query), safe_sources) for source in safe_sources]
     return {
         "facts": [],
         "claims": claims,

@@ -9,7 +9,7 @@ const API_BASE = (
 ).replace(/\/$/, "");
 
 const BACKEND_ERROR = "Could not connect to Builder Core backend. Check NEXT_PUBLIC_API_BASE_URL and backend deployment.";
-const LIVE_SEARCH_MISSING = "Live internet/search is not connected yet.";
+const LIVE_SEARCH_MISSING = "DuckDuckGo search is not available right now.";
 
 type ProcessStatus = "pending" | "running" | "completed" | "blocked" | "failed";
 
@@ -32,6 +32,24 @@ type ManipulationRisk = {
   explanation?: string;
 };
 
+type SourceItem = {
+  title?: string;
+  url?: string;
+  snippet?: string;
+  summary?: string;
+  source_domain?: string;
+  opened?: boolean;
+  page_excerpt?: string;
+};
+
+type EvidenceItem = {
+  text?: string;
+  classification?: string;
+  confidence?: string;
+  source_url?: string;
+  reason?: string;
+};
+
 type ApprovalRecord = {
   approval_id?: string;
   status?: string;
@@ -49,14 +67,19 @@ type FinalResult = {
   blocked: boolean;
   recommended_next_step: string;
   approval_request?: ApprovalRecord | null;
-  sources?: unknown[];
-  facts?: unknown[];
-  claims?: unknown[];
+  sources?: SourceItem[];
+  facts?: EvidenceItem[];
+  claims?: EvidenceItem[];
+  unknowns?: EvidenceItem[];
   timeline?: Timeline | null;
   manipulation_risk?: ManipulationRisk | null;
   future_scenarios?: unknown[];
   confidence?: string | null;
   missing_data?: string[];
+  answer?: string | null;
+  search_connected?: boolean | null;
+  warnings?: string[];
+  memory_saved?: boolean | null;
 };
 
 type TaskStatus = {
@@ -79,6 +102,8 @@ type SystemStatus = {
   service?: string;
   phase?: string;
   live_search_connected?: boolean;
+  search_provider?: string | null;
+  live_search_message?: string | null;
   codex_direct_connection?: boolean;
   security_firewall?: boolean;
   audit_log?: boolean;
@@ -90,6 +115,8 @@ type ConnectivityStatus = {
   frontend_expected_api_url?: string;
   cloud_storage_configured?: boolean;
   live_search_connected?: boolean;
+  search_provider?: string | null;
+  live_search_message?: string | null;
   codex_direct_connection?: boolean;
   deployment_executor_connected?: boolean;
   storage_mode?: string;
@@ -115,7 +142,7 @@ const EMPTY_STEPS: ProcessStep[] = [
 function statusClasses(status: ProcessStatus | string | undefined) {
   if (status === "completed") return "border-emerald-200 bg-emerald-50 text-emerald-800";
   if (status === "blocked" || status === "failed") return "border-red-200 bg-red-50 text-red-800";
-  if (status === "running" || status === "waiting_for_approval" || status === "research_not_connected") {
+  if (status === "running" || status === "waiting_for_approval" || status === "research_not_connected" || status === "search_unavailable") {
     return "border-blue-200 bg-blue-50 text-blue-800";
   }
   return "border-zinc-200 bg-zinc-100 text-zinc-600";
@@ -147,6 +174,61 @@ function TextList({ title, items, emptyText }: { title: string; items?: unknown[
         {items?.map((item, index) => (
           <li key={`${title}-${index}`} className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
             {typeof item === "string" ? item : JSON.stringify(item)}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function SourceList({ sources }: { sources?: SourceItem[] }) {
+  if (!sources?.length) {
+    return <TextList title="Sources" items={[]} emptyText="No real sources returned." />;
+  }
+
+  return (
+    <section className="grid gap-2">
+      <h3 className="text-sm font-semibold text-zinc-700">Sources</h3>
+      <ul className="grid gap-2">
+        {sources.map((source, index) => (
+          <li key={`${source.url ?? source.title}-${index}`} className="grid gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              {source.url ? (
+                <a className="font-semibold text-blue-700 underline-offset-2 hover:underline" href={source.url} target="_blank" rel="noreferrer">
+                  {source.title || source.url}
+                </a>
+              ) : (
+                <span className="font-semibold text-zinc-900">{source.title || "Untitled source"}</span>
+              )}
+              <span className="text-xs font-medium text-zinc-500">{source.source_domain || "unknown source"}</span>
+            </div>
+            {source.snippet || source.summary ? <p className="leading-6">{source.snippet || source.summary}</p> : null}
+            <p className="text-xs text-zinc-500">Page opened: {booleanText(source.opened)}</p>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function EvidenceList({ title, items, emptyText }: { title: string; items?: EvidenceItem[]; emptyText: string }) {
+  if (!items?.length) {
+    return <TextList title={title} items={[]} emptyText={emptyText} />;
+  }
+
+  return (
+    <section className="grid gap-2">
+      <h3 className="text-sm font-semibold text-zinc-700">{title}</h3>
+      <ul className="grid gap-2">
+        {items.map((item, index) => (
+          <li key={`${title}-${index}`} className="grid gap-1 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
+            <p className="leading-6">{item.text ?? JSON.stringify(item)}</p>
+            <div className="flex flex-wrap gap-2 text-xs text-zinc-500">
+              {item.classification ? <span>{item.classification}</span> : null}
+              {item.confidence ? <span>confidence: {item.confidence}</span> : null}
+              {item.source_url ? <a className="text-blue-700 hover:underline" href={item.source_url} target="_blank" rel="noreferrer">source</a> : null}
+            </div>
+            {item.reason ? <p className="text-xs text-zinc-500">{item.reason}</p> : null}
           </li>
         ))}
       </ul>
@@ -233,7 +315,8 @@ export default function Home() {
     if (!connectivity && !systemStatus) return "Backend status unavailable";
     const backend = connectivity?.backend ?? systemStatus?.status ?? "unknown";
     const storage = storageStatus?.storage_mode ?? connectivity?.storage_mode ?? "unknown storage";
-    const search = connectivity?.live_search_connected ? "live search connected" : "live search not connected";
+    const provider = connectivity?.search_provider ?? systemStatus?.search_provider ?? "duckduckgo";
+    const search = connectivity?.live_search_connected ? `${provider} search connected` : `${provider} search unavailable`;
     const codex = connectivity?.codex_direct_connection ? "Codex connected" : "Codex not directly connected";
     return `${backend} / ${storage} storage / ${search} / ${codex}`;
   }, [connectivity, storageStatus, systemStatus]);
@@ -286,7 +369,10 @@ export default function Home() {
   const final = result?.final_result;
   const liveSearchMissing = Boolean(
     final?.summary?.includes(LIVE_SEARCH_MISSING) ||
+      final?.answer?.includes(LIVE_SEARCH_MISSING) ||
+      final?.warnings?.some((item) => item.includes(LIVE_SEARCH_MISSING)) ||
       final?.missing_data?.some((item) => item.toLowerCase().includes("live search")) ||
+      final?.missing_data?.some((item) => item.toLowerCase().includes("duckduckgo")) ||
       connectivity?.warnings?.some((item) => item.includes(LIVE_SEARCH_MISSING)),
   );
 
@@ -296,17 +382,19 @@ export default function Home() {
         <header className="flex flex-col gap-2 border-b border-zinc-200 pb-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-sm font-semibold uppercase text-blue-700">Builder Core</p>
-            <h1 className="text-2xl font-semibold tracking-normal">Production Connection Foundation</h1>
+            <h1 className="text-2xl font-semibold tracking-normal">Live Search Answer Engine</h1>
           </div>
           <p className="text-sm text-zinc-600">{statusLine}</p>
         </header>
 
         <section className="grid gap-2 rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-4">
             <Field label="Backend" value={connectivity?.backend ?? "unavailable"} />
             <Field label="API URL" value={API_BASE} />
             <Field label="Storage" value={`${storageStatus?.storage_mode ?? connectivity?.storage_mode ?? "unknown"}${storageStatus?.local_fallback ? " fallback" : ""}`} />
+            <Field label="Search" value={`${connectivity?.search_provider ?? systemStatus?.search_provider ?? "duckduckgo"} / ${connectivity?.live_search_connected ? "connected" : "unavailable"}`} />
           </div>
+          {connectivity?.live_search_message ? <p className="text-sm text-zinc-600">{connectivity.live_search_message}</p> : null}
           {storageStatus?.message ? <p className="text-sm text-zinc-600">{storageStatus.message}</p> : null}
           {connectivity?.warnings?.map((warning) => (
             <p key={warning} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">
@@ -375,12 +463,15 @@ export default function Home() {
                 </p>
               ) : null}
 
-              <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <Field label="Type" value={final.type} />
                 <Field label="Selected agent" value={final.selected_agent} />
                 <Field label="Risk level" value={final.risk_level} />
                 <Field label="Approval required" value={booleanText(final.approval_required)} />
                 <Field label="Blocked" value={booleanText(final.blocked)} />
+                <Field label="Search connected" value={final.search_connected === null || final.search_connected === undefined ? "Not requested" : booleanText(final.search_connected)} />
+                <Field label="Memory saved" value={final.memory_saved === null || final.memory_saved === undefined ? "No" : booleanText(final.memory_saved)} />
+                <Field label="Confidence" value={final.confidence ?? "not rated"} />
               </dl>
 
               {final.approval_request ? (
@@ -395,23 +486,30 @@ export default function Home() {
 
               <div className="grid gap-3">
                 <div>
-                  <h3 className="text-sm font-semibold text-zinc-700">Summary</h3>
-                  <p className="mt-1 text-sm leading-6 text-zinc-700">{final.summary}</p>
+                  <h3 className="text-sm font-semibold text-zinc-700">Answer</h3>
+                  <p className="mt-1 text-sm leading-6 text-zinc-700">{final.answer ?? final.summary}</p>
                 </div>
+                {final.answer && final.answer !== final.summary ? (
+                  <div>
+                    <h3 className="text-sm font-semibold text-zinc-700">Summary</h3>
+                    <p className="mt-1 text-sm leading-6 text-zinc-700">{final.summary}</p>
+                  </div>
+                ) : null}
                 <div>
                   <h3 className="text-sm font-semibold text-zinc-700">Recommended next step</h3>
                   <p className="mt-1 text-sm leading-6 text-zinc-700">{final.recommended_next_step}</p>
                 </div>
               </div>
 
-              <TextList title="Sources" items={final.sources} emptyText={final.confidence ? "No verified sources returned." : undefined} />
-              <TextList title="Facts" items={final.facts} emptyText={final.confidence ? "No verified facts returned." : undefined} />
-              <TextList title="Claims" items={final.claims} emptyText={final.confidence ? "No claims verified from sources." : undefined} />
+              <SourceList sources={final.sources} />
+              <EvidenceList title="Facts" items={final.facts} emptyText="No verified facts returned." />
+              <EvidenceList title="Claims" items={final.claims} emptyText="No claims verified from sources." />
+              <EvidenceList title="Unknowns" items={final.unknowns} emptyText="No unknowns reported." />
               <TimelineSection timeline={final.timeline} />
               <ManipulationSection risk={final.manipulation_risk} />
+              <TextList title="Warnings" items={final.warnings} />
               <TextList title="Missing data" items={final.missing_data} />
               <TextList title="Future scenarios" items={final.future_scenarios} />
-              {final.confidence ? <p className="text-sm font-semibold text-zinc-700">Confidence: {final.confidence}</p> : null}
             </div>
           ) : (
             !error && <p className="text-sm text-zinc-500">No result yet.</p>

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
@@ -31,8 +32,9 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["status"], "ok")
-        self.assertEqual(body["phase"], "phase_3_production_connection_cloud_storage_sandbox_foundation")
+        self.assertEqual(body["phase"], "phase_4_live_search_answer_engine_safe_memory_foundation")
         self.assertFalse(body["live_search_connected"])
+        self.assertIn("phase_4_live_search_answer_engine_safe_memory_foundation", body)
         self.assertFalse(body["codex_direct_connection"])
         self.assertFalse(body["deployment_executor_connected"])
         self.assertTrue(body["security_firewall"])
@@ -50,9 +52,25 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertEqual(body["backend"], "ok")
         self.assertIn("frontend_expected_api_url", body)
         self.assertFalse(body["live_search_connected"])
+        self.assertEqual(body["search_provider"], "duckduckgo")
         self.assertFalse(body["codex_direct_connection"])
         self.assertFalse(body["deployment_executor_connected"])
 
+    def test_requirements_include_live_search_and_test_client_dependencies(self) -> None:
+        requirements = Path(__file__).resolve().parents[1] / "requirements.txt"
+        content = requirements.read_text(encoding="utf-8").lower()
+        self.assertIn("ddgs", content)
+        self.assertIn("httpx", content)
+
+    def test_connectivity_status_shows_duckduckgo_provider_when_enabled(self) -> None:
+        with patch.dict(os.environ, {"LIVE_SEARCH_PROVIDER": "duckduckgo"}):
+            with patch("app.connectors.search_connector.SearchConnector._runtime_available", return_value=True):
+                response = self.client.get("/connectivity/status")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["live_search_connected"])
+        self.assertEqual(body["search_provider"], "duckduckgo")
 
     def test_duckduckgo_connector_returns_real_source_shape_when_provider_returns_results(self) -> None:
         from app.connectors.search_connector import SearchConnector
@@ -65,7 +83,8 @@ class PhaseThreeFoundationTests(unittest.TestCase):
                     {
                         "title": "Builder Core",
                         "url": "https://example.com/builder-core",
-                        "summary": "Real provider result shape for test.",
+                        "snippet": "Real provider result shape for test.",
+                        "source_domain": "example.com",
                         "source_type": "duckduckgo_web_result",
                         "provider": "duckduckgo",
                     }
@@ -77,6 +96,20 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertEqual(result["provider"], "duckduckgo")
         self.assertEqual(result["results"][0]["source_type"], "duckduckgo_web_result")
         self.assertEqual(result["results"][0]["url"], "https://example.com/builder-core")
+        self.assertEqual(result["results"][0]["snippet"], "Real provider result shape for test.")
+
+    def test_search_connector_handles_failure_safely(self) -> None:
+        from app.connectors.search_connector import SearchConnector
+
+        with patch.dict(os.environ, {"LIVE_SEARCH_PROVIDER": "duckduckgo"}):
+            with patch.object(SearchConnector, "_duckduckgo", side_effect=RuntimeError("network refused\nTraceback hidden")):
+                result = SearchConnector().search("Builder Core")
+
+        self.assertFalse(result["connected"])
+        self.assertEqual(result["provider"], "duckduckgo")
+        self.assertEqual(result["results"], [])
+        self.assertIn("DuckDuckGo search failed:", result["message"])
+        self.assertNotIn("Traceback (most recent call last)", result["message"])
 
     def test_storage_status_returns_local_mode_without_cloud_env(self) -> None:
         response = self.client.get("/storage/status")
@@ -132,8 +165,8 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertEqual(body["sources"], [])
         self.assertEqual(body["facts"], [])
         self.assertEqual(body["confidence"], "low")
-        self.assertIn("Live search connector", body["missing_data"])
-        self.assertIn("Live internet/search is not connected yet", body["summary"])
+        self.assertIn("Live DuckDuckGo search results", body["missing_data"])
+        self.assertIn("DuckDuckGo search is not available right now", body["summary"])
 
     def test_timeline_without_sources_is_empty(self) -> None:
         response = self.client.post("/intelligence/analyze", json={"query": "Build a timeline of what happened before and after"})
@@ -152,9 +185,70 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertFalse(result["blocked"])
         self.assertEqual(result["type"], "research")
         self.assertEqual(result["selected_agent"], "research_agent")
-        self.assertIn("Live internet/search is not connected yet", result["summary"])
+        self.assertIn("DuckDuckGo search is not available right now", result["summary"])
         self.assertEqual(result["sources"], [])
         self.assertEqual(result["timeline"]["event_count"], 0)
+
+    def test_command_question_routes_to_search_answer(self) -> None:
+        data = self._command_with_search("What is FastAPI?")
+        result = data["final_result"]
+        self.assertFalse(result["blocked"])
+        self.assertTrue(result["search_connected"])
+        self.assertEqual(result["sources"][0]["url"], "https://example.com/fastapi")
+        self.assertIn("FastAPI", result["answer"])
+        self.assertTrue(result["memory_saved"])
+
+    def test_command_latest_docs_routes_to_search_answer(self) -> None:
+        data = self._command_with_search("Check latest Google Cloud Run docs")
+        result = data["final_result"]
+        self.assertFalse(result["blocked"])
+        self.assertTrue(result["search_connected"])
+        self.assertIsInstance(result["sources"], list)
+        self.assertNotIn("invent", result["answer"].lower())
+
+    def test_intelligence_analysis_uses_search_when_available(self) -> None:
+        with self._mock_search_results():
+            response = self.client.post("/intelligence/analyze", json={"query": "Check if this news is fake"})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["search_connected"])
+        self.assertTrue(body["live_search_connected"])
+        self.assertGreaterEqual(len(body["sources"]), 1)
+        self.assertIn("answer", body)
+
+    def test_memory_filter_redacts_secrets(self) -> None:
+        from app.memory.memory_filter import redact_sensitive_text
+
+        redacted = redact_sensitive_text("api_key=super-secret-token password=hunter2")
+        self.assertIn("[REDACTED]", redacted)
+        self.assertNotIn("super-secret-token", redacted)
+        self.assertNotIn("hunter2", redacted)
+
+    def test_memory_recent_works(self) -> None:
+        response = self.client.get("/memory/recent")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertIn("items", body)
+
+    def test_memory_search_works(self) -> None:
+        from app.memory.memory_store import save_safe_memory
+
+        save_safe_memory(
+            {
+                "memory_type": "search_answer",
+                "topic": "FastAPI test memory",
+                "summary": "FastAPI memory search test summary.",
+                "sources": [{"title": "FastAPI", "url": "https://example.com/fastapi", "snippet": "Framework", "source_domain": "example.com"}],
+                "confidence": "medium",
+            }
+        )
+        response = self.client.post("/memory/search", json={"query": "FastAPI", "limit": 5})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertTrue(any("FastAPI" in item.get("topic", "") for item in body["items"]))
 
     def test_sandbox_run_creates_non_executing_record(self) -> None:
         response = self.client.post(
@@ -238,3 +332,44 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         response = self.client.post("/command", json={"message": message})
         self.assertEqual(response.status_code, 200)
         return response.json()
+
+    def _command_with_search(self, message: str) -> dict:
+        with self._mock_search_results():
+            return self._command(message)
+
+    def _mock_search_results(self):
+        return patch.multiple(
+            "app.research.search_answer_engine",
+            fetch_allowed_page=Mock(
+                return_value={
+                    "opened": True,
+                    "url": "https://example.com/fastapi",
+                    "title": "FastAPI",
+                    "text": "FastAPI is described by this source as a Python web framework for building APIs.",
+                    "warning": "",
+                }
+            ),
+            SearchConnector=Mock(
+                return_value=Mock(
+                    search=Mock(
+                        return_value={
+                            "connected": True,
+                            "provider": "duckduckgo",
+                            "query": "FastAPI",
+                            "message": "Search completed",
+                            "results": [
+                                {
+                                    "title": "FastAPI",
+                                    "url": "https://example.com/fastapi",
+                                    "snippet": "FastAPI is a Python web framework for building APIs.",
+                                    "summary": "FastAPI is a Python web framework for building APIs.",
+                                    "source_domain": "example.com",
+                                    "provider": "duckduckgo",
+                                    "source_type": "duckduckgo_web_result",
+                                }
+                            ],
+                        }
+                    )
+                )
+            ),
+        )

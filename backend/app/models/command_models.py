@@ -44,11 +44,16 @@ class FinalResult(BaseModel):
     sources: list[dict[str, Any]] = Field(default_factory=list)
     facts: list[dict[str, Any]] = Field(default_factory=list)
     claims: list[dict[str, Any]] = Field(default_factory=list)
+    unknowns: list[dict[str, Any]] = Field(default_factory=list)
     timeline: dict[str, Any] | None = None
     manipulation_risk: dict[str, Any] | None = None
     future_scenarios: list[dict[str, Any]] = Field(default_factory=list)
     confidence: str | None = None
     missing_data: list[str] = Field(default_factory=list)
+    answer: str | None = None
+    search_connected: bool | None = None
+    warnings: list[str] = Field(default_factory=list)
+    memory_saved: bool | None = None
 
 
 class CommandResponse(BaseModel):

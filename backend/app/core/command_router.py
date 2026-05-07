@@ -163,7 +163,7 @@ def route_command(payload: CommandRequest) -> CommandResponse:
     questions = ["What would you like Builder Core to do?"] if needs_clarification else []
 
     intelligence_result = None
-    if message and intent in LIVE_INTELLIGENCE_INTENTS and not decision.blocked:
+    if message and should_use_live_search(message, intent) and not decision.blocked:
         intelligence_result = build_research_response(message)
 
     approval_request = None
@@ -254,12 +254,28 @@ def _build_process_steps(
     ]
 
     if intelligence_result is not None:
-        live_search_connected = bool(intelligence_result.get("live_search_connected"))
+        live_search_connected = bool(intelligence_result.get("search_connected") or intelligence_result.get("live_search_connected"))
         steps.append(
             ProcessStep(
-                name="Preparing intelligence structure",
+                name="Searching DuckDuckGo",
                 status="completed",
-                summary="Live internet/search connected" if live_search_connected else LIVE_INTERNET_NOT_CONNECTED,
+                summary="Search completed" if live_search_connected else LIVE_INTERNET_NOT_CONNECTED,
+            )
+        )
+        sources = list(intelligence_result.get("sources") or [])
+        opened_count = len([source for source in sources if isinstance(source, dict) and source.get("opened")])
+        steps.append(
+            ProcessStep(
+                name="Reading allowed sources",
+                status="completed",
+                summary=f"Opened {opened_count} allowed source page(s)" if sources else "No source pages available to open",
+            )
+        )
+        steps.append(
+            ProcessStep(
+                name="Saving safe memory",
+                status="completed",
+                summary="Memory saved" if intelligence_result.get("memory_saved") else "No memory saved",
             )
         )
 
@@ -314,8 +330,8 @@ def _build_task_status(
         current_status = "blocked"
     elif approval_request:
         current_status = "waiting_for_approval"
-    elif intelligence_result is not None and not intelligence_result.get("live_search_connected"):
-        current_status = "research_not_connected"
+    elif intelligence_result is not None and not (intelligence_result.get("search_connected") or intelligence_result.get("live_search_connected")):
+        current_status = "search_unavailable"
 
     steps = [
         {"code": "received", "status": "received", "summary": "Command received by backend.", "at": now},
@@ -325,8 +341,11 @@ def _build_task_status(
     ]
     if approval_request:
         steps.append({"code": "waiting_for_approval", "status": "waiting_for_approval", "summary": approval_request["approval_id"], "at": now})
-    if intelligence_result is not None and not intelligence_result.get("live_search_connected"):
-        steps.append({"code": "research_not_connected", "status": "research_not_connected", "summary": LIVE_INTERNET_NOT_CONNECTED, "at": now})
+    if intelligence_result is not None:
+        if intelligence_result.get("search_connected") or intelligence_result.get("live_search_connected"):
+            steps.append({"code": "search_answer", "status": "completed", "summary": "DuckDuckGo search answer prepared.", "at": now})
+        else:
+            steps.append({"code": "search_unavailable", "status": "search_unavailable", "summary": LIVE_INTERNET_NOT_CONNECTED, "at": now})
     steps.append({"code": current_status, "status": current_status, "summary": "No fake progress percentages are used.", "at": now})
 
     return {
@@ -385,6 +404,54 @@ def _approval_action_for(message: str, intent: CommandIntent) -> str:
     if "sandbox" in normalized:
         return "sandbox_execution_review"
     return f"{intent}_approval"
+
+
+def should_use_live_search(message: str, intent: CommandIntent) -> bool:
+    normalized = _normalize(message)
+    if not normalized:
+        return False
+    if intent in LIVE_INTELLIGENCE_INTENTS:
+        return True
+
+    research_markers = (
+        "latest",
+        "current",
+        "today",
+        "recent",
+        "new docs",
+        "documentation",
+        "docs",
+        "release",
+        "version",
+        "what happened",
+        "verify",
+        "source check",
+        "fact check",
+        "is this true",
+        "fake news",
+        "research",
+    )
+    if any(marker in normalized for marker in research_markers):
+        return True
+
+    question_starters = (
+        "what is",
+        "who is",
+        "when did",
+        "when is",
+        "where is",
+        "why is",
+        "how does",
+        "how do",
+        "explain",
+    )
+    if normalized.endswith("?") and any(normalized.startswith(starter) for starter in question_starters):
+        return True
+
+    if intent in {"coding", "teaching", "business", "general"} and normalized.endswith("?"):
+        return True
+
+    return False
 
 
 def _normalize(message: str) -> str:

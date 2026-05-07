@@ -20,6 +20,8 @@ try:
     from app.core.task_status_store import get_task_status as get_core_task_status
     from app.connectors.search_connector import get_search_status as get_live_search_status
     from app.intelligence.research_response_builder import build_research_response as build_core_research_response
+    from app.memory.memory_store import get_recent_memories as get_safe_recent_memories
+    from app.memory.memory_store import search_memory as search_safe_memory
     from app.models.command_models import ApprovalCreateRequest as CoreApprovalCreateRequest
     from app.models.command_models import ApprovalDecisionRequest as CoreApprovalDecisionRequest
     from app.models.command_models import CommandRequest as CoreCommandRequest
@@ -36,6 +38,8 @@ except ImportError:
     from core.task_status_store import get_task_status as get_core_task_status
     from connectors.search_connector import get_search_status as get_live_search_status
     from intelligence.research_response_builder import build_research_response as build_core_research_response
+    from memory.memory_store import get_recent_memories as get_safe_recent_memories
+    from memory.memory_store import search_memory as search_safe_memory
     from models.command_models import ApprovalCreateRequest as CoreApprovalCreateRequest
     from models.command_models import ApprovalDecisionRequest as CoreApprovalDecisionRequest
     from models.command_models import CommandRequest as CoreCommandRequest
@@ -288,6 +292,7 @@ SENSITIVE_RATE_LIMIT_PATHS = {
     "/learning-url-packs/import",
     "/learning-url-packs/seed",
     "/learning-runs",
+    "/memory/search",
 }
 
 
@@ -468,6 +473,10 @@ class MemoryEntryCreate(BaseModel):
     note: str
     category: Optional[str] = "manual_note"
     project_name: Optional[str] = "Builder Core"
+
+class SafeMemorySearchRequest(BaseModel):
+    query: str
+    limit: int = 20
 
 class CodexPromptRequest(BaseModel):
     command: str
@@ -2050,12 +2059,14 @@ def connectivity_status():
     if phase3_storage.get("local_fallback"):
         warnings.append("Cloud storage is not configured yet.")
     if not live_search.get("connected"):
-        warnings.append("Live internet/search is not connected yet.")
+        warnings.append(str(live_search.get("message") or "DuckDuckGo search is not available right now."))
     return {
         "backend": "ok",
         "frontend_expected_api_url": get_frontend_expected_api_url(),
         "cloud_storage_configured": bool(phase3_storage.get("cloud_storage_configured")),
         "live_search_connected": bool(live_search.get("connected")),
+        "search_provider": live_search.get("provider"),
+        "live_search_message": live_search.get("message"),
         "codex_direct_connection": False,
         "deployment_executor_connected": False,
         "storage_mode": phase3_storage.get("storage_mode"),
@@ -2885,6 +2896,16 @@ def automation_github_status():
 def automation_deploy_status():
     return bridge_service.build_deploy_status_payload()
 
+@app.get("/memory/recent")
+def get_safe_memory_recent(limit: int = 20):
+    return get_safe_recent_memories(limit)
+
+
+@app.post("/memory/search")
+def search_safe_memory_endpoint(payload: SafeMemorySearchRequest):
+    return search_safe_memory(payload.query, payload.limit)
+
+
 @app.get("/memory", dependencies=[Depends(require_admin)])
 def get_memory():
     return {
@@ -3126,9 +3147,10 @@ def system_status():
         "status": "ok",
         "service": "Builder Core",
         "service_id": "builder-core",
-        "phase": "phase_3_production_connection_cloud_storage_sandbox_foundation",
+        "phase": "phase_4_live_search_answer_engine_safe_memory_foundation",
         "live_search_connected": bool(live_search_connector_status.get("connected")),
         "search_provider": live_search_connector_status.get("provider"),
+        "live_search_message": live_search_connector_status.get("message"),
         "codex_direct_connection": False,
         "security_firewall": True,
         "audit_log": True,
@@ -3145,6 +3167,16 @@ def system_status():
             "cloud_storage_configured": bool(phase3_storage_status.get("cloud_storage_configured")),
             "sandbox_execution_connected": False,
             "internet_search_connected": bool(live_search_connector_status.get("connected")),
+        },
+        "phase_4_live_search_answer_engine_safe_memory_foundation": {
+            "enabled": True,
+            "command_search_answers": True,
+            "search_provider": live_search_connector_status.get("provider"),
+            "live_search_connected": bool(live_search_connector_status.get("connected")),
+            "safe_page_reader": True,
+            "safe_memory": True,
+            "memory_recent_endpoint": "/memory/recent",
+            "memory_search_endpoint": "/memory/search",
         },
         "phase_2_live_intelligence_approval_foundation": {
             "enabled": True,
