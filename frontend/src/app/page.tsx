@@ -22,29 +22,12 @@ function resolveApiBase() {
 }
 
 const API_BASE = resolveApiBase();
-
-const BACKEND_ERROR = "Could not connect to Builder Core backend. Check NEXT_PUBLIC_API_BASE_URL and backend deployment.";
-const LIVE_SEARCH_MISSING = "DuckDuckGo search is not available right now.";
-
-type ProcessStatus = "pending" | "running" | "completed" | "blocked" | "failed";
+const BACKEND_ERROR = "Could not connect to Builder Core backend.";
 
 type ProcessStep = {
   name: string;
-  status: ProcessStatus;
+  status: string;
   summary: string;
-};
-
-type Timeline = {
-  before?: unknown[];
-  during?: unknown[];
-  after?: unknown[];
-  event_count?: number;
-};
-
-type ManipulationRisk = {
-  level?: string;
-  signals?: string[];
-  explanation?: string;
 };
 
 type SourceItem = {
@@ -63,6 +46,7 @@ type EvidenceItem = {
   confidence?: string;
   source_url?: string;
   reason?: string;
+  type?: string;
 };
 
 type ApprovalRecord = {
@@ -86,20 +70,25 @@ type FinalResult = {
   facts?: EvidenceItem[];
   claims?: EvidenceItem[];
   unknowns?: EvidenceItem[];
-  timeline?: Timeline | null;
-  manipulation_risk?: ManipulationRisk | null;
-  future_scenarios?: unknown[];
   confidence?: string | null;
   missing_data?: string[];
   answer?: string | null;
   search_connected?: boolean | null;
   warnings?: string[];
   memory_saved?: boolean | null;
+  timeline?: Record<string, unknown> | null;
+  manipulation_risk?: Record<string, unknown> | null;
+  future_scenarios?: unknown[];
 };
 
 type TaskStatus = {
   command_id?: string;
   status?: string;
+  detected_intent?: string;
+  selected_agent?: string;
+  approval_required?: boolean;
+  approval_id?: string | null;
+  blocked?: boolean;
   steps?: Array<{ code?: string; status?: string; summary?: string }>;
 };
 
@@ -119,10 +108,6 @@ type SystemStatus = {
   live_search_connected?: boolean;
   search_provider?: string | null;
   live_search_message?: string | null;
-  codex_direct_connection?: boolean;
-  security_firewall?: boolean;
-  audit_log?: boolean;
-  approval_workflow?: boolean;
 };
 
 type ConnectivityStatus = {
@@ -146,100 +131,104 @@ type StorageStatus = {
   message?: string;
 };
 
-const EMPTY_STEPS: ProcessStep[] = [
-  { name: "Understanding request", status: "pending", summary: "Waiting for command" },
-  { name: "Checking security", status: "pending", summary: "Waiting for command" },
-  { name: "Selecting agent", status: "pending", summary: "Waiting for command" },
-  { name: "Preparing result", status: "pending", summary: "Waiting for command" },
-  { name: "Saving audit log", status: "pending", summary: "Waiting for command" },
-];
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  recommendedNextStep?: string;
+  loading?: boolean;
+  response?: CommandResponse;
+  taskStatus?: TaskStatus | null;
+};
 
-function statusClasses(status: ProcessStatus | string | undefined) {
-  if (status === "completed") return "border-emerald-200 bg-emerald-50 text-emerald-800";
-  if (status === "blocked" || status === "failed") return "border-red-200 bg-red-50 text-red-800";
-  if (status === "running" || status === "waiting_for_approval" || status === "research_not_connected" || status === "search_unavailable") {
-    return "border-blue-200 bg-blue-50 text-blue-800";
+type DetailSection = "sources" | "process" | "facts" | "warnings" | "memory";
+
+function makeId(prefix: string) {
+  return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function answerText(final: FinalResult) {
+  if (final.blocked) {
+    return `I cannot help with that request because ${final.summary.replace(/^Builder Core cannot help with that action\.\s*/i, "")}`;
   }
-  return "border-zinc-200 bg-zinc-100 text-zinc-600";
-}
-
-function booleanText(value: boolean | undefined) {
-  return value ? "Yes" : "No";
-}
-
-function hasItems(items?: unknown[]) {
-  return Array.isArray(items) && items.length > 0;
-}
-
-function TextList({ title, items, emptyText }: { title: string; items?: unknown[]; emptyText?: string }) {
-  if (!hasItems(items)) {
-    if (!emptyText) return null;
-    return (
-      <section className="grid gap-2">
-        <h3 className="text-sm font-semibold text-zinc-700">{title}</h3>
-        <p className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-600">{emptyText}</p>
-      </section>
-    );
+  if (final.approval_required) {
+    return `This needs approval before any action can happen. ${final.summary}`;
   }
+  return final.answer || final.summary;
+}
 
+function statusBadge(value: string, connected: boolean | undefined) {
+  const styles = connected
+    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+    : "border-zinc-200 bg-zinc-100 text-zinc-600";
+  return <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${styles}`}>{value}</span>;
+}
+
+function DetailButton({
+  active,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  children: ReactNode;
+  onClick: () => void;
+}) {
   return (
-    <section className="grid gap-2">
-      <h3 className="text-sm font-semibold text-zinc-700">{title}</h3>
-      <ul className="grid gap-2">
-        {items?.map((item, index) => (
-          <li key={`${title}-${index}`} className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
-            {typeof item === "string" ? item : JSON.stringify(item)}
-          </li>
-        ))}
-      </ul>
-    </section>
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+        active ? "border-blue-300 bg-blue-50 text-blue-800" : "border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 
-function SourceList({ sources }: { sources?: SourceItem[] }) {
-  if (!sources?.length) {
-    return <TextList title="Sources" items={[]} emptyText="No real sources returned." />;
-  }
+function EmptyDetail({ children }: { children: ReactNode }) {
+  return <p className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-600">{children}</p>;
+}
+
+function SourcesDetail({ sources }: { sources?: SourceItem[] }) {
+  if (!sources?.length) return <EmptyDetail>No sources returned.</EmptyDetail>;
 
   return (
-    <section className="grid gap-2">
-      <h3 className="text-sm font-semibold text-zinc-700">Sources</h3>
-      <ul className="grid gap-2">
-        {sources.map((source, index) => (
-          <li key={`${source.url ?? source.title}-${index}`} className="grid gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
-            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-              {source.url ? (
-                <a className="font-semibold text-blue-700 underline-offset-2 hover:underline" href={source.url} target="_blank" rel="noreferrer">
-                  {source.title || source.url}
-                </a>
-              ) : (
-                <span className="font-semibold text-zinc-900">{source.title || "Untitled source"}</span>
-              )}
-              <span className="text-xs font-medium text-zinc-500">{source.source_domain || "unknown source"}</span>
-            </div>
-            {source.snippet || source.summary ? <p className="leading-6">{source.snippet || source.summary}</p> : null}
-            <p className="text-xs text-zinc-500">Page opened: {booleanText(source.opened)}</p>
-          </li>
-        ))}
-      </ul>
-    </section>
+    <ul className="grid gap-2">
+      {sources.map((source, index) => (
+        <li key={`${source.url ?? source.title}-${index}`} className="grid gap-2 rounded-lg border border-zinc-200 bg-white p-3 text-sm">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            {source.url ? (
+              <a className="font-semibold text-blue-700 underline-offset-2 hover:underline" href={source.url} target="_blank" rel="noreferrer">
+                {source.title || source.url}
+              </a>
+            ) : (
+              <span className="font-semibold text-zinc-900">{source.title || "Untitled source"}</span>
+            )}
+            <span className="text-xs font-medium text-zinc-500">{source.source_domain || "unknown source"}</span>
+          </div>
+          {source.snippet || source.summary ? <p className="leading-6 text-zinc-700">{source.snippet || source.summary}</p> : null}
+          {source.page_excerpt ? <p className="text-xs leading-5 text-zinc-500">Excerpt: {source.page_excerpt}</p> : null}
+          <p className="text-xs text-zinc-500">Page opened: {source.opened ? "Yes" : "No"}</p>
+        </li>
+      ))}
+    </ul>
   );
 }
 
-function EvidenceList({ title, items, emptyText }: { title: string; items?: EvidenceItem[]; emptyText: string }) {
-  if (!items?.length) {
-    return <TextList title={title} items={[]} emptyText={emptyText} />;
-  }
+function EvidenceDetail({ title, items }: { title: string; items?: EvidenceItem[] }) {
+  if (!items?.length) return <EmptyDetail>No {title.toLowerCase()} returned.</EmptyDetail>;
 
   return (
     <section className="grid gap-2">
-      <h3 className="text-sm font-semibold text-zinc-700">{title}</h3>
+      <h4 className="text-xs font-semibold uppercase text-zinc-500">{title}</h4>
       <ul className="grid gap-2">
         {items.map((item, index) => (
-          <li key={`${title}-${index}`} className="grid gap-1 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
+          <li key={`${title}-${index}`} className="grid gap-1 rounded-lg border border-zinc-200 bg-white p-3 text-sm text-zinc-700">
             <p className="leading-6">{item.text ?? JSON.stringify(item)}</p>
             <div className="flex flex-wrap gap-2 text-xs text-zinc-500">
               {item.classification ? <span>{item.classification}</span> : null}
+              {item.type ? <span>{item.type}</span> : null}
               {item.confidence ? <span>confidence: {item.confidence}</span> : null}
               {item.source_url ? <a className="text-blue-700 hover:underline" href={item.source_url} target="_blank" rel="noreferrer">source</a> : null}
             </div>
@@ -251,52 +240,135 @@ function EvidenceList({ title, items, emptyText }: { title: string; items?: Evid
   );
 }
 
-function Field({ label, value }: { label: string; value: ReactNode }) {
+function ProcessDetail({ response, taskStatus }: { response: CommandResponse; taskStatus?: TaskStatus | null }) {
+  const steps = response.process_steps ?? [];
   return (
-    <div className="rounded-lg border border-zinc-200 p-3">
-      <dt className="text-xs font-semibold uppercase text-zinc-500">{label}</dt>
-      <dd className="mt-1 break-words text-sm font-medium">{value}</dd>
+    <div className="grid gap-3">
+      {steps.length ? (
+        <ol className="grid gap-2">
+          {steps.map((step) => (
+            <li key={`${response.command_id}-${step.name}`} className="grid gap-1 rounded-lg border border-zinc-200 bg-white p-3 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-zinc-900">{step.name}</span>
+                <span className="rounded-full border border-zinc-200 px-2 py-0.5 text-xs text-zinc-500">{step.status}</span>
+              </div>
+              <p className="text-zinc-600">{step.summary}</p>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <EmptyDetail>No process steps returned.</EmptyDetail>
+      )}
+      {taskStatus?.steps?.length ? (
+        <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
+          <p className="font-semibold text-zinc-900">Task status: {taskStatus.status ?? "unknown"}</p>
+          <ul className="mt-2 grid gap-1">
+            {taskStatus.steps.map((step, index) => (
+              <li key={`${step.code}-${index}`}>{step.code}: {step.summary}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function TimelineSection({ timeline }: { timeline?: Timeline | null }) {
-  if (!timeline) return null;
+function WarningsDetail({ final }: { final: FinalResult }) {
+  const warnings = final.warnings ?? [];
+  const missing = final.missing_data ?? [];
+  if (!warnings.length && !missing.length) return <EmptyDetail>No warnings or missing data returned.</EmptyDetail>;
+
   return (
-    <section className="grid gap-2">
-      <h3 className="text-sm font-semibold text-zinc-700">Timeline</h3>
-      <div className="grid gap-2 md:grid-cols-3">
-        <TextList title="Before" items={timeline.before} emptyText="No verified before-events available." />
-        <TextList title="During" items={timeline.during} emptyText="No verified during-events available." />
-        <TextList title="After" items={timeline.after} emptyText="No verified after-events available." />
-      </div>
-      <p className="text-xs text-zinc-500">Verified event count: {timeline.event_count ?? 0}</p>
-    </section>
+    <div className="grid gap-3">
+      {warnings.length ? (
+        <section className="grid gap-2">
+          <h4 className="text-xs font-semibold uppercase text-zinc-500">Warnings</h4>
+          {warnings.map((warning) => (
+            <p key={warning} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{warning}</p>
+          ))}
+        </section>
+      ) : null}
+      {missing.length ? (
+        <section className="grid gap-2">
+          <h4 className="text-xs font-semibold uppercase text-zinc-500">Missing data</h4>
+          {missing.map((item) => (
+            <p key={item} className="rounded-lg border border-zinc-200 bg-white p-3 text-sm text-zinc-700">{item}</p>
+          ))}
+        </section>
+      ) : null}
+    </div>
   );
 }
 
-function ManipulationSection({ risk }: { risk?: ManipulationRisk | null }) {
-  if (!risk) return null;
+function MemoryDetail({ final, taskStatus, commandId }: { final: FinalResult; taskStatus?: TaskStatus | null; commandId: string }) {
   return (
-    <section className="grid gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
-      <h3 className="text-sm font-semibold text-zinc-700">Manipulation risk</h3>
-      <p className="text-sm font-medium text-zinc-900">Level: {risk.level ?? "unknown"}</p>
-      <p className="text-sm leading-6 text-zinc-700">{risk.explanation ?? "Not enough evidence."}</p>
-      <TextList title="Signals" items={risk.signals} emptyText="No text-only manipulation signals detected." />
-    </section>
+    <dl className="grid gap-2 sm:grid-cols-2">
+      <Field label="Command ID" value={commandId} />
+      <Field label="Memory saved" value={final.memory_saved ? "Yes" : "No"} />
+      <Field label="Audit log" value="Saved by backend" />
+      <Field label="Task status" value={taskStatus?.status ?? "unknown"} />
+      <Field label="Intent" value={taskStatus?.detected_intent ?? final.type} />
+      <Field label="Agent" value={final.selected_agent} />
+      <Field label="Approval required" value={final.approval_required ? "Yes" : "No"} />
+      <Field label="Risk" value={final.risk_level} />
+    </dl>
+  );
+}
+
+function Field({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white p-3">
+      <dt className="text-xs font-semibold uppercase text-zinc-500">{label}</dt>
+      <dd className="mt-1 break-words text-sm font-medium text-zinc-900">{value}</dd>
+    </div>
+  );
+}
+
+function MessageDetails({ message }: { message: ChatMessage }) {
+  const [openSections, setOpenSections] = useState<DetailSection[]>([]);
+  const response = message.response;
+  const final = response?.final_result;
+  if (!response || !final) return null;
+
+  function toggle(section: DetailSection) {
+    setOpenSections((current) =>
+      current.includes(section) ? current.filter((item) => item !== section) : [...current, section],
+    );
+  }
+
+  return (
+    <div className="mt-3 grid gap-3">
+      <div className="flex flex-wrap gap-2">
+        <DetailButton active={openSections.includes("sources")} onClick={() => toggle("sources")}>Show sources</DetailButton>
+        <DetailButton active={openSections.includes("process")} onClick={() => toggle("process")}>Show process</DetailButton>
+        <DetailButton active={openSections.includes("facts")} onClick={() => toggle("facts")}>Show facts/claims</DetailButton>
+        <DetailButton active={openSections.includes("warnings")} onClick={() => toggle("warnings")}>Show warnings</DetailButton>
+        <DetailButton active={openSections.includes("memory")} onClick={() => toggle("memory")}>Show memory/status</DetailButton>
+      </div>
+
+      {openSections.includes("sources") ? <SourcesDetail sources={final.sources} /> : null}
+      {openSections.includes("process") ? <ProcessDetail response={response} taskStatus={message.taskStatus} /> : null}
+      {openSections.includes("facts") ? (
+        <div className="grid gap-3">
+          <EvidenceDetail title="Facts" items={final.facts} />
+          <EvidenceDetail title="Claims" items={final.claims} />
+          <EvidenceDetail title="Unknowns" items={final.unknowns} />
+        </div>
+      ) : null}
+      {openSections.includes("warnings") ? <WarningsDetail final={final} /> : null}
+      {openSections.includes("memory") ? <MemoryDetail final={final} taskStatus={message.taskStatus} commandId={response.command_id} /> : null}
+    </div>
   );
 }
 
 export default function Home() {
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [steps, setSteps] = useState<ProcessStep[]>(EMPTY_STEPS);
-  const [result, setResult] = useState<CommandResponse | null>(null);
-  const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
-  const [error, setError] = useState("");
+  const [chat, setChat] = useState<ChatMessage[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [connectivity, setConnectivity] = useState<ConnectivityStatus | null>(null);
   const [storageStatus, setStorageStatus] = useState<StorageStatus | null>(null);
+  const [showSystemDetails, setShowSystemDetails] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -316,7 +388,6 @@ export default function Home() {
           setConnectivity(null);
           setSystemStatus(null);
           setStorageStatus(null);
-          setError(BACKEND_ERROR);
         }
       }
     }
@@ -326,14 +397,11 @@ export default function Home() {
     };
   }, []);
 
-  const statusLine = useMemo(() => {
-    if (!connectivity && !systemStatus) return "Backend status unavailable";
-    const backend = connectivity?.backend ?? systemStatus?.status ?? "unknown";
-    const storage = storageStatus?.storage_mode ?? connectivity?.storage_mode ?? "unknown storage";
-    const provider = connectivity?.search_provider ?? systemStatus?.search_provider ?? "duckduckgo";
-    const search = connectivity?.live_search_connected ? `${provider} search connected` : `${provider} search unavailable`;
-    const codex = connectivity?.codex_direct_connection ? "Codex connected" : "Codex not directly connected";
-    return `${backend} / ${storage} storage / ${search} / ${codex}`;
+  const statusSummary = useMemo(() => {
+    const backendConnected = connectivity?.backend === "ok" || systemStatus?.status === "ok";
+    const searchConnected = Boolean(connectivity?.live_search_connected ?? systemStatus?.live_search_connected);
+    const storage = storageStatus?.storage_mode ?? connectivity?.storage_mode ?? "unknown";
+    return { backendConnected, searchConnected, storage };
   }, [connectivity, storageStatus, systemStatus]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -341,14 +409,22 @@ export default function Home() {
     const cleanMessage = message.trim();
     if (!cleanMessage || submitting) return;
 
+    const userMessage: ChatMessage = {
+      id: makeId("user"),
+      role: "user",
+      text: cleanMessage,
+    };
+    const assistantId = makeId("assistant");
+    const loadingMessage: ChatMessage = {
+      id: assistantId,
+      role: "assistant",
+      text: "Searching and preparing answer...",
+      loading: true,
+    };
+
+    setChat((current) => [...current, userMessage, loadingMessage]);
+    setMessage("");
     setSubmitting(true);
-    setError("");
-    setResult(null);
-    setTaskStatus(null);
-    setSteps([
-      { name: "Understanding request", status: "running", summary: "Sending command to backend" },
-      ...EMPTY_STEPS.slice(1),
-    ]);
 
     try {
       const response = await fetch(`${API_BASE}/command`, {
@@ -360,176 +436,127 @@ export default function Home() {
       if (!response.ok) throw new Error("Command request failed");
 
       const data: CommandResponse = await response.json();
-      setResult(data);
-      setSteps(data.process_steps);
-      setTaskStatus(data.task_status ?? null);
-      setMessage("");
+      let taskStatus = data.task_status ?? null;
+      try {
+        const taskResponse = await fetch(`${API_BASE}/tasks/${data.command_id}`);
+        if (taskResponse.ok) taskStatus = await taskResponse.json();
+      } catch {
+        taskStatus = data.task_status ?? null;
+      }
 
-      const taskResponse = await fetch(`${API_BASE}/tasks/${data.command_id}`);
-      if (taskResponse.ok) setTaskStatus(await taskResponse.json());
+      const final = data.final_result;
+      setChat((current) =>
+        current.map((item) =>
+          item.id === assistantId
+            ? {
+                id: assistantId,
+                role: "assistant",
+                text: answerText(final),
+                recommendedNextStep: final.recommended_next_step,
+                response: data,
+                taskStatus,
+              }
+            : item,
+        ),
+      );
     } catch {
-      setError(BACKEND_ERROR);
-      setSteps([
-        { name: "Understanding request", status: "failed", summary: "Backend command endpoint unavailable" },
-        { name: "Checking security", status: "pending", summary: "Not run" },
-        { name: "Selecting agent", status: "pending", summary: "Not run" },
-        { name: "Preparing result", status: "pending", summary: "Not run" },
-        { name: "Saving audit log", status: "pending", summary: "Not run" },
-      ]);
+      setChat((current) =>
+        current.map((item) =>
+          item.id === assistantId
+            ? {
+                id: assistantId,
+                role: "assistant",
+                text: BACKEND_ERROR,
+              }
+            : item,
+        ),
+      );
     } finally {
       setSubmitting(false);
     }
   }
 
-  const final = result?.final_result;
-  const liveSearchMissing = Boolean(
-    final?.summary?.includes(LIVE_SEARCH_MISSING) ||
-      final?.answer?.includes(LIVE_SEARCH_MISSING) ||
-      final?.warnings?.some((item) => item.includes(LIVE_SEARCH_MISSING)) ||
-      final?.missing_data?.some((item) => item.toLowerCase().includes("live search")) ||
-      final?.missing_data?.some((item) => item.toLowerCase().includes("duckduckgo")) ||
-      connectivity?.warnings?.some((item) => item.includes(LIVE_SEARCH_MISSING)),
-  );
-
   return (
-    <main className="min-h-screen bg-zinc-50 px-4 py-6 text-zinc-950 sm:px-6">
-      <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-5xl flex-col gap-5">
-        <header className="flex flex-col gap-2 border-b border-zinc-200 pb-4 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold uppercase text-blue-700">Builder Core</p>
-            <h1 className="text-2xl font-semibold tracking-normal">Live Search Answer Engine</h1>
+    <main className="min-h-screen bg-zinc-50 px-4 py-5 text-zinc-950 sm:px-6">
+      <div className="mx-auto flex min-h-[calc(100vh-2.5rem)] max-w-4xl flex-col gap-4">
+        <header className="grid gap-3 border-b border-zinc-200 pb-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase text-blue-700">Builder Core</p>
+              <h1 className="text-2xl font-semibold tracking-normal">Command Chat</h1>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {statusBadge(`Backend: ${statusSummary.backendConnected ? "connected" : "unavailable"}`, statusSummary.backendConnected)}
+              {statusBadge(`Search: ${statusSummary.searchConnected ? "connected" : "unavailable"}`, statusSummary.searchConnected)}
+              {statusBadge(`Storage: ${statusSummary.storage}`, statusSummary.storage !== "unknown")}
+            </div>
           </div>
-          <p className="text-sm text-zinc-600">{statusLine}</p>
+
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowSystemDetails((value) => !value)}
+              className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:border-zinc-300"
+            >
+              Show system details
+            </button>
+          </div>
+
+          {showSystemDetails ? (
+            <dl className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              <Field label="API URL" value={API_BASE} />
+              <Field label="Backend" value={connectivity?.backend ?? systemStatus?.status ?? "unavailable"} />
+              <Field label="Search provider" value={connectivity?.search_provider ?? systemStatus?.search_provider ?? "duckduckgo"} />
+              <Field label="Search message" value={connectivity?.live_search_message ?? systemStatus?.live_search_message ?? "unknown"} />
+              <Field label="Storage mode" value={storageStatus?.storage_mode ?? connectivity?.storage_mode ?? "unknown"} />
+              <Field label="Cloud storage" value={storageStatus?.cloud_storage_configured || connectivity?.cloud_storage_configured ? "configured" : "not configured"} />
+            </dl>
+          ) : null}
         </header>
 
-        <section className="grid gap-2 rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
-          <div className="grid gap-3 sm:grid-cols-4">
-            <Field label="Backend" value={connectivity?.backend ?? "unavailable"} />
-            <Field label="API URL" value={API_BASE} />
-            <Field label="Storage" value={`${storageStatus?.storage_mode ?? connectivity?.storage_mode ?? "unknown"}${storageStatus?.local_fallback ? " fallback" : ""}`} />
-            <Field label="Search" value={`${connectivity?.search_provider ?? systemStatus?.search_provider ?? "duckduckgo"} / ${connectivity?.live_search_connected ? "connected" : "unavailable"}`} />
-          </div>
-          {connectivity?.live_search_message ? <p className="text-sm text-zinc-600">{connectivity.live_search_message}</p> : null}
-          {storageStatus?.message ? <p className="text-sm text-zinc-600">{storageStatus.message}</p> : null}
-          {connectivity?.warnings?.map((warning) => (
-            <p key={warning} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">
-              {warning}
-            </p>
+        <section className="flex min-h-[22rem] flex-1 flex-col gap-3 overflow-y-auto rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
+          {chat.length === 0 ? (
+            <div className="my-auto grid gap-2 text-center">
+              <h2 className="text-lg font-semibold text-zinc-900">Ask Builder Core anything.</h2>
+              <p className="text-sm text-zinc-500">Answers appear here as a normal chat. Sources and process details stay tucked away until you ask for them.</p>
+            </div>
+          ) : null}
+
+          {chat.map((item) => (
+            <article key={item.id} className={`flex ${item.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div
+                className={`max-w-[min(42rem,92%)] rounded-2xl px-4 py-3 shadow-sm ${
+                  item.role === "user"
+                    ? "rounded-br-md bg-blue-700 text-white"
+                    : "rounded-bl-md border border-zinc-200 bg-zinc-50 text-zinc-900"
+                }`}
+              >
+                <p className="whitespace-pre-wrap text-sm leading-6">{item.text}</p>
+                {item.loading ? <p className="mt-2 text-xs text-zinc-500">Working...</p> : null}
+                {item.recommendedNextStep ? (
+                  <p className="mt-2 border-t border-zinc-200 pt-2 text-xs leading-5 text-zinc-500">{item.recommendedNextStep}</p>
+                ) : null}
+                <MessageDetails message={item} />
+              </div>
+            </article>
           ))}
         </section>
 
-        <form onSubmit={handleSubmit} className="grid gap-3 rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
-          <label htmlFor="builder-command" className="text-sm font-medium text-zinc-700">Command</label>
+        <form onSubmit={handleSubmit} className="grid gap-3 rounded-lg border border-zinc-200 bg-white p-3 shadow-sm sm:grid-cols-[1fr,auto]">
           <textarea
-            id="builder-command"
             value={message}
             onChange={(event) => setMessage(event.target.value)}
             placeholder="Ask Builder Core anything..."
-            className="min-h-32 resize-y rounded-lg border border-zinc-300 bg-white px-3 py-3 text-base outline-none transition focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+            className="min-h-20 resize-y rounded-lg border border-zinc-300 bg-white px-3 py-3 text-base outline-none transition focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
           />
-          <div className="flex justify-end">
-            <button
-              type="submit"
-              disabled={submitting || !message.trim()}
-              className="rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-zinc-300 disabled:text-zinc-600"
-            >
-              Run
-            </button>
-          </div>
+          <button
+            type="submit"
+            disabled={submitting || !message.trim()}
+            className="h-fit rounded-lg bg-blue-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-zinc-300 disabled:text-zinc-600"
+          >
+            Send
+          </button>
         </form>
-
-        <section className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold">Process</h2>
-            {result ? <span className="text-xs text-zinc-500">{result.command_id}</span> : null}
-          </div>
-          <ol className="grid gap-2">
-            {steps.map((step) => (
-              <li key={step.name} className="grid gap-2 rounded-lg border border-zinc-200 p-3 sm:grid-cols-[12rem,8rem,1fr] sm:items-center">
-                <span className="font-medium text-zinc-900">{step.name}</span>
-                <span className={`w-fit rounded-md border px-2 py-1 text-xs font-semibold uppercase ${statusClasses(step.status)}`}>
-                  {step.status}
-                </span>
-                <span className="text-sm text-zinc-600">{step.summary}</span>
-              </li>
-            ))}
-          </ol>
-          {taskStatus ? (
-            <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
-              <p className="text-sm font-semibold text-zinc-800">Latest task status: {taskStatus.status ?? "unknown"}</p>
-              <ul className="mt-2 grid gap-1 text-sm text-zinc-600">
-                {taskStatus.steps?.map((step, index) => (
-                  <li key={`${step.code}-${index}`}>{step.code}: {step.summary}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-        </section>
-
-        <section className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
-          <h2 className="mb-3 text-lg font-semibold">Final Result</h2>
-          {error ? <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p> : null}
-
-          {final ? (
-            <div className="grid gap-4">
-              {liveSearchMissing ? (
-                <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">
-                  {LIVE_SEARCH_MISSING}
-                </p>
-              ) : null}
-
-              <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <Field label="Type" value={final.type} />
-                <Field label="Selected agent" value={final.selected_agent} />
-                <Field label="Risk level" value={final.risk_level} />
-                <Field label="Approval required" value={booleanText(final.approval_required)} />
-                <Field label="Blocked" value={booleanText(final.blocked)} />
-                <Field label="Search connected" value={final.search_connected === null || final.search_connected === undefined ? "Not requested" : booleanText(final.search_connected)} />
-                <Field label="Memory saved" value={final.memory_saved === null || final.memory_saved === undefined ? "No" : booleanText(final.memory_saved)} />
-                <Field label="Confidence" value={final.confidence ?? "not rated"} />
-              </dl>
-
-              {final.approval_request ? (
-                <section className="grid gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
-                  <h3 className="text-sm font-semibold text-amber-950">Approval required</h3>
-                  <p className="text-sm text-amber-900">Approval ID: {final.approval_request.approval_id}</p>
-                  <p className="text-sm text-amber-900">Action: {final.approval_request.action}</p>
-                  <p className="text-sm text-amber-900">Status: {final.approval_request.status}</p>
-                  <p className="text-sm text-amber-900">No action has been executed.</p>
-                </section>
-              ) : null}
-
-              <div className="grid gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold text-zinc-700">Answer</h3>
-                  <p className="mt-1 text-sm leading-6 text-zinc-700">{final.answer ?? final.summary}</p>
-                </div>
-                {final.answer && final.answer !== final.summary ? (
-                  <div>
-                    <h3 className="text-sm font-semibold text-zinc-700">Summary</h3>
-                    <p className="mt-1 text-sm leading-6 text-zinc-700">{final.summary}</p>
-                  </div>
-                ) : null}
-                <div>
-                  <h3 className="text-sm font-semibold text-zinc-700">Recommended next step</h3>
-                  <p className="mt-1 text-sm leading-6 text-zinc-700">{final.recommended_next_step}</p>
-                </div>
-              </div>
-
-              <SourceList sources={final.sources} />
-              <EvidenceList title="Facts" items={final.facts} emptyText="No verified facts returned." />
-              <EvidenceList title="Claims" items={final.claims} emptyText="No claims verified from sources." />
-              <EvidenceList title="Unknowns" items={final.unknowns} emptyText="No unknowns reported." />
-              <TimelineSection timeline={final.timeline} />
-              <ManipulationSection risk={final.manipulation_risk} />
-              <TextList title="Warnings" items={final.warnings} />
-              <TextList title="Missing data" items={final.missing_data} />
-              <TextList title="Future scenarios" items={final.future_scenarios} />
-            </div>
-          ) : (
-            !error && <p className="text-sm text-zinc-500">No result yet.</p>
-          )}
-        </section>
       </div>
     </main>
   );

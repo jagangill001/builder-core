@@ -217,6 +217,69 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertGreaterEqual(len(body["sources"]), 1)
         self.assertIn("answer", body)
 
+    def test_search_answer_prefers_primary_sources_and_answers_directly(self) -> None:
+        from app.research.search_answer_engine import build_search_answer
+
+        with patch("app.research.search_answer_engine.SearchConnector") as connector:
+            connector.return_value.search.return_value = {
+                "connected": True,
+                "provider": "duckduckgo",
+                "query": "current government in Canada",
+                "message": "Search completed",
+                "results": [
+                    {
+                        "title": "Canada - Wikipedia",
+                        "url": "https://en.wikipedia.org/wiki/Canada",
+                        "snippet": "Canada has a federal parliamentary system.",
+                        "source_domain": "en.wikipedia.org",
+                    },
+                    {
+                        "title": "Prime Minister of Canada",
+                        "url": "https://www.pm.gc.ca/en",
+                        "snippet": "Prime Minister Mark Carney leads the Liberal Party government.",
+                        "source_domain": "pm.gc.ca",
+                    },
+                    {
+                        "title": "Canada politics report",
+                        "url": "https://www.cbc.ca/news/politics/example",
+                        "snippet": "The Liberal Party forms the federal government.",
+                        "source_domain": "cbc.ca",
+                    },
+                ],
+            }
+            with patch(
+                "app.research.search_answer_engine.fetch_allowed_page",
+                return_value={
+                    "opened": True,
+                    "url": "https://www.pm.gc.ca/en",
+                    "title": "Prime Minister of Canada",
+                    "text": "Prime Minister Mark Carney leads the Liberal Party government.",
+                    "warning": "",
+                },
+            ):
+                result = build_search_answer("current government in Canada", save_memory=False)
+
+        self.assertEqual(result["sources"][0]["source_domain"], "pm.gc.ca")
+        self.assertEqual(
+            result["answer"],
+            "The current federal government of Canada is led by Prime Minister Mark Carney and the Liberal Party.",
+        )
+        self.assertNotIn("Based on DuckDuckGo results", result["answer"])
+
+    def test_content_extractor_removes_navigation_boilerplate(self) -> None:
+        from app.connectors.content_extractor import extract_readable_content
+
+        html = """
+        <html><body>
+          <nav>Jump to content Main menu Donate Create account Log in</nav>
+          <main><h1>Useful title</h1><p>Prime Minister Mark Carney leads the Liberal Party government.</p></main>
+        </body></html>
+        """
+        result = extract_readable_content(html)
+        self.assertIn("Prime Minister Mark Carney", result["text"])
+        self.assertNotIn("Jump to content", result["text"])
+        self.assertNotIn("Create account", result["text"])
+
     def test_memory_filter_redacts_secrets(self) -> None:
         from app.memory.memory_filter import redact_sensitive_text
 

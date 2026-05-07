@@ -9,6 +9,24 @@ from app.memory.memory_store import save_safe_memory
 
 MAX_SOURCES = 5
 MAX_PAGES_TO_OPEN = 3
+PRIMARY_SOURCE_DOMAINS = {
+    "canada.ca",
+    "pm.gc.ca",
+    "parl.ca",
+    "ourcommons.ca",
+    "gg.ca",
+    "elections.ca",
+}
+REPUTABLE_NEWS_DOMAINS = {
+    "cbc.ca",
+    "ctvnews.ca",
+    "globalnews.ca",
+    "reuters.com",
+    "apnews.com",
+    "bbc.com",
+    "thecanadianpressnews.ca",
+}
+WIKIPEDIA_DOMAINS = {"wikipedia.org", "en.wikipedia.org"}
 
 
 def build_search_answer(query: str, *, save_memory: bool = True) -> dict[str, Any]:
@@ -41,8 +59,8 @@ def build_search_answer(query: str, *, save_memory: bool = True) -> dict[str, An
             "recommended_next_step": "Try again later or verify the question with trusted sources outside Builder Core.",
         }
 
-    raw_sources = list(connector_result.get("results") or [])[:MAX_SOURCES]
-    sources = [_source_record(source) for source in raw_sources if isinstance(source, dict)]
+    raw_sources = list(connector_result.get("results") or [])
+    sources = _rank_sources([_source_record(source) for source in raw_sources if isinstance(source, dict)])[:MAX_SOURCES]
     page_results = _open_allowed_pages(sources)
     warnings.extend(page_results["warnings"])
 
@@ -50,7 +68,7 @@ def build_search_answer(query: str, *, save_memory: bool = True) -> dict[str, An
         opened = page_results["by_url"].get(source["url"])
         if opened:
             source["opened"] = bool(opened.get("opened"))
-            source["page_excerpt"] = _truncate(str(opened.get("text") or ""), 500)
+            source["page_excerpt"] = _truncate(_clean_evidence_text(str(opened.get("text") or "")), 500)
             page_title = str(opened.get("title") or "").strip()
             if page_title and not source["title"]:
                 source["title"] = page_title
@@ -115,7 +133,7 @@ def _open_allowed_pages(sources: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _source_record(source: dict[str, Any]) -> dict[str, Any]:
-    snippet = _truncate(str(source.get("snippet") or source.get("summary") or ""), 1000)
+    snippet = _truncate(_clean_evidence_text(str(source.get("snippet") or source.get("summary") or "")), 1000)
     return {
         "title": _truncate(str(source.get("title") or ""), 240),
         "url": str(source.get("url") or "").strip(),
@@ -126,6 +144,28 @@ def _source_record(source: dict[str, Any]) -> dict[str, Any]:
         "source_type": str(source.get("source_type") or "duckduckgo_web_result"),
         "citation_candidate": bool(source.get("url") and (source.get("title") or snippet)),
     }
+
+
+def _rank_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ranked = []
+    for index, source in enumerate(sources):
+        ranked.append((_source_priority(str(source.get("source_domain") or "")), index, source))
+    return [source for _, _, source in sorted(ranked, key=lambda item: (item[0], item[1]))]
+
+
+def _source_priority(domain: str) -> int:
+    clean_domain = domain.lower().removeprefix("www.")
+    if _domain_matches(clean_domain, PRIMARY_SOURCE_DOMAINS):
+        return 0
+    if _domain_matches(clean_domain, REPUTABLE_NEWS_DOMAINS):
+        return 1
+    if _domain_matches(clean_domain, WIKIPEDIA_DOMAINS):
+        return 3
+    return 2
+
+
+def _domain_matches(domain: str, candidates: set[str]) -> bool:
+    return any(domain == candidate or domain.endswith(f".{candidate}") for candidate in candidates)
 
 
 def _build_facts(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -148,7 +188,7 @@ def _build_facts(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _build_claims(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     claims: list[dict[str, Any]] = []
     for source in sources:
-        evidence = str(source.get("page_excerpt") or source.get("snippet") or "").strip()
+        evidence = _clean_evidence_text(str(source.get("page_excerpt") or source.get("snippet") or "").strip())
         if not evidence:
             continue
         claims.append(
@@ -194,23 +234,101 @@ def _build_answer(query: str, sources: list[dict[str, Any]]) -> str:
     if not sources:
         return "DuckDuckGo search returned no usable sources for this query. Builder Core did not invent an answer."
 
+    direct_answer = _direct_answer(query, sources)
+    if direct_answer:
+        return direct_answer
+
     evidence_lines = []
     for index, source in enumerate(sources[:3], start=1):
         title = str(source.get("title") or "Untitled source").strip()
         domain = str(source.get("source_domain") or "unknown source").strip()
-        evidence = str(source.get("page_excerpt") or source.get("snippet") or "").strip()
+        evidence = _clean_evidence_text(str(source.get("page_excerpt") or source.get("snippet") or "").strip())
         if evidence:
             evidence_lines.append(f"{index}. {title} ({domain}): {_truncate(evidence, 420)}")
         else:
             evidence_lines.append(f"{index}. {title} ({domain})")
 
-    basis = " ".join(evidence_lines)
-    if any(source.get("opened") for source in sources):
-        qualifier = "Based on DuckDuckGo results and allowed source page excerpts"
-    else:
-        qualifier = "Based on DuckDuckGo result snippets and source metadata"
+    return f"The strongest supported answer is: {' '.join(evidence_lines)}"
 
-    return f"{qualifier} for '{query}', the strongest supported answer is: {basis}"
+
+def _direct_answer(query: str, sources: list[dict[str, Any]]) -> str:
+    normalized_query = query.lower()
+    if "current government" in normalized_query and "canada" in normalized_query:
+        prime_minister = _find_prime_minister(sources)
+        party = _find_party(sources)
+        if prime_minister and party:
+            return f"The current federal government of Canada is led by Prime Minister {prime_minister} and the {party}."
+        if prime_minister:
+            return f"The current federal government of Canada is led by Prime Minister {prime_minister}."
+
+    first_claim = _best_evidence_sentence(sources)
+    if first_claim:
+        return first_claim
+    return ""
+
+
+def _find_prime_minister(sources: list[dict[str, Any]]) -> str:
+    for text in _evidence_texts(sources):
+        patterns = (
+            "Prime Minister ",
+            "prime minister ",
+            "The Right Honourable ",
+        )
+        for pattern in patterns:
+            position = text.find(pattern)
+            if position < 0:
+                continue
+            candidate = text[position + len(pattern) : position + len(pattern) + 80]
+            name = _clean_name(candidate)
+            if name:
+                return name
+    return ""
+
+
+def _find_party(sources: list[dict[str, Any]]) -> str:
+    for text in _evidence_texts(sources):
+        lowered = text.lower()
+        if "liberal party" in lowered or "liberal government" in lowered:
+            return "Liberal Party"
+        if "conservative party" in lowered or "conservative government" in lowered:
+            return "Conservative Party"
+        if "new democratic party" in lowered or "ndp" in lowered:
+            return "New Democratic Party"
+    return ""
+
+
+def _clean_name(text: str) -> str:
+    words = []
+    for token in text.replace(",", " ").replace(".", " ").split():
+        clean = "".join(ch for ch in token if ch.isalpha() or ch in {"-", "'"})
+        if not clean:
+            break
+        if clean.lower() in {"of", "and", "the", "canada", "minister", "prime"}:
+            break
+        if not clean[0].isupper():
+            break
+        words.append(clean)
+        if len(words) >= 3:
+            break
+    return " ".join(words[:3]).strip()
+
+
+def _best_evidence_sentence(sources: list[dict[str, Any]]) -> str:
+    for text in _evidence_texts(sources):
+        for sentence in text.split(". "):
+            clean = _truncate(sentence.strip(" ."), 420)
+            if len(clean) > 40:
+                return f"{clean}."
+    return ""
+
+
+def _evidence_texts(sources: list[dict[str, Any]]) -> list[str]:
+    texts = []
+    for source in sources:
+        text = _clean_evidence_text(str(source.get("page_excerpt") or source.get("snippet") or ""))
+        if text:
+            texts.append(text)
+    return texts
 
 
 def _confidence(sources: list[dict[str, Any]]) -> str:
@@ -227,3 +345,21 @@ def _truncate(text: str, max_chars: int) -> str:
     if len(clean) <= max_chars:
         return clean
     return clean[: max_chars - 3].rstrip() + "..."
+
+
+def _clean_evidence_text(text: str) -> str:
+    clean = " ".join((text or "").split())
+    boilerplate = (
+        "Jump to content",
+        "Main menu",
+        "Donate",
+        "Create account",
+        "Log in",
+        "Contents",
+        "Navigation",
+        "Appearance",
+        "Personal tools",
+    )
+    for phrase in boilerplate:
+        clean = clean.replace(phrase, " ")
+    return " ".join(clean.split())
