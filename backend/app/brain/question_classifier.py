@@ -4,12 +4,11 @@ from typing import Literal
 
 from app.models.command_models import CommandIntent
 
-QuestionMode = Literal["clarify", "direct_answer", "live_search", "weather", "news", "general_chat"]
+QuestionMode = Literal["clarify", "date_time", "direct_answer", "live_search", "weather", "news", "general_chat"]
 
 LIVE_MARKERS = (
     "current",
     "latest",
-    "today",
     "tonight",
     "now",
     "recent",
@@ -33,6 +32,33 @@ LIVE_MARKERS = (
     "what happened",
 )
 
+DATE_TIME_MARKERS = (
+    "date today",
+    "today's date",
+    "todays date",
+    "what date is it",
+    "current date",
+    "time today",
+    "current time",
+    "what time is it",
+)
+OFFICE_HOLDER_MARKERS = (
+    "prime minister of",
+    "president of",
+    "current president",
+    "current prime minister",
+    "current government",
+    "who is the ceo of",
+    "who is ceo of",
+    "ceo of",
+    "who is the mayor of",
+    "who is mayor of",
+    "mayor of",
+    "who is the governor of",
+    "who is governor of",
+    "governor of",
+    "current leader of",
+)
 WEATHER_MARKERS = ("weather", "temperature", "forecast", "rain today", "snow today")
 NEWS_MARKERS = ("news", "headline", "headlines", "breaking")
 DIRECT_STARTERS = (
@@ -53,11 +79,17 @@ def classify_question(message: str, intent: CommandIntent) -> dict[str, object]:
     if not normalized:
         return {"mode": "clarify", "live_search_needed": False, "reason": "empty_message"}
 
+    if any(marker in normalized for marker in DATE_TIME_MARKERS):
+        return {"mode": "date_time", "live_search_needed": False, "reason": "server_date_time"}
+
     if any(marker in normalized for marker in WEATHER_MARKERS):
         return {"mode": "weather", "live_search_needed": True, "reason": "weather_query"}
 
     if any(marker in normalized for marker in NEWS_MARKERS):
         return {"mode": "news", "live_search_needed": True, "reason": "news_query"}
+
+    if any(marker in normalized for marker in OFFICE_HOLDER_MARKERS):
+        return {"mode": "live_search", "live_search_needed": True, "reason": "current_office_holder"}
 
     if intent in {"research", "decision_analysis"}:
         return {"mode": "live_search", "live_search_needed": True, "reason": f"{intent}_intent"}

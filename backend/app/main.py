@@ -3181,6 +3181,7 @@ def system_status():
         "phase_5_better_answer_brain": {
             "enabled": True,
             "direct_answers": True,
+            "app_timezone": os.getenv("APP_TIMEZONE", "America/Toronto"),
             "live_search_routing": True,
             "weather_fallback": "duckduckgo" if not os.getenv("WEATHER_PROVIDER", "").strip() else os.getenv("WEATHER_PROVIDER", "").strip(),
             "news_fallback": "duckduckgo" if not os.getenv("NEWS_PROVIDER", "").strip() else os.getenv("NEWS_PROVIDER", "").strip(),

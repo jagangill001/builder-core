@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+from datetime import datetime, timezone, tzinfo
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.brain.context_manager import normalize_history
 from app.brain.followup_questioner import followup_questions
@@ -16,8 +19,9 @@ def build_brain_answer(message: str, intent: CommandIntent, history: list[dict[s
     clean_message = " ".join((message or "").split())
     normalized_history = normalize_history(history or [])
     clarification_questions = followup_questions(clean_message, normalized_history)
-    memory_recall = recall_relevant_memories(clean_message, limit=3)
-    recalled_items = list(memory_recall.get("items") or [])
+    classification = classify_question(clean_message, intent)
+    mode = str(classification.get("mode") or "general_chat")
+    recalled_items = [] if mode == "date_time" else _recalled_memory_items(clean_message)
 
     if clarification_questions:
         answer = clarification_questions[0]
@@ -26,22 +30,21 @@ def build_brain_answer(message: str, intent: CommandIntent, history: list[dict[s
             answer=answer,
             answer_mode="clarify",
             confidence="medium",
-            facts=_memory_facts(recalled_items),
+            facts=[],
             warnings=[],
             memory_recalled=bool(recalled_items),
             recommended_next_step="Reply with the missing detail so Builder Core can answer or act safely.",
             extra={"needs_clarification": True, "questions": clarification_questions},
         )
 
-    classification = classify_question(clean_message, intent)
-    mode = str(classification.get("mode") or "general_chat")
-
+    if mode == "date_time":
+        return _date_time_result(clean_message)
     if mode == "weather":
         return _with_memory_context(answer_weather_query(clean_message), recalled_items, "weather")
     if mode == "news":
         return _with_memory_context(answer_news_query(clean_message), recalled_items, "news")
     if mode == "live_search":
-        result = build_search_answer(clean_message)
+        result = build_search_answer(_live_search_query(clean_message))
         result["answer_mode"] = "live_search"
         result["used_live_search"] = True
         return _with_memory_context(result, recalled_items, "live_search")
@@ -53,7 +56,7 @@ def build_brain_answer(message: str, intent: CommandIntent, history: list[dict[s
 
 def _direct_answer_result(query: str, intent: CommandIntent, recalled_items: list[dict[str, Any]]) -> dict[str, Any]:
     answer = _stable_answer(query, intent)
-    facts = _direct_facts(query, answer) + _memory_facts(recalled_items)
+    facts = _direct_facts(query, answer)
     return _base_result(
         query=query,
         answer=answer,
@@ -63,6 +66,7 @@ def _direct_answer_result(query: str, intent: CommandIntent, recalled_items: lis
         warnings=[],
         memory_recalled=bool(recalled_items),
         recommended_next_step="Ask for examples, a step-by-step walkthrough, or a live source check if you need current details.",
+        extra={"memory_notes": _memory_facts(recalled_items), "recalled_memory_count": len(recalled_items)},
     )
 
 
@@ -89,10 +93,39 @@ def _general_chat_result(
         answer=answer,
         answer_mode="general_chat",
         confidence="medium" if history else "low",
-        facts=_memory_facts(recalled_items),
+        facts=[],
         warnings=[],
         memory_recalled=bool(recalled_items),
         recommended_next_step="Send the specific question or task.",
+        extra={"memory_notes": _memory_facts(recalled_items), "recalled_memory_count": len(recalled_items)},
+    )
+
+
+def _date_time_result(query: str) -> dict[str, Any]:
+    now = datetime.now(_app_timezone())
+    normalized = _normalize(query)
+    date_label = f"{now.strftime('%A')}, {now.strftime('%B')} {now.day}, {now.year}"
+    if "time" in normalized and "date" not in normalized:
+        hour = now.hour % 12 or 12
+        answer = f"The current time is {hour}:{now.minute:02d} {now.strftime('%p')} on {date_label}."
+    else:
+        answer = f"Today is {date_label}."
+    return _base_result(
+        query=query,
+        answer=answer,
+        answer_mode="date_time",
+        confidence="high",
+        facts=[
+            {
+                "text": answer,
+                "confidence": "high",
+                "type": "server_date_time",
+                "reason": "Answered from backend/server date and APP_TIMEZONE.",
+            }
+        ],
+        warnings=[],
+        memory_recalled=False,
+        recommended_next_step="Ask for current events only when you need live web verification.",
     )
 
 
@@ -176,8 +209,8 @@ def _memory_facts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {
                 "text": summary,
                 "confidence": str(item.get("confidence") or "low"),
-                "type": "memory_recall",
-                "reason": "Relevant safe memory was recalled before answering.",
+                "type": "memory_note",
+                "reason": "Relevant safe memory was recalled as context, not as verified fact.",
             }
         )
     return facts
@@ -185,13 +218,14 @@ def _memory_facts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _with_memory_context(result: dict[str, Any], recalled_items: list[dict[str, Any]], mode: str) -> dict[str, Any]:
     facts = list(result.get("facts") or [])
-    facts.extend(_memory_facts(recalled_items))
+    memory_notes = _memory_facts(recalled_items)
     warnings = [str(item) for item in result.get("warnings", []) if item]
     if recalled_items:
         warnings.append("Relevant safe memory was recalled before answering.")
     return {
         **result,
         "facts": facts,
+        "memory_notes": memory_notes,
         "warnings": list(dict.fromkeys(warnings)),
         "answer_mode": result.get("answer_mode") or mode,
         "memory_recalled": bool(recalled_items),
@@ -226,6 +260,8 @@ def _base_result(
         "warnings": warnings,
         "memory_saved": False,
         "memory_recalled": memory_recalled,
+        "recalled_memory_count": 0,
+        "memory_notes": [],
         "answer_mode": answer_mode,
         "used_live_search": False,
         "recommended_next_step": recommended_next_step,
@@ -240,6 +276,30 @@ def _subject_from_question(normalized: str) -> str:
         if normalized.startswith(prefix):
             return normalized[len(prefix) :].strip(" ?.")
     return ""
+
+
+def _live_search_query(query: str) -> str:
+    normalized = _normalize(query)
+    if "prime minister of india" in normalized:
+        return "current Prime Minister of India official site:pmindia.gov.in OR site:india.gov.in OR site:pib.gov.in"
+    if "current government" in normalized and "canada" in normalized:
+        return "site:pm.gc.ca Prime Minister of Canada OR site:canada.ca Government of Canada Prime Minister OR site:ourcommons.ca party standings Canada"
+    if "prime minister of canada" in normalized:
+        return "site:pm.gc.ca Prime Minister of Canada OR site:canada.ca Prime Minister"
+    return query
+
+
+def _recalled_memory_items(query: str) -> list[dict[str, Any]]:
+    memory_recall = recall_relevant_memories(query, limit=3)
+    return list(memory_recall.get("items") or [])
+
+
+def _app_timezone() -> tzinfo:
+    configured = os.getenv("APP_TIMEZONE", "America/Toronto").strip() or "America/Toronto"
+    try:
+        return ZoneInfo(configured)
+    except ZoneInfoNotFoundError:
+        return datetime.now().astimezone().tzinfo or timezone.utc
 
 
 def _normalize(message: str) -> str:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import re
 from typing import Any
 
 from app.connectors.page_fetcher import fetch_allowed_page
@@ -16,6 +17,10 @@ PRIMARY_SOURCE_DOMAINS = {
     "ourcommons.ca",
     "gg.ca",
     "elections.ca",
+    "pmindia.gov.in",
+    "india.gov.in",
+    "pib.gov.in",
+    "parliamentofindia.nic.in",
 }
 OFFICIAL_SOURCE_DOMAINS = {
     "fastapi.tiangolo.com",
@@ -269,13 +274,18 @@ def _build_answer(query: str, sources: list[dict[str, Any]]) -> str:
 
 def _direct_answer(query: str, sources: list[dict[str, Any]]) -> str:
     normalized_query = query.lower()
-    if "current government" in normalized_query and "canada" in normalized_query:
+    if "prime minister" in normalized_query and "india" in normalized_query:
+        prime_minister = _find_office_holder(sources, "Prime Minister", "India")
+        if prime_minister:
+            return f"The current Prime Minister of India is {prime_minister}. Sources checked: {_source_domains_label(sources)}."
+
+    if ("current government" in normalized_query or "government of canada" in normalized_query or "prime minister of canada" in normalized_query) and "canada" in normalized_query:
         prime_minister = _find_prime_minister(sources)
         party = _find_party(sources)
         if prime_minister and party:
-            return f"The current federal government of Canada is led by Prime Minister {prime_minister} and the {party}."
+            return f"The current federal government of Canada is led by Prime Minister {prime_minister} and the {party}. Sources checked: {_source_domains_label(sources)}."
         if prime_minister:
-            return f"The current federal government of Canada is led by Prime Minister {prime_minister}."
+            return f"The current federal government of Canada is led by Prime Minister {prime_minister}. Sources checked: {_source_domains_label(sources)}."
 
     first_claim = _best_evidence_sentence(sources)
     if first_claim:
@@ -297,6 +307,24 @@ def _find_prime_minister(sources: list[dict[str, Any]]) -> str:
             candidate = text[position + len(pattern) : position + len(pattern) + 80]
             name = _clean_name(candidate)
             if name:
+                return name
+    return ""
+
+
+def _find_office_holder(sources: list[dict[str, Any]], office: str, country: str) -> str:
+    office_pattern = re.escape(office)
+    country_pattern = re.escape(country)
+    patterns = (
+        rf"{office_pattern}\s+(?:Shri\s+|Sri\s+|Mr\.?\s+|Ms\.?\s+|The Right Honourable\s+)?([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){{0,3}})",
+        rf"([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){{1,3}})\s+(?:is|serves as|has been)\s+(?:the\s+)?(?:current\s+)?{office_pattern}(?:\s+of\s+{country_pattern})?",
+    )
+    for text in _evidence_texts(sources):
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            name = _clean_name(match.group(1))
+            if name and name.lower() not in {"india", "canada", "official website"}:
                 return name
     return ""
 
@@ -349,11 +377,25 @@ def _evidence_texts(sources: list[dict[str, Any]]) -> list[str]:
 
 def _confidence(sources: list[dict[str, Any]]) -> str:
     opened_count = len([source for source in sources if source.get("opened")])
-    if opened_count >= 2 and len(sources) >= 3:
+    strong_sources = [
+        source
+        for source in sources
+        if _source_priority(str(source.get("source_domain") or "")) <= 2
+    ]
+    if opened_count >= 2 and len(strong_sources) >= 2:
         return "high"
-    if sources:
+    if strong_sources or sources:
         return "medium"
     return "low"
+
+
+def _source_domains_label(sources: list[dict[str, Any]]) -> str:
+    domains: list[str] = []
+    for source in sources[:3]:
+        domain = str(source.get("source_domain") or "").strip()
+        if domain and domain not in domains:
+            domains.append(domain)
+    return ", ".join(domains) if domains else "DuckDuckGo result metadata"
 
 
 def _truncate(text: str, max_chars: int) -> str:

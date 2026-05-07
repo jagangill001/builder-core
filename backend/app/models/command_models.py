@@ -55,6 +55,9 @@ class FinalResult(BaseModel):
     search_connected: bool | None = None
     warnings: list[str] = Field(default_factory=list)
     memory_saved: bool | None = None
+    memory_recalled: bool | None = None
+    recalled_memory_count: int | None = None
+    memory_notes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CommandResponse(BaseModel):

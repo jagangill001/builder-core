@@ -52,6 +52,9 @@ def build_final_result(
             search_connected=bool(intelligence_result.get("search_connected") or intelligence_result.get("live_search_connected")),
             warnings=[str(item) for item in intelligence_result.get("warnings", [])],
             memory_saved=bool(intelligence_result.get("memory_saved")),
+            memory_recalled=bool(intelligence_result.get("memory_recalled")),
+            recalled_memory_count=int(intelligence_result.get("recalled_memory_count") or 0),
+            memory_notes=list(intelligence_result.get("memory_notes", [])),
         )
 
     if decision.approval_required:

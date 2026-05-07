@@ -95,6 +95,9 @@ type FinalResult = {
   search_connected?: boolean | null;
   warnings?: string[];
   memory_saved?: boolean | null;
+  memory_recalled?: boolean | null;
+  recalled_memory_count?: number | null;
+  memory_notes?: EvidenceItem[];
   timeline?: Record<string, unknown> | null;
   manipulation_risk?: Record<string, unknown> | null;
   future_scenarios?: unknown[];
@@ -352,12 +355,14 @@ function MemoryDetail({ final, taskStatus, commandId }: { final: FinalResult; ta
     <dl className="grid gap-2 sm:grid-cols-2">
       <Field label="Command ID" value={commandId} />
       <Field label="Memory saved" value={final.memory_saved ? "Yes" : "No"} />
+      <Field label="Memory recalled" value={final.memory_recalled ? `Yes (${final.recalled_memory_count ?? 0})` : "No"} />
       <Field label="Audit log" value="Saved by backend" />
       <Field label="Task status" value={taskStatus?.status ?? "unknown"} />
       <Field label="Intent" value={taskStatus?.detected_intent ?? final.type} />
       <Field label="Agent" value={final.selected_agent} />
       <Field label="Approval required" value={final.approval_required ? "Yes" : "No"} />
       <Field label="Risk" value={final.risk_level} />
+      {final.memory_notes?.length ? <Field label="Memory notes" value={final.memory_notes.map((item) => item.text).join(" ")} /> : null}
     </dl>
   );
 }

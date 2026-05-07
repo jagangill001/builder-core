@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -200,6 +201,18 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertNotIn("prepared an assistant-style response", result["answer"])
         self.assertIn("Python web framework", result["answer"])
 
+    def test_command_date_today_answers_from_server_without_search(self) -> None:
+        data = self._command("date today")
+        result = data["final_result"]
+        expected_today = datetime.now().strftime("%B")
+        self.assertFalse(result["blocked"])
+        self.assertFalse(result["search_connected"])
+        self.assertEqual(result["sources"], [])
+        self.assertIn("Today is", result["answer"])
+        self.assertIn(expected_today, result["answer"])
+        self.assertNotIn("Grokipedia", result["answer"])
+        self.assertTrue(any(step["name"] == "Answering directly" for step in data["process_steps"]))
+
     def test_command_latest_docs_routes_to_search_answer(self) -> None:
         data = self._command_with_search("Check latest Google Cloud Run docs")
         result = data["final_result"]
@@ -216,9 +229,20 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertGreaterEqual(len(result["sources"]), 1)
         self.assertEqual(
             result["answer"],
-            "The current federal government of Canada is led by Prime Minister Mark Carney and the Liberal Party.",
+            "The current federal government of Canada is led by Prime Minister Mark Carney and the Liberal Party. Sources checked: pm.gc.ca, cbc.ca, en.wikipedia.org.",
         )
         self.assertNotIn("Based on DuckDuckGo results", result["answer"])
+
+    def test_command_prime_minister_india_routes_to_live_search(self) -> None:
+        data = self._command_with_india_search("prime minister of india")
+        result = data["final_result"]
+        self.assertFalse(data["needs_clarification"])
+        self.assertFalse(result["blocked"])
+        self.assertTrue(result["search_connected"])
+        self.assertGreaterEqual(len(result["sources"]), 1)
+        self.assertIn("The current Prime Minister of India is Narendra Modi.", result["answer"])
+        self.assertNotIn("tell me the exact piece", result["answer"])
+        self.assertIn(result["confidence"], {"medium", "high"})
 
     def test_command_weather_uses_fallback_without_inventing_weather(self) -> None:
         data = self._command("weather today in India")
@@ -241,6 +265,10 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertTrue(data["needs_clarification"])
         self.assertEqual(data["questions"], ["Which part do you want me to fix?"])
         self.assertIn("Which part", data["final_result"]["answer"])
+
+    def test_clear_office_holder_question_does_not_ask_followup(self) -> None:
+        data = self._command_with_india_search("prime minister of india")
+        self.assertFalse(data["needs_clarification"])
 
     def test_intelligence_analysis_uses_search_when_available(self) -> None:
         with self._mock_search_results():
@@ -298,7 +326,7 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertEqual(result["sources"][0]["source_domain"], "pm.gc.ca")
         self.assertEqual(
             result["answer"],
-            "The current federal government of Canada is led by Prime Minister Mark Carney and the Liberal Party.",
+            "The current federal government of Canada is led by Prime Minister Mark Carney and the Liberal Party. Sources checked: pm.gc.ca, cbc.ca, en.wikipedia.org.",
         )
         self.assertNotIn("Based on DuckDuckGo results", result["answer"])
 
@@ -375,8 +403,31 @@ class PhaseThreeFoundationTests(unittest.TestCase):
         self.assertFalse(secret_result["saved"])
         data = self._command("What is FastAPI?")
         facts = data["final_result"]["facts"]
-        self.assertTrue(any(item.get("type") == "memory_recall" for item in facts))
+        memory_notes = data["final_result"]["memory_notes"]
+        self.assertFalse(any(item.get("type") == "memory_recall" for item in facts))
+        self.assertTrue(any(item.get("type") == "memory_note" for item in memory_notes))
         self.assertFalse(any("super-secret-token" in item.get("text", "") for item in facts))
+
+    def test_unrelated_country_memory_not_used_for_india_question(self) -> None:
+        from app.memory.memory_store import save_safe_memory
+
+        save_safe_memory(
+            {
+                "memory_type": "search_answer",
+                "topic": "current government in Canada",
+                "summary": "The current federal government of Canada is led by Prime Minister Mark Carney and the Liberal Party.",
+                "sources": [{"title": "Prime Minister of Canada", "url": "https://www.pm.gc.ca/en", "snippet": "Canada source", "source_domain": "pm.gc.ca"}],
+                "confidence": "medium",
+            }
+        )
+        data = self._command_with_india_search("prime minister of india")
+        result = data["final_result"]
+        combined_facts = " ".join(item.get("text", "") for item in result["facts"])
+        combined_notes = " ".join(item.get("text", "") for item in result["memory_notes"])
+        self.assertNotIn("Canada", combined_facts)
+        self.assertNotIn("Mark Carney", combined_facts)
+        self.assertNotIn("Mark Carney", combined_notes)
+        self.assertIn("Narendra Modi", result["answer"])
 
     def test_sandbox_run_creates_non_executing_record(self) -> None:
         response = self.client.post(
@@ -500,6 +551,46 @@ class PhaseThreeFoundationTests(unittest.TestCase):
                     "url": "https://www.pm.gc.ca/en",
                     "title": "Prime Minister of Canada",
                     "text": "Prime Minister Mark Carney leads the Liberal Party government.",
+                    "warning": "",
+                },
+            ):
+                return self._command(message)
+
+    def _command_with_india_search(self, message: str) -> dict:
+        with patch("app.research.search_answer_engine.SearchConnector") as connector:
+            connector.return_value.search.return_value = {
+                "connected": True,
+                "provider": "duckduckgo",
+                "query": message,
+                "message": "Search completed",
+                "results": [
+                    {
+                        "title": "Prime Minister of India",
+                        "url": "https://www.pmindia.gov.in/en/",
+                        "snippet": "Prime Minister Narendra Modi is the Prime Minister of India.",
+                        "source_domain": "pmindia.gov.in",
+                    },
+                    {
+                        "title": "National Portal of India",
+                        "url": "https://www.india.gov.in/",
+                        "snippet": "Narendra Modi serves as the Prime Minister of India.",
+                        "source_domain": "india.gov.in",
+                    },
+                    {
+                        "title": "Prime Minister profile",
+                        "url": "https://en.wikipedia.org/wiki/Prime_Minister_of_India",
+                        "snippet": "The prime minister is the head of government.",
+                        "source_domain": "en.wikipedia.org",
+                    },
+                ],
+            }
+            with patch(
+                "app.research.search_answer_engine.fetch_allowed_page",
+                return_value={
+                    "opened": True,
+                    "url": "https://www.pmindia.gov.in/en/",
+                    "title": "Prime Minister of India",
+                    "text": "Prime Minister Narendra Modi is the Prime Minister of India.",
                     "warning": "",
                 },
             ):
