@@ -2,11 +2,26 @@
 
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 
-const API_BASE = (
-  process.env.NEXT_PUBLIC_API_BASE_URL ??
-  process.env.NEXT_PUBLIC_API_URL ??
-  "http://127.0.0.1:8000"
-).replace(/\/$/, "");
+const PROD_BACKEND_URL = "https://builder-core-599596796788.us-central1.run.app";
+
+function resolveApiBase() {
+  const configured =
+    process.env.NEXT_PUBLIC_API_BASE_URL ??
+    process.env.NEXT_PUBLIC_API_URL;
+
+  if (configured) return configured.replace(/\/$/, "");
+
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host.includes("run.app") || host.includes("builder-core-frontend")) {
+      return PROD_BACKEND_URL;
+    }
+  }
+
+  return "http://127.0.0.1:8000";
+}
+
+const API_BASE = resolveApiBase();
 
 const BACKEND_ERROR = "Could not connect to Builder Core backend. Check NEXT_PUBLIC_API_BASE_URL and backend deployment.";
 const LIVE_SEARCH_MISSING = "DuckDuckGo search is not available right now.";
