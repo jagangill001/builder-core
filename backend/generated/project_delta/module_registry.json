@@ -1,0 +1,9 @@
+{
+  "project_name": "project delta",
+  "modules": [
+    {
+      "module_key": "dashboard_page",
+      "route_path": "/dashboard"
+    }
+  ]
+}

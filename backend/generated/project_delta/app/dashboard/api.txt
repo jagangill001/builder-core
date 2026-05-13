@@ -1,0 +1,3 @@
+Suggested backend routes for dashboard:
+GET /dashboard/summary
+GET /dashboard/stats

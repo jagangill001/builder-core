@@ -1,0 +1,4 @@
+Suggested backend routes for auth:
+POST /login
+POST /logout
+GET /session

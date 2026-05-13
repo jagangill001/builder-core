@@ -1,0 +1,110 @@
+name: Deploy Cloud Run
+
+on:
+  workflow_run:
+    workflows:
+      - Repo Checks
+    branches:
+      - main
+    types:
+      - completed
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: cloud-run-production
+  cancel-in-progress: true
+
+env:
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GCP_REGION: ${{ vars.GCP_REGION }}
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  GCP_SERVICE_ACCOUNT_EMAIL: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+  NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+  FRONTEND_PUBLIC_URL: ${{ vars.FRONTEND_PUBLIC_URL }}
+  CORS_ALLOWED_ORIGINS: ${{ vars.CORS_ALLOWED_ORIGINS }}
+  GITHUB_OWNER: ${{ vars.GITHUB_OWNER }}
+  GITHUB_REPO: ${{ vars.GITHUB_REPO }}
+
+jobs:
+  deploy-backend:
+    name: Deploy Backend
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate deploy configuration
+        run: |
+          test -n "$GCP_PROJECT_ID"
+          test -n "$GCP_REGION"
+          test -n "$GCP_WORKLOAD_IDENTITY_PROVIDER"
+          test -n "$GCP_SERVICE_ACCOUNT_EMAIL"
+          test -n "$CORS_ALLOWED_ORIGINS"
+          test -n "$FRONTEND_PUBLIC_URL"
+          test -n "$GITHUB_OWNER"
+          test -n "$GITHUB_REPO"
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Deploy backend service
+        uses: google-github-actions/deploy-cloudrun@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          service: builder-core
+          region: ${{ env.GCP_REGION }}
+          source: ./backend
+          env_vars: |
+            CORS_ALLOWED_ORIGINS=${{ env.CORS_ALLOWED_ORIGINS }}
+            APP_REVISION=${{ github.event.workflow_run.head_sha }}
+            FRONTEND_PUBLIC_URL=${{ env.FRONTEND_PUBLIC_URL }}
+            GITHUB_OWNER=${{ env.GITHUB_OWNER }}
+            GITHUB_REPO=${{ env.GITHUB_REPO }}
+          env_vars_update_strategy: merge
+
+  deploy-frontend:
+    name: Deploy Frontend
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate deploy configuration
+        run: |
+          test -n "$GCP_PROJECT_ID"
+          test -n "$GCP_REGION"
+          test -n "$GCP_WORKLOAD_IDENTITY_PROVIDER"
+          test -n "$GCP_SERVICE_ACCOUNT_EMAIL"
+          test -n "$NEXT_PUBLIC_API_URL"
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Deploy frontend service
+        uses: google-github-actions/deploy-cloudrun@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          service: builder-core-frontend
+          region: ${{ env.GCP_REGION }}
+          source: ./frontend
+          env_vars: |
+            NEXT_PUBLIC_API_URL=${{ env.NEXT_PUBLIC_API_URL }}
+            NEXT_PUBLIC_APP_REVISION=${{ github.event.workflow_run.head_sha }}
+          env_vars_update_strategy: merge

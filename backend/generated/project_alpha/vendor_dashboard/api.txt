@@ -1,0 +1,6 @@
+Suggested backend routes for vendors:
+GET /vendors
+POST /vendors
+GET /vendors/{id}
+PUT /vendors/{id}
+DELETE /vendors/{id}

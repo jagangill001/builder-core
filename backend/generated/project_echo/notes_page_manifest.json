@@ -1,0 +1,18 @@
+{
+  "project_name": "project echo",
+  "module_key": "notes_page",
+  "title": "Notes",
+  "route_path": "/notes",
+  "instruction": "Create a notes page with add, edit, and delete.",
+  "created_files": [
+    "C:\\Users\\Jagan gill\\OneDrive\\Desktop\\builder-core\\backend\\generated\\project_echo\\app\\notes\\page.tsx",
+    "C:\\Users\\Jagan gill\\OneDrive\\Desktop\\builder-core\\backend\\generated\\project_echo\\app\\notes\\api.txt"
+  ],
+  "plan": [
+    "Create notes page UI",
+    "Add note form with title and content fields",
+    "Create backend route for notes",
+    "Add notes data model",
+    "Add list, edit, and delete actions"
+  ]
+}

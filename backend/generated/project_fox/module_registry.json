@@ -1,0 +1,15 @@
+{
+  "project_name": "project fox",
+  "modules": [
+    {
+      "module_key": "notes_page",
+      "route_path": "/notes",
+      "title": "Notes"
+    },
+    {
+      "module_key": "vendor_dashboard",
+      "route_path": "/vendors",
+      "title": "Vendors"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "project_name": "project echo",
+  "modules": [
+    {
+      "module_key": "notes_page",
+      "route_path": "/notes",
+      "title": "Notes"
+    },
+    {
+      "module_key": "vendor_dashboard",
+      "route_path": "/vendors",
+      "title": "Vendors"
+    },
+    {
+      "module_key": "dashboard_page",
+      "route_path": "/dashboard",
+      "title": "Dashboard"
+    }
+  ]
+}

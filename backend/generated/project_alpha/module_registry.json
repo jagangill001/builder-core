@@ -1,0 +1,10 @@
+{
+  "project_name": "Project Alpha",
+  "modules": [
+    {
+      "module_key": "booking_page",
+      "route_path": "/booking",
+      "title": "Booking"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "project_name": "project echo",
+  "module_key": "dashboard_page",
+  "title": "Dashboard",
+  "route_path": "/dashboard",
+  "instruction": "Create a dashboard with summary cards.",
+  "created_files": [
+    "C:\\Users\\Jagan gill\\OneDrive\\Desktop\\builder-core\\backend\\generated\\project_echo\\app\\dashboard\\page.tsx",
+    "C:\\Users\\Jagan gill\\OneDrive\\Desktop\\builder-core\\backend\\generated\\project_echo\\app\\dashboard\\api.txt"
+  ],
+  "plan": [
+    "Create dashboard layout",
+    "Add summary cards",
+    "Create backend route for dashboard data",
+    "Add charts or tables",
+    "Connect page to live data"
+  ]
+}

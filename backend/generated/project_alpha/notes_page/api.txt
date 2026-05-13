@@ -1,0 +1,5 @@
+Suggested backend routes for notes:
+GET /notes
+POST /notes
+PUT /notes/{id}
+DELETE /notes/{id}

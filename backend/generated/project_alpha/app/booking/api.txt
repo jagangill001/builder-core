@@ -1,0 +1,5 @@
+Suggested backend routes for bookings:
+GET /bookings
+POST /bookings
+PUT /bookings/{id}
+DELETE /bookings/{id}
